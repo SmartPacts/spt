@@ -12,7 +12,7 @@ live deployment beyond what is needed for a proof of concept.
 ## Scope
 
 - The Pact modules in [`contracts/`](contracts/) as deployed on Kadena **testnet06**, namespace
-  `n_58b259badf99bb9d5f4118446a01d23a3a6b51cf` (chains 0–19).
+  `n_d97ffd2ca290429b5dc85ce551a8d07d038e9641` (chains 0–19).
 - The event portal at `https://smartpacts.io/event/`.
 
 ## What to expect

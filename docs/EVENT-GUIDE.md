@@ -7,12 +7,12 @@ KDA/SPT**; nothing here is a real security, a real offer, or a real payment.
 
 - **Network:** testnet06 · **API:** `https://api.testnet.chainweb-community.org`
 - **Explorer:** https://explorer.chainweb-community.org/testnet
-- **Namespace:** `n_58b259badf99bb9d5f4118446a01d23a3a6b51cf`
+- **Namespace:** `n_d97ffd2ca290429b5dc85ce551a8d07d038e9641`
 - **Modules:** `…​.smartpacts-shares` (the share + governance + dividends), `…​.smartpacts-ipo`
   (the sale), `…​.smartpacts-gas-station` (pays your gas so voting/claiming is free).
-- **Audit trail** (every deploy + governance request key, explorer-searchable):
-  [docs/testing/AUDIT-TRAIL-TESTNET06-2026-07-02.md](testing/AUDIT-TRAIL-TESTNET06-2026-07-02.md).
-- **Live scoreboard:** [docs/testing/EVENT-SCOREBOARD.md](testing/EVENT-SCOREBOARD.md).
+- **Portal (same journey in the browser):** https://smartpacts.io/event/
+- **Deployment verification** (module hashes + deploy request keys):
+  [VERIFICATION.md](VERIFICATION.md).
 
 > **The one rule that makes voting free:** when you vote or claim dividends, submit the transaction with
 > the **gas station as the payer** and set **gas limit ≤ 1500, gas price ≤ 1e-6**. Those are the
@@ -107,7 +107,8 @@ explorer:
 ## The MAINNET-GO vote — what it decides
 
 One proposal, announced identically on all 20 chains: **"Approve the Smart Pacts contracts to be
-deployed to mainnet."** It runs until its published close date (shown on-chain and in the scoreboard).
+deployed to mainnet."** It runs until **2026-07-18 05:56 UTC** (the close time is on-chain:
+`proposal-details` shows it on every chain).
 After it closes, the result is aggregated **on-chain across all 20 chains** and anyone can read
 `get-final-results` — it "passes" only if participation reaches the **4,000 SPT quorum** and YES
 outweighs NO.

@@ -3,15 +3,13 @@
 ;; Shareholders need no KDA to vote or claim dividends.
 ;;
 ;; Sponsored (per-function allowlist, NOT a namespace-wide prefix):
-;;   - free.smartpacts-shares.cast-vote               (chain-local vote on EVERY chain — ADR-006;
-;;                                             cast-vote-xchain was DELETED with ADR-006)
-;;   - free.smartpacts-shares.claim-dividends         (permissionless dividend claim)
+;;   - smartpacts-shares.cast-vote          (chain-local vote on EVERY chain)
+;;   - smartpacts-shares.claim-dividends    (permissionless dividend claim)
 ;; NOT sponsored: every admin op (fund-dividends, proposals, withdraw-revenue,
 ;;   sale admin, init/init-supply) — the operator pays its own gas.
 ;;
-;; Pattern: KIP gas-payer-v1. Reviewed prior art (ADR-002): CryptoPascal31
-;;   otc-deal-locker, kadena-io kadenaswap, eckoDAO/kaddex gas-station + gas-guards.
-;; Architecture: ADR-002. Deployed + funded PER CHAIN (voters/claimers are everywhere).
+;; Pattern: KIP gas-payer-v1. Deployed + funded PER CHAIN (voters/claimers are
+;; everywhere).
 ;; ===========================================================================
 (namespace (read-msg 'ns))
 
@@ -25,26 +23,26 @@
   ;; ========================================================================
   ;; CONSTANTS
   ;; ========================================================================
-  (defconst ADMIN-KS "n_58b259badf99bb9d5f4118446a01d23a3a6b51cf.spt-admin")   ; shared admin keyset (defined by smartpacts-shares)
+  (defconst ADMIN-KS "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.spt-admin")   ; shared admin keyset (defined by smartpacts-shares)
   ;; Set true and redeploy to permanently freeze upgrades (sponsorship still works).
   (defconst FROZEN-MODULE false)
 
-  ;; Drain-attack ceilings. SPIKE-3 measured claim-dividends ~= 289 gas; cast-vote is
-  ;; a similar small INSERT. 1500 = ~5x headroom, far under the 150k tx ceiling.
-  ;; Implicit per-tx KDA cap = MAX-GAS-PRICE * MAX-GAS-LIMIT = 0.0015 KDA (ADR-002 §4).
+  ;; Drain-attack ceilings. A sponsored claim-dividends measures ~289 gas; cast-vote
+  ;; is a similar small insert. 1500 = ~5x headroom, far under the 150k tx ceiling.
+  ;; Implicit per-tx KDA cap = MAX-GAS-PRICE * MAX-GAS-LIMIT = 0.0015 KDA.
   (defconst MAX-GAS-PRICE:decimal 0.000001)
   (defconst MAX-GAS-LIMIT:integer 1500)
   (defconst MAX-TX-CALLS:integer 1)      ; one allowlisted top-level call per sponsored tx
   (defconst MAX-TX-COST:decimal (* MAX-GAS-PRICE (dec MAX-GAS-LIMIT)))  ; 0.0015 KDA per tx
 
-  ;; ---- F-03/F-04 on-chain AGGREGATE bound (ADR-002 §4a, re-classified 2026-07-01) ----
+  ;; ---- On-chain AGGREGATE sponsorship bound ----
   ;; A per-EPOCH self-imposed sponsorship cap. Every sponsored tx (exec AND cont) charges
   ;; its max cost (MAX-TX-COST) against EPOCH-CAP before the station releases KDA. When the
   ;; epoch's cap is exhausted, sponsorship pauses until the epoch rolls over on BLOCK-TIME.
   ;; Reset is time-based ONLY — an attacker cannot "pay to reset"; a drain burst is bounded
   ;; to EPOCH-CAP KDA and only delays legit gasless users until the next epoch (bounded,
-  ;; self-healing). This is the CODE bound that closes BOTH F-04 (whole-balance grief-drain)
-  ;; AND F-03 (cont funds ANY defpact — a cont still charges the cap, so it cannot exceed it).
+  ;; self-healing). This one bound covers BOTH the whole-balance grief-drain AND the
+  ;; arbitrary-defpact cont (a cont still charges the cap, so it cannot exceed it).
   ;; Sized for legit vote/claim volume + headroom; maintainer-tunable via redeploy.
   (defconst EPOCH-CAP:decimal 0.15)      ; KDA sponsored per epoch (= 100 txs at MAX-TX-COST)
   (defconst EPOCH-LEN:integer 86400)     ; epoch length: 24h (seconds)
@@ -54,14 +52,14 @@
   ;; Per-function allowlist. Each sponsored exec-code string must start with exactly
   ;; one of these (trailing space = whole-token boundary, so a prefix cannot match a
   ;; longer function name). Longest first as a safety belt for prefix containment.
-  ;; NOTE: hard-codes the `free` namespace — a mainnet n_<hash> deploy needs these
-  ;; updated + a redeploy (ADR-002 known migration cost).
+  ;; NOTE: the namespace is hard-coded in each prefix — deploying under a different
+  ;; namespace requires updating these + a redeploy.
   (defconst SPONSORED-PREFIXES:[string]
-    [ "(n_58b259badf99bb9d5f4118446a01d23a3a6b51cf.smartpacts-shares.cast-vote "
-      "(n_58b259badf99bb9d5f4118446a01d23a3a6b51cf.smartpacts-shares.claim-dividends " ])
+    [ "(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "
+      "(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends " ])
 
   ;; ========================================================================
-  ;; AGGREGATE-BOUND METER (F-03/F-04)
+  ;; AGGREGATE-BOUND METER
   ;; ========================================================================
   (defschema meter-row
     epoch-start:time             ; block-time this epoch's counting began
@@ -86,8 +84,8 @@
   ;;   (b) admin keyset — so the operator can fund/recover the station out-of-band.
   ;; Anonymous, unmanaged internal token (KIP gas-payer-v1 pattern). NOT public
   ;; authorization: it is composed ONLY by GAS_PAYER, and only after every allowlist
-  ;; + ceiling enforce has passed (pact-traps: a weak-body cap composed under a
-  ;; real-checked parent is a safe internal token). Required by the station guard.
+  ;; + ceiling enforce has passed (a weak-body cap composed under a real-checked
+  ;; parent is a safe internal token). Required by the station guard.
   (defcap ALLOW_GAS () @doc "internal gas-buy permission token" true)
 
   (defcap METER ()
@@ -95,7 +93,7 @@
          \nSAFE: composed ONLY by GAS_PAYER (after its tx-type/allowlist/ceiling checks), never \
          \nby a public fn — so charge-epoch runs ONLY on a genuine sponsored gas buy. Without \
          \nthis gate, charge-epoch would be a public defun any actor could call to exhaust the \
-         \nepoch cap at ~0 cost and deny gasless service (auditor Finding 2)."
+         \nepoch cap at ~0 cost and deny gasless service."
     true)
 
   (defun gas-payer-pred:bool ()
@@ -119,7 +117,7 @@
     (create-principal (create-user-guard (station-guard-pred))))
 
   ;; ========================================================================
-  ;; GAS CEILINGS (inlined from eckoDAO gas-guards — ADR-002 YAGNI: no external dep)
+  ;; GAS CEILINGS (inlined — no external dependency)
   ;; ========================================================================
   (defun enforce-below-or-at-gas-price:bool (gas-price:decimal)
     (enforce (<= (at 'gas-price (chain-data)) gas-price)
@@ -142,16 +140,16 @@
       "Not a sponsored call — gas station funds only SPT vote/claim functions"))
 
   ;; ========================================================================
-  ;; AGGREGATE BOUND — charge the per-epoch cap (F-03/F-04)
+  ;; AGGREGATE BOUND — charge the per-epoch cap
   ;; ========================================================================
   (defun charge-epoch:bool ()
     @doc "Charge one tx's max cost against the per-epoch sponsorship cap, rolling the epoch \
          \nover on BLOCK-TIME. Fails closed (no gas paid) once EPOCH-CAP is reached for the \
          \ncurrent epoch. Called by GAS_PAYER before ALLOW_GAS, so it bounds BOTH exec and \
-         \ncont sponsorship — closing F-04 (whole-balance drain) and F-03 (arbitrary-defpact \
-         \ncont) with one bound. The reset is time-only, so no attacker can pay to reset it. \
+         \ncont sponsorship — one bound covers the whole-balance drain and the arbitrary- \
+         \ndefpact cont. The reset is time-only, so no attacker can pay to reset it. \
          \nGated by (require METER) — composed ONLY by GAS_PAYER — so no external actor can call \
-         \nthis directly to exhaust the cap and deny gasless service (auditor Finding 2 fix). \
+         \nthis directly to exhaust the cap and deny gasless service. \
          \nWrites the meter — deliberately NOT inside an enforce (read-only mode forbids DML)."
     (require-capability (METER))
     (let ((now (at 'block-time (chain-data))))
@@ -177,19 +175,18 @@
          \n— the ceilings are checked against the protocol-trusted chain-data envelope."
     ;; tx-type / exec-code are injected by Chainweb from the REAL parsed payload (not
     ;; from tx `data`), so the allowlist binds the actually-executed code. Both are
-    ;; always present + correctly typed on the gas-payer path (canonical kadenaswap/
-    ;; kaddex assumption); a missing/ill-typed key aborts the tx (fail-closed: no gas paid).
+    ;; always present + correctly typed on the gas-payer path; a missing/ill-typed
+    ;; key aborts the tx (fail-closed: no gas paid).
     (let ((tx-type:string (read-msg "tx-type")))
       (enforce (or (= "exec" tx-type) (= "cont" tx-type)) "tx-type must be exec or cont")
       ;; exec carries exec-code we can allowlist; a cont (e.g. a transfer-crosschain or
       ;; report-tally-xchain step 1) has no exec-code — bound it by the gas ceilings only.
-      ;; F-03 (ADR-002 §5): the cont leg funds the cont of ANY defpact — an attacker can
-      ;; self-pay step 0 of any defpact then name the station on the cont. Re-derived
-      ;; 2026-07-01: this CANNOT be allowlisted by code (a cont carries no exec-code, and
-      ;; pact-id proves no identity — unsafe per pact-traps), so we do NOT gate on pact-id.
-      ;; Instead the arbitrary-cont drain is bounded — together with F-04 — by the per-epoch
-      ;; aggregate cap (charge-epoch, below): a cont still charges the cap, so it cannot
-      ;; drain past EPOCH-CAP. F-03 is therefore BOUNDED, not accepted.
+      ;; The cont leg funds the cont of ANY defpact — an attacker can self-pay step 0 of
+      ;; any defpact then name the station on the cont. This CANNOT be allowlisted by
+      ;; code (a cont carries no exec-code, and pact-id proves no identity), so we do
+      ;; NOT gate on pact-id. Instead the arbitrary-cont drain is bounded by the
+      ;; per-epoch aggregate cap (charge-epoch, below): a cont still charges the cap,
+      ;; so it cannot drain past EPOCH-CAP.
       (if (= "exec" tx-type)
         (let ((codes:[string] (read-msg "exec-code")))
           (enforce (= MAX-TX-CALLS (length codes))
@@ -198,10 +195,10 @@
         true))
     (enforce-below-or-at-gas-price MAX-GAS-PRICE)
     (enforce-below-or-at-gas-limit MAX-GAS-LIMIT)
-    ;; F-03/F-04 on-chain aggregate bound: charge the per-epoch cap (fails closed when
-    ;; exhausted) BEFORE releasing station KDA. Applies to exec AND cont. METER is composed
-    ;; here (and nowhere else) so charge-epoch runs ONLY on a genuine sponsored gas buy —
-    ;; it is not externally callable (auditor Finding 2).
+    ;; Aggregate bound: charge the per-epoch cap (fails closed when exhausted)
+    ;; BEFORE releasing station KDA. Applies to exec AND cont. METER is composed
+    ;; here (and nowhere else) so charge-epoch runs ONLY on a genuine sponsored
+    ;; gas buy — it is not externally callable.
     (compose-capability (METER))
     (charge-epoch)
     (compose-capability (ALLOW_GAS)))
@@ -212,7 +209,7 @@
   (defun init ()
     @doc "Create the station coin account on this chain. Admin tops it up out-of-band. \
          \nGuard = sanctioned gas buy OR admin keyset (admin can fund/recover the station). \
-         \nAlso seeds the per-epoch aggregate-bound meter (F-03/F-04)."
+         \nAlso seeds the per-epoch aggregate-bound meter."
     (coin.create-account GAS_STATION (create-gas-payer-guard))
     (insert meter METER-KEY { "epoch-start": EPOCH-ZERO, "spent": 0.0 }))
 
@@ -221,8 +218,10 @@
     (at 'spent (read meter METER-KEY)))
 )
 
-(create-table meter)
-
+;; Deploy footer. On a FRESH deploy create the meter table and the station
+;; coin account; on an UPGRADE (tx data upgrade: true) skip both — re-running
+;; create-table for an existing table aborts the whole tx.
 (if (read-msg 'upgrade)
   ["upgrade"]
-  [ (init) ])
+  [ (create-table meter)
+    (init) ])

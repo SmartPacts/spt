@@ -2,7 +2,7 @@
 ;; smartpacts-ipo — fixed-price IPO for SPT
 ;; Buyer pays KDA -> receives SPT from the capability-guarded IPO reserve.
 ;; No per-buyer cap. Owns the IPO reserve (SPT) + sales income (KDA) accounts.
-;; Architecture: ADR-001 Module 3. Reads/transfers via smartpacts-shares.
+;; Reads/transfers via smartpacts-shares.
 ;; ===========================================================================
 (namespace (read-msg 'ns))
 
@@ -22,7 +22,7 @@
   ;; ========================================================================
   ;; CONSTANTS
   ;; ========================================================================
-  (defconst ADMIN-KS "n_58b259badf99bb9d5f4118446a01d23a3a6b51cf.spt-admin")
+  (defconst ADMIN-KS "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.spt-admin")
   (defconst CONFIG-KEY "config")
   (defconst INIT-KEY "init")
   (defconst FROZEN-MODULE false)
@@ -122,5 +122,11 @@
       "proceeds withdrawn"))
 )
 
-(create-table config)
-(create-table init-state)
+;; Deploy footer. On a FRESH deploy create every table; on an UPGRADE
+;; (tx data upgrade: true) skip them — re-running create-table for an
+;; existing table aborts the whole tx.
+(if (read-msg 'upgrade)
+  ["upgrade"]
+  [ (create-table config)
+    (create-table init-state)
+  ])

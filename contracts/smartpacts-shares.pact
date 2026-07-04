@@ -1,16 +1,17 @@
 ;; ===========================================================================
 ;; smartpacts-shares — Smart Pacts Token (SPT)
-;; Equity share token: fungible-v2 + fungible-xchain-v1, inlined FLOAT-base
-;; dividends (MasterChef, per-leg checkpoint), capability-guarded internal
-;; accounts, funders cliff-vesting, on-chain revenue routing.
-;; Architecture: ADR-001. Mechanisms proven in pact/spike (SPIKE-1/2/3).
+;; Equity share token: fungible-v2 + fungible-xchain-v1, inlined float-base
+;; dividends (MasterChef accumulator, per-leg checkpoint), live chain-local
+;; governance, capability-guarded internal accounts, pre-committed tranche
+;; time-locks (founder/treasury/liquidity), on-chain revenue routing.
 ;; ===========================================================================
 (namespace (read-msg 'ns))
 (define-keyset (read-msg 'spt-admin-name) (read-keyset 'spt-admin))
 
 (module smartpacts-shares GOVERNANCE
   @doc "SPT equity token: fungible-v2 + fungible-xchain-v1 with float-base dividends, \
-       \ncapability-guarded treasury/funders/revenue/dividend accounts, and funders vesting."
+       \ncapability-guarded reserve/revenue/dividend accounts, and pre-committed tranche \
+       \ntime-locks (founder/treasury/liquidity)."
 
   (implements fungible-v2)
   (implements fungible-xchain-v1)
@@ -19,7 +20,7 @@
   ;; SCHEMAS / TABLES
   ;; ========================================================================
   (defschema spt-account
-    @doc "SPT holder account + inlined dividend (MasterChef). Governance is LIVE (ADR-004): \
+    @doc "SPT holder account + inlined dividend accounting (MasterChef). Governance is LIVE: \
          \nvote weight = current balance; a transfer releases the moved shares' vote from the \
          \ntally (see debit). No per-account voting field is needed — recorded votes live in \
          \nthe account-votes table keyed by (account,chain,proposal)."
@@ -30,10 +31,10 @@
   (deftable accounts:{spt-account})
 
   ;; ========================================================================
-  ;; GOVERNANCE STATE (LIVE-VOTE — ADR-004; merged in from the former spt-governance)
+  ;; GOVERNANCE STATE (live-vote, chain-local)
   ;; ========================================================================
   (defschema proposal
-    @doc "A governance proposal. CHAIN-LOCAL voting (ADR-006): admin replicates the SAME \
+    @doc "A governance proposal. CHAIN-LOCAL voting: admin replicates the SAME \
          \nproposal (identical id/created-at/duration => identical close-at) to EVERY chain; \
          \neach chain tallies its own shares' votes and freezes at close-at. The canonical \
          \nfinal result is aggregated on the hub post-close (final-aggs)."
@@ -52,8 +53,15 @@
   (defschema account-vote weight:decimal direction:bool)
   (deftable account-votes:{account-vote})
 
-  ;; THIS chain's running tally per proposal (every chain tallies its own shares —
-  ;; ADR-006). Kept in sync live with every cast-vote, re-vote, and transfer-release,
+  ;; vote-delegates: an OPTIONAL dedicated voting key per account, so the
+  ;; transfer key can live in cold storage. Registered/replaced/cleared ONLY by the
+  ;; account's MAIN guard; consumed ONLY by the VOTE cap (main guard OR vote key).
+  ;; Per-chain rows, like votes (chain-local governance).
+  (defschema vote-delegate guard:guard active:bool)
+  (deftable vote-delegates:{vote-delegate})     ; key = account
+
+  ;; THIS chain's running tally per proposal (every chain tallies its own shares).
+  ;; Kept in sync live with every cast-vote, re-vote, and transfer-release,
   ;; so get-results is O(1). Frozen at close-at; aggregated post-close via final-aggs.
   (defschema tally yes:decimal no:decimal)
   (deftable tallies:{tally})
@@ -65,7 +73,7 @@
   (defschema prop-count-row n:integer)
   (deftable prop-count:{prop-count-row})
 
-  ;; post-close on-chain aggregation (ADR-006, hub rows): one frozen per-chain report
+  ;; post-close on-chain aggregation (hub rows): one frozen per-chain report
   ;; per (proposal, chain) — idempotent by insert — plus the running hub aggregate.
   ;; The canonical final result is COMPLETE only when all 20 chains have reported.
   (defschema final-report yes:decimal no:decimal)
@@ -81,13 +89,19 @@
     total-distributed:decimal)
   (deftable state:{state-schema})
 
-  (defschema funder-allocation
-    @doc "Cliff-vesting allocation for one funder."
+  (defschema tranche-lock
+    @doc "One pre-committed, time-gated tranche: founder | treasury | liquidity. \
+         \nThe SCHEDULE (cliff-end/vest-end) derives from SOURCE constants at init-supply — \
+         \nnever admin data. The beneficiary (a k:/w: principal, squat-proof) is fixed at the \
+         \ninit ceremony. release-tranche is permissionless: linear from cliff, floor-12, the \
+         \nfinal claim tops to exactly total. Nothing can accelerate, delay, revoke, redirect."
+    beneficiary:string
     guard:guard
-    amount:decimal
-    release-date:time
-    released:bool)
-  (deftable funder-allocations:{funder-allocation})
+    total:decimal
+    released:decimal
+    cliff-end:time
+    vest-end:time)
+  (deftable tranche-locks:{tranche-lock})
 
   (defschema init-schema initialized:bool)
   (deftable init-state:{init-schema})
@@ -96,13 +110,26 @@
   ;; CONSTANTS
   ;; ========================================================================
   (defconst TOTAL-SUPPLY 100000.0)
+  ;; ---- Tranche allocation + release calendar ----
+  ;; THE CALENDAR IS SOURCE, NOT DATA: init-supply stamps T = its block-time once; every
+  ;; cliff/vest bound is T + these constants. After FROZEN-MODULE nothing can alter it.
+  (defconst IPO-TRANCHE 20000.0)
+  (defconst FOUNDER-TRANCHE 10000.0)
+  (defconst TREASURY-TRANCHE 55000.0)
+  (defconst LIQUIDITY-TRANCHE 15000.0)
+  (defconst FOUNDER-CLIFF-DAYS 365)    (defconst FOUNDER-VEST-DAYS 1460)   ; 12mo cliff -> 4y
+  (defconst TREASURY-CLIFF-DAYS 365)   (defconst TREASURY-VEST-DAYS 1825)  ; 12mo cliff -> 5y
+  (defconst LIQUIDITY-CLIFF-DAYS 90)   (defconst LIQUIDITY-VEST-DAYS 730)  ; 3mo cliff -> 2y
+  (defconst TRANCHE-FOUNDER "founder")
+  (defconst TRANCHE-TREASURY "treasury")
+  (defconst TRANCHE-LIQUIDITY "liquidity")
   (defconst MINIMUM-PRECISION 12)
   (defconst STATE-KEY "state")
   (defconst INIT-KEY "init")
   (defconst PROP-COUNT-KEY "pc")               ; active-proposal-index counter singleton key
   (defconst EPOCH:time (time "1970-01-01T00:00:00Z"))  ; sentinel (missing-proposal default)
-  (defconst ADMIN-KS "n_58b259badf99bb9d5f4118446a01d23a3a6b51cf.spt-admin")
-  ;; Governance (ADR-004, merged from spt-governance)
+  (defconst ADMIN-KS "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.spt-admin")
+  ;; Governance
   (defconst QUORUM 4000.0)                      ; 4% of total supply
   (defconst MIN-PROPOSAL-DURATION 259200)       ; 72 hours (seconds)
   (defconst MAX-PROPOSAL-DURATION 1209600)      ; 14 days (seconds)
@@ -116,10 +143,16 @@
   (defcap DIVIDEND-CLAIMED (account:string amount:decimal) @event true)
   (defcap REVENUE-RECEIVED (from:string amount:decimal) @event true)
   (defcap REVENUE-WITHDRAWN (to:string amount:decimal) @event true)
-  (defcap ALLOCATION-CREATED (account:string amount:decimal release-date:time) @event true)
-  (defcap ALLOCATION-RELEASED (account:string amount:decimal) @event true)
-  ;; Governance events (ADR-004)
+  ;; Tranche time-locks. TRANCHE-LOCKED (at init) is the public disclosure
+  ;; anchor: it carries the full schedule of each tranche on-chain.
+  (defcap TRANCHE-LOCKED (tranche:string beneficiary:string total:decimal cliff-end:time vest-end:time) @event true)
+  (defcap TRANCHE-RELEASED (tranche:string beneficiary:string amount:decimal released-total:decimal) @event true)
+  ;; Governance events
   (defcap PROPOSAL-CREATED (id:string title:string) @event true)
+  ;; `key` = (create-principal guard): indexers can tell WHICH key was granted
+  ;; (audit trail for stealth-registration detection).
+  (defcap VOTE-KEY-SET (account:string key:string) @event true)
+  (defcap VOTE-KEY-CLEARED (account:string) @event true)
   (defcap VOTE-CAST (voter:string proposal:string weight:decimal direction:bool) @event true)
   (defcap VOTE-RELEASED (voter:string proposal:string amount:decimal) @event true)
   (defcap PROPOSAL-CLOSED (id:string status:string) @event true)
@@ -128,20 +161,23 @@
   ;; ========================================================================
   ;; INTERNAL ACCOUNT GUARDS (capability-guarded; module-owned)
   ;; ========================================================================
-  (defcap TREASURY-GUARD () @doc "guards the treasury SPT account" true)
-  (defcap FUNDERS-GUARD () @doc "guards the funders reserve SPT account" true)
+  (defcap TREASURY-GUARD () @doc "guards the treasury SPT reserve (time-locked)" true)
+  (defcap FUNDERS-GUARD () @doc "guards the founder SPT reserve (time-locked)" true)
+  (defcap LIQUIDITY-GUARD () @doc "guards the market/liquidity SPT reserve (time-locked)" true)
   (defcap REVENUE-GUARD () @doc "guards the KDA revenue account" true)
   (defcap POOL-GUARD () @doc "guards the KDA dividend pool account" true)
 
-  (defconst TREASURY-G (create-capability-guard (TREASURY-GUARD)))
-  (defconst FUNDERS-G  (create-capability-guard (FUNDERS-GUARD)))
-  (defconst REVENUE-G  (create-capability-guard (REVENUE-GUARD)))
-  (defconst POOL-G     (create-capability-guard (POOL-GUARD)))
+  (defconst TREASURY-G  (create-capability-guard (TREASURY-GUARD)))
+  (defconst FUNDERS-G   (create-capability-guard (FUNDERS-GUARD)))
+  (defconst LIQUIDITY-G (create-capability-guard (LIQUIDITY-GUARD)))
+  (defconst REVENUE-G   (create-capability-guard (REVENUE-GUARD)))
+  (defconst POOL-G      (create-capability-guard (POOL-GUARD)))
 
-  (defconst TREASURY-ACCOUNT (create-principal TREASURY-G))
-  (defconst FUNDERS-ACCOUNT  (create-principal FUNDERS-G))
-  (defconst REVENUE-ACCOUNT  (create-principal REVENUE-G))
-  (defconst POOL-ACCOUNT     (create-principal POOL-G))
+  (defconst TREASURY-ACCOUNT  (create-principal TREASURY-G))
+  (defconst FUNDERS-ACCOUNT   (create-principal FUNDERS-G))
+  (defconst LIQUIDITY-ACCOUNT (create-principal LIQUIDITY-G))
+  (defconst REVENUE-ACCOUNT   (create-principal REVENUE-G))
+  (defconst POOL-ACCOUNT      (create-principal POOL-G))
 
   ;; ========================================================================
   ;; GOVERNANCE / ADMIN
@@ -153,9 +189,31 @@
 
   (defcap ADMIN () @doc "admin operations gate" (enforce-keyset ADMIN-KS))
 
+  (defcap VOTE-KEY-ADMIN (account:string)
+    @doc "Owner gate for vote-key registration/clearing. A defcap — not a bare \
+         \ndefun guard — so wallets can SCOPE the signature to exactly this action \
+         \n(an unscoped signature could otherwise be spent on a stealth registration)."
+    (enforce-guard (account-guard account)))
+
+  (defcap ROTATE (account:string)
+    @doc "Owner gate for guard rotation — a defcap so wallets can scope the \
+         \nsignature to exactly this action (parity with VOTE-KEY-ADMIN)."
+    (enforce-guard (account-guard account)))
+
   (defcap VOTE (voter:string)
-    @doc "Authorizes a voter — enforces the voter's account guard (cast-vote auth)."
-    (enforce-guard (account-guard voter)))
+    @doc "Authorizes a voter: the account's MAIN guard OR, if registered + active, the \
+         \naccount's dedicated VOTING KEY (hot key votes, transfer key stays in the \
+         \nvault). Reads are let-bound BEFORE the enforce-one (a table read inside an \
+         \nenforce condition trips read-only mode on the node); the main guard is listed \
+         \nFIRST, so a registration can never lock the owner out. Only cast-vote acquires \
+         \nthis cap; every other privilege stays on the main guard."
+    (let ((main (account-guard voter)))
+      (with-default-read vote-delegates voter
+        { "guard": main, "active": false }
+        { "guard" := vg, "active" := act }
+        (enforce-one "neither account guard nor registered vote key satisfied"
+          [ (enforce-guard main)
+            (if act (enforce-guard vg) (enforce false "no vote key registered")) ]))))
 
   ;; ========================================================================
   ;; TRANSFER CAPABILITIES (fungible-v2 + fungible-xchain-v1)
@@ -175,8 +233,8 @@
     true)
 
   (defcap AGGREGATE ()
-    @doc "Internal permission token for recording a chain's FROZEN tally into the hub aggregate \
-         \n(ADR-006). Weak body is SAFE: acquired ONLY inside report-tally-hub (which reads the \
+    @doc "Internal permission token for recording a chain's FROZEN tally into the hub \
+         \naggregate. Weak body is SAFE: acquired ONLY inside report-tally-hub (which reads the \
          \nREAL local tally in the same call) and report-tally-xchain step 1 (whose resume payload \
          \nis SPV-authenticated as produced by OUR step 0 reading the REAL source tally — yes/no/ \
          \nchain carry no user input). require-capability makes record-final-tally uncallable with \
@@ -243,22 +301,22 @@
       true))
 
   (defun excluded?:bool (account:string)
-    @doc "Treasury + funders reserve + (unsold) IPO reserve are NOT in the float: \
-         \nthey neither accrue dividends nor count toward circulating-supply."
+    @doc "Treasury + founder reserve + liquidity reserve + (unsold) IPO reserve are NOT in \
+         \nthe float: they neither accrue dividends nor count toward circulating-supply \
+         \n(and governance rejects their votes)."
     (or (= account TREASURY-ACCOUNT)
       (or (= account FUNDERS-ACCOUNT)
-          (= account (get-ipo-reserve)))))
+        (or (= account LIQUIDITY-ACCOUNT)
+            (= account (get-ipo-reserve))))))
 
   ;; ========================================================================
-  ;; GOVERNANCE — LIVE-VOTE (ADR-004; merged from spt-governance)
+  ;; GOVERNANCE — LIVE VOTE, CHAIN-LOCAL
   ;; ------------------------------------------------------------------------
   ;; Vote weight = the voter's CURRENT shares. Re-vote updates in place. A transfer
   ;; RELEASES the voted portion of the moved shares from the tally (in debit, below),
   ;; so no share backs two live votes. Dust cannot suppress: receiving never removes
-  ;; shares. Proven (dust, transfer-then-revote, re-vote, Σ votes ≤ circulating) in
-  ;; pact/spike/vgrief/spike-live-vote.repl. CHAIN-LOCAL (ADR-006): every chain runs
-  ;; this same machinery over its own replica of each proposal; votes never cross
-  ;; chains (cross-chain accounting proven in spike-chain-local-vote.repl + devnet).
+  ;; shares. Every chain runs this same machinery over its own replica of each
+  ;; proposal; votes never cross chains.
   ;; ========================================================================
   (defun vkey:string (voter:string chain:string proposal:string)
     ;; STRUCTURED hash (not a ':'-joined string) — account names legally contain ':'
@@ -283,7 +341,7 @@
 
   (defun proposal-active?:bool (proposal:string)
     @doc "A proposal is active for TALLY purposes iff status==active AND the voting deadline has \
-         \nnot passed. The close-at check FREEZES the tally at the deadline (auditor F#1): once \
+         \nnot passed. The close-at check FREEZES the tally at the deadline: once \
          \nvoting is closed, a later transfer no longer releases votes / mutates the tally, so \
          \nget-results returns the final tally even before the admin's close-proposal tx lands."
     (with-default-read proposals proposal { "status": "", "close-at": EPOCH }
@@ -295,10 +353,10 @@
     @doc "On a debit of `amount` from `account`, release min(amount, voted) from each active \
          \nproposal this account is voting on (subtract from the account-vote AND the tally). \
          \nPRIVATE (require TALLY). Iterates only the ACTIVE-proposal index (admin-created, \
-         \nbounded by governance cadence — NOT attacker-inflatable). CHAIN-LOCAL (ADR-006): \
-         \nproposals are replicated to every chain, so this fires on EVERY chain — including \
-         \nthe step-0 debit of transfer-crosschain, which is what closes the F#2 cross-chain \
-         \ndouble-count: voted shares leave this chain's tally the moment they are debited."
+         \nbounded by governance cadence — NOT attacker-inflatable). CHAIN-LOCAL: proposals \
+         \nare replicated to every chain, so this fires on EVERY chain — including the step-0 \
+         \ndebit of transfer-crosschain, which is what makes a cross-chain double-count \
+         \nimpossible: voted shares leave this chain's tally the moment they are debited."
     (require-capability (TALLY))
     (let ((chain (this-chain)))
       (map (lambda (i:integer)
@@ -323,7 +381,7 @@
   (defun create-proposal:string
     (id:string title:string description:string created-at:time duration-seconds:integer)
     (with-capability (ADMIN)
-      ;; CHAIN-LOCAL voting (ADR-006): admin submits this SAME payload to EVERY chain.
+      ;; CHAIN-LOCAL voting: admin submits this SAME payload to EVERY chain.
       ;; created-at is EXPLICIT (not block-time) so close-at is identical on all chains —
       ;; the per-chain tally freeze (proposal-active?) is one shared timestamp, not a tx.
       (enforce (>= duration-seconds MIN-PROPOSAL-DURATION) "duration below 72h minimum")
@@ -336,9 +394,8 @@
         ;; chain the admin missed keeps the aggregation incomplete, never wrong).
         (enforce (< (curr-time) close-at) "close-at already passed on this chain")
         ;; INSERT the proposal FIRST — it fails on a duplicate id, BEFORE any index write,
-        ;; so a rejected duplicate never bumps the count / dirties the index (also robust to
-        ;; the REPL's no-rollback-on-expect-failure artifact). Then append to the active
-        ;; index; the slot is stored on the proposal for O(1) swap-and-pop removal at
+        ;; so a rejected duplicate never bumps the count / dirties the index. Then append
+        ;; to the active index; the slot is stored on the proposal for O(1) swap-and-pop removal at
         ;; close/cancel, so the transfer release-loop only ever scans the CURRENTLY-active
         ;; set (bounded by 72h..14d duration + cadence), NOT the ever-growing history.
         (insert proposals id
@@ -368,17 +425,46 @@
           "deindexed")
         "empty")))
 
+  ;; ---- dedicated voting key (hot key votes; transfer key stays cold) ----
+  (defun set-vote-key:string (account:string guard:guard)
+    @doc "Register/replace the account's dedicated voting guard. MAIN account guard only \
+         \n(via VOTE-KEY-ADMIN — scope your signature to it) — the hot key can never \
+         \nrotate itself. Per-chain (register where your shares live). The vote key can \
+         \nONLY vote: transfers, rotation, dividends destination, and this registration \
+         \nall remain with the main guard. Use a plain keyset (or keyset-ref) for the \
+         \nvote key — a user guard whose predicate reads module tables can fail at vote time."
+    (with-capability (VOTE-KEY-ADMIN account)
+      (write vote-delegates account { "guard": guard, "active": true })
+      (emit-event (VOTE-KEY-SET account (create-principal guard))))
+    "vote key set")
+
+  (defun clear-vote-key:string (account:string)
+    @doc "Deactivate the account's voting key (MAIN guard via VOTE-KEY-ADMIN). Requires \
+         \na prior registration; voting falls back to the main guard alone."
+    (with-capability (VOTE-KEY-ADMIN account)
+      (update vote-delegates account { "active": false })
+      (emit-event (VOTE-KEY-CLEARED account)))
+    "vote key cleared")
+
+  (defun get-vote-key:object{vote-delegate} (account:string)
+    @doc "Read-only: the account's vote-key registration ({guard, active}); inactive \
+         \nmain-guard default when never registered."
+    (with-default-read vote-delegates account
+      { "guard": (account-guard account), "active": false }
+      { "guard" := g, "active" := a }
+      { "guard": g, "active": a }))
+
   (defun cast-vote:string (voter:string proposal:string direction:bool)
-    @doc "LIVE vote on THIS chain (ADR-006 chain-local): weight = voter's CURRENT shares on \
+    @doc "LIVE vote on THIS chain (chain-local): weight = voter's CURRENT shares on \
          \nthis chain, into this chain's tally. Votable on every chain once the replica is \
-         \nannounced. Re-vote updates in place. Excluded reserves cannot vote."
+         \nannounced. Re-vote updates in place. Excluded reserves cannot vote. Auth = main \
+         \nguard OR the registered voting key (see VOTE)."
     (with-capability (VOTE voter)
       (with-read proposals proposal { "close-at" := cl, "status" := st }
         (enforce (= st "active") "proposal not active")
         (enforce (< (curr-time) cl) "voting closed")
-        ;; Bind the read to a let FIRST — a table read inside an enforce condition
-        ;; trips read-only mode on the KDA-CE node (devnet-caught; the REPL allows
-        ;; it, so REPL green is NOT evidence here — same fix as fund-dividends).
+        ;; Bind the read to a let FIRST — a table read inside an enforce
+        ;; condition trips read-only mode on the node.
         (let ((is-excluded (excluded? voter)))
           (enforce (not is-excluded) "excluded reserve cannot vote"))
         (record-live-vote voter (this-chain) proposal direction (get-balance voter)))))
@@ -387,7 +473,7 @@
     @doc "Shared vote-recording. Sets this (voter,chain,proposal) recorded vote to `weight` \
          \n(100% current shares), adjusting the tally by the delta from any prior vote (re-vote). \
          \nPRIVATE: the CALLER (cast-vote) authenticates the voter via VOTE = guard check. It \
-         \nacquires TALLY itself for the writes. chain is always (this-chain) — ADR-006."
+         \nacquires TALLY itself for the writes. chain is always (this-chain)."
     (require-capability (VOTE voter))       ; caller must have authenticated the voter
     (enforce (> weight 0.0) "no voting weight")
     (enforce-unit weight)
@@ -418,9 +504,9 @@
       (emit-event (PROPOSAL-CLOSED id "cancelled"))
       "proposal cancelled"))
 
-  ;; ---- results (THIS chain's advisory running view — ADR-006: the canonical
-  ;; cross-chain result is get-final-results on the hub after post-close reporting;
-  ;; per-chain quorum-met/passed are meaningful only on the complete aggregate) ----
+  ;; ---- results (THIS chain's advisory running view — the canonical cross-chain
+  ;; result is get-final-results on the hub after post-close reporting; per-chain
+  ;; quorum-met/passed are meaningful only on the complete aggregate) ----
   (defschema results yes:decimal no:decimal participation:decimal quorum-met:bool passed:bool)
   (defun results-of:object{results} (yes:decimal no:decimal)
     (let ((participation (+ yes no)))
@@ -473,7 +559,7 @@
           ;; excluded reserves can never vote (governance rejects them) => no vote release.
           (update accounts account { "balance": (- bal amount) })
           (let ((new-pend (+ pend (* bal (- rps rd)))))
-            ;; LIVE-VOTE (ADR-004): release the voted portion of the moved shares from the
+            ;; LIVE-VOTE: release the voted portion of the moved shares from the
             ;; tally BEFORE the balance drops, so no share backs two live votes on transfer.
             (with-capability (TALLY) (release-votes-on-debit account amount))
             (update accounts account
@@ -536,15 +622,23 @@
     "account created")
 
   (defun rotate:string (account:string new-guard:guard)
-    (with-read accounts account { "guard" := old-guard }
-      (enforce-guard old-guard)
+    (with-capability (ROTATE account)
       ;; A principal account (k:/w:/c:/…) must stay bound to its name — only a
       ;; vanity account may rotate freely, or a principal back to a matching guard.
       ;; Mirrors coin.rotate; without this the principal⟺guard invariant that
       ;; enforce-reserved establishes at create/first-credit could silently drift.
       (enforce (or (not (is-principal account)) (validate-principal new-guard account))
         "It is unsafe for principal accounts to rotate their guard")
-      (update accounts account { "guard": new-guard }))
+      (update accounts account { "guard": new-guard })
+      ;; Key-compromise hygiene: rotating the main guard REVOKES
+      ;; any active vote key — recovery from a stolen key must not leave the thief's
+      ;; delegate alive to keep re-voting the balance.
+      (with-default-read vote-delegates account { "active": false } { "active" := act }
+        (if act
+          (let ((_ (update vote-delegates account { "active": false })))
+            (emit-event (VOTE-KEY-CLEARED account))
+            "vote key revoked")
+          "no vote key")))
     "guard rotated")
 
   ;; ========================================================================
@@ -575,23 +669,22 @@
         "cross-chain credit ok")))
 
   ;; ========================================================================
-  ;; POST-CLOSE ON-CHAIN AGGREGATION (ADR-006). Votes NEVER cross chains — there is
-  ;; no cross-chain vote defpact (cast-vote-xchain was DELETED with ADR-006; every
-  ;; chain votes its own shares via cast-vote, and the step-0 debit of a cross-chain
-  ;; transfer releases locally like any debit). What DOES cross chains, once per
-  ;; (proposal, chain) and only AFTER close-at (tally frozen => timing-independent),
-  ;; is each chain's FINAL tally: report-tally-hub records chain 0's own numbers;
-  ;; report-tally-xchain (2-step SPV defpact) carries chains 1-19's to the hub. Both
-  ;; are PERMISSIONLESS: the payload is module-computed from the frozen tally (no
-  ;; user input), duplicates die on the (proposal, chain) insert, and a chain whose
-  ;; replica was never announced CANNOT report (fail closed — see create-proposal).
-  ;; The SPV transport itself is VALIDATED ON DEVNET (never REPL).
+  ;; POST-CLOSE ON-CHAIN AGGREGATION. Votes NEVER cross chains — there is no
+  ;; cross-chain vote defpact (every chain votes its own shares via cast-vote,
+  ;; and the step-0 debit of a cross-chain transfer releases locally like any
+  ;; debit). What DOES cross chains, once per (proposal, chain) and only AFTER
+  ;; close-at (tally frozen => timing-independent), is each chain's FINAL tally:
+  ;; report-tally-hub records chain 0's own numbers; report-tally-xchain (2-step
+  ;; SPV defpact) carries chains 1-19's to the hub. Both are PERMISSIONLESS: the
+  ;; payload is module-computed from the frozen tally (no user input), duplicates
+  ;; die on the (proposal, chain) insert, and a chain whose replica was never
+  ;; announced CANNOT report (fail closed — see create-proposal).
   ;; ========================================================================
   (defun enforce-reportable:time (proposal:string)
     @doc "The local tally is reportable iff the replica EXISTS here (missing replica = \
          \nread failure, so a lagging chain cannot be zero-reported), close-at has passed \
          \n(the tally is frozen and can never change again), and the proposal was not \
-         \ncancelled (a cancelled proposal has no result — auditor F2). Returns close-at."
+         \ncancelled (a cancelled proposal has no result). Returns close-at."
     (with-read proposals proposal { "close-at" := cl, "status" := st }
       (enforce (!= st "cancelled") "cancelled proposal has no result")
       (enforce (>= (curr-time) cl) "voting still open on this chain")
@@ -625,7 +718,7 @@
   (defpact report-tally-xchain:string (proposal:string)
     @doc "Permissionless 2-step SPV defpact: carry THIS (non-hub) chain's frozen tally \
          \nto the hub aggregate. Step 0 reads the REAL local tally after close-at; step 1 \
-         \nrecords it on the hub. DEVNET-validated (SPV is not REPL-testable)."
+         \nrecords it on the hub."
     (step
       (let ((chain (this-chain)))
         (enforce (!= chain "0") "use report-tally-hub on the hub")
@@ -644,7 +737,7 @@
   (defun get-final-results:object{final-result} (proposal:string)
     @doc "The aggregated cross-chain result. `complete` (and therefore any possibility of \
          \n`passed` = true) requires ALL chains reported — a partial aggregate can never pass. \
-         \nA proposal with no reports yet reads as zeros/incomplete (auditor F1)."
+         \nA proposal with no reports yet reads as zeros/incomplete."
     (with-default-read final-aggs proposal
       { "yes": 0.0, "no": 0.0, "reported": 0 }
       { "yes" := y, "no" := n, "reported" := r }
@@ -663,21 +756,60 @@
     (with-default-read init-state INIT-KEY { "initialized": false } { "initialized" := i }
       (enforce (not i) "module already initialized")))
 
-  (defun init-supply:string (ipo-reserve-account:string ipo-guard:guard)
-    @doc "Chain 0 only, one-time: create state + KDA accounts, mint 100k SPT to reserves."
+  (defun enforce-beneficiary (beneficiary:string guard:guard)
+    @doc "A tranche beneficiary must be a k:/w: PRINCIPAL matching its guard: squat-proof \
+         \n(enforce-reserved makes the name unforgeable, so releases can never be bricked) \
+         \nand impossible to point at a module-internal c: account by ceremony mistake."
+    (validate-account beneficiary)
+    (let ((ptype (typeof-principal beneficiary)))
+      (enforce (or (= ptype "k:") (= ptype "w:")) "beneficiary must be a k:/w: principal"))
+    (enforce (validate-principal guard beneficiary) "beneficiary guard/principal mismatch"))
+
+  (defun lock-tranche:string
+    (tranche:string beneficiary:string guard:guard total:decimal t0:time cliff-days:integer vest-days:integer)
+    @doc "PRIVATE (require ADMIN — init-supply only): record one tranche lock and \
+         \nemit its full schedule as the on-chain disclosure anchor."
+    (require-capability (ADMIN))
+    (enforce-beneficiary beneficiary guard)
+    (let ((cliff-end (add-time t0 (days cliff-days)))
+          (vest-end  (add-time t0 (days vest-days))))
+      (enforce (< cliff-end vest-end) "cliff must precede vest end")
+      (insert tranche-locks tranche
+        { "beneficiary": beneficiary, "guard": guard, "total": total
+        , "released": 0.0, "cliff-end": cliff-end, "vest-end": vest-end })
+      (emit-event (TRANCHE-LOCKED tranche beneficiary total cliff-end vest-end)))
+    "tranche locked")
+
+  (defun init-supply:string
+    (ipo-reserve-account:string ipo-guard:guard
+     founder:string founder-guard:guard
+     treasury-ops:string treasury-ops-guard:guard
+     liquidity-ops:string liquidity-ops-guard:guard)
+    @doc "Chain 0 only, one-time: create state + KDA accounts, mint TOTAL-SUPPLY to the four \
+         \nreserves (sum ENFORCED), and create the three tranche locks atomically — \
+         \nT (the calendar origin) is THIS tx's block-time; there is no post-init admin window."
     (with-capability (ADMIN)
       (enforce (= (at 'chain-id (chain-data)) "0") "Supply init only on chain 0")
       (enforce-not-initialized)
+      (enforce (= TOTAL-SUPPLY
+                  (+ IPO-TRANCHE (+ FOUNDER-TRANCHE (+ TREASURY-TRANCHE LIQUIDITY-TRANCHE))))
+        "tranche totals do not sum to TOTAL-SUPPLY")
       (insert state STATE-KEY
         { "reward-per-share": 0.0, "circulating-supply": 0.0
         , "ipo-reserve-account": ipo-reserve-account, "total-distributed": 0.0 })
       (insert prop-count PROP-COUNT-KEY { "n": 0 })       ; active-proposal-index counter
       (coin.create-account REVENUE-ACCOUNT REVENUE-G)
       (coin.create-account POOL-ACCOUNT POOL-G)
-      ;; Mint the full 100k to the (excluded) reserves — inlined (no exported mint surface).
-      (with-capability (CREDIT TREASURY-ACCOUNT) (credit TREASURY-ACCOUNT TREASURY-G 75000.0))
-      (with-capability (CREDIT FUNDERS-ACCOUNT)  (credit FUNDERS-ACCOUNT FUNDERS-G 5000.0))
-      (with-capability (CREDIT ipo-reserve-account) (credit ipo-reserve-account ipo-guard 20000.0))
+      ;; Mint TOTAL-SUPPLY to the (excluded) reserves — inlined (no exported mint surface).
+      (with-capability (CREDIT TREASURY-ACCOUNT)  (credit TREASURY-ACCOUNT TREASURY-G TREASURY-TRANCHE))
+      (with-capability (CREDIT FUNDERS-ACCOUNT)   (credit FUNDERS-ACCOUNT FUNDERS-G FOUNDER-TRANCHE))
+      (with-capability (CREDIT LIQUIDITY-ACCOUNT) (credit LIQUIDITY-ACCOUNT LIQUIDITY-G LIQUIDITY-TRANCHE))
+      (with-capability (CREDIT ipo-reserve-account) (credit ipo-reserve-account ipo-guard IPO-TRANCHE))
+      ;; Pre-committed release calendar: rows + disclosure events, atomic with the mint.
+      (let ((t0 (curr-time)))
+        (lock-tranche TRANCHE-FOUNDER founder founder-guard FOUNDER-TRANCHE t0 FOUNDER-CLIFF-DAYS FOUNDER-VEST-DAYS)
+        (lock-tranche TRANCHE-TREASURY treasury-ops treasury-ops-guard TREASURY-TRANCHE t0 TREASURY-CLIFF-DAYS TREASURY-VEST-DAYS)
+        (lock-tranche TRANCHE-LIQUIDITY liquidity-ops liquidity-ops-guard LIQUIDITY-TRANCHE t0 LIQUIDITY-CLIFF-DAYS LIQUIDITY-VEST-DAYS))
       (insert init-state INIT-KEY { "initialized": true })
       "supply initialized"))
 
@@ -711,7 +843,7 @@
       ;; Bind the read to a let FIRST — a read inside an enforce condition trips
       ;; read-only mode on KDA-CE.
       (let ((circ (get-circulating)))
-        ;; ADR-001: funding requires positive circulating float. Without this,
+        ;; Funding requires positive circulating float. Without this,
         ;; the solvency bound below degenerates to (>= pool-amount 0.0) at circ=0,
         ;; so funding would succeed and strand KDA in the pool unclaimably.
         (enforce (> circ 0.0) "no circulating float")
@@ -769,42 +901,72 @@
       "revenue withdrawn"))
 
   ;; ========================================================================
-  ;; FUNDERS (cliff vesting)
+  ;; TRANCHE TIME-LOCKS — founder / treasury / liquidity
+  ;; Permissionless, pre-committed, linear-from-cliff releases on chain 0 (the
+  ;; reserves live where the supply was minted). Released SPT enters the float
+  ;; exactly like any credit: counted circulating, dividend-accruing from now
+  ;; (no retroactivity — reward-debt = current rps), credited UNVOTED.
   ;; ========================================================================
-  (defun create-funder-allocation:string
-    (account:string guard:guard amount:decimal release-date:time)
-    @doc "Admin: reserve SPT from the funders pool into a cliff-vesting allocation."
-    (with-capability (ADMIN)
-      (enforce (> amount 0.0) "amount must be positive")
-      ;; FUNDERS-ACCOUNT is capability-guarded — acquire its guard cap so DEBIT's
-      ;; enforce-guard (on the capability guard) is satisfied.
-      (with-capability (FUNDERS-GUARD)
-        (with-capability (DEBIT FUNDERS-ACCOUNT) (debit FUNDERS-ACCOUNT amount)))
-      (insert funder-allocations account
-        { "guard": guard, "amount": amount, "release-date": release-date, "released": false })
-      (emit-event (ALLOCATION-CREATED account amount release-date))
-      "allocation created"))
+  (defun tranche-vested:decimal (total:decimal cliff-end:time vest-end:time t:time)
+    @doc "Release curve: 0 before cliff-end; linear cliff-end -> vest-end (floor-12 => \
+         \nmonotonic, never over-releases); EXACTLY total at/after vest-end (explicit \
+         \nbranch — the final claim tops up with no floor dust)."
+    (if (< t cliff-end) 0.0
+      (if (>= t vest-end) total
+        (floor (/ (* total (diff-time t cliff-end)) (diff-time vest-end cliff-end))
+               MINIMUM-PRECISION))))
 
-  (defun release-allocation:string (account:string)
-    @doc "Permissionless after release-date: credit the funder's SPT (enters float)."
-    (with-read funder-allocations account
-      { "guard" := g, "amount" := amt, "release-date" := rd, "released" := rel }
-      (enforce (not rel) "allocation already released")
-      (enforce (>= (curr-time) rd) "not yet releasable")
-      (update funder-allocations account { "released": true })
-      (with-capability (CREDIT account) (credit account g amt))
-      (emit-event (ALLOCATION-RELEASED account amt))
-      "allocation released"))
+  (defun get-tranche:object{tranche-lock} (tranche:string) (read tranche-locks tranche))
+
+  (defun tranche-releasable:decimal (tranche:string)
+    @doc "Read-only: what release-tranche would pay out right now."
+    (with-read tranche-locks tranche
+      { "total" := tot, "released" := rel, "cliff-end" := ce, "vest-end" := ve }
+      (- (tranche-vested tot ce ve (curr-time)) rel)))
+
+  (defun release-tranche:decimal (tranche:string)
+    @doc "Permissionless: credit the accrued portion of a locked tranche to its \
+         \nceremony-fixed beneficiary. Anyone may trigger; SPT can only land in the \
+         \nbeneficiary account; nobody can accelerate, delay, revoke, or redirect."
+    (with-read tranche-locks tranche
+      { "beneficiary" := ben, "guard" := g, "total" := tot, "released" := rel
+      , "cliff-end" := ce, "vest-end" := ve }
+      (let ((amount (- (tranche-vested tot ce ve (curr-time)) rel)))
+        (enforce (> amount 0.0) "nothing releasable")
+        ;; Debit the tranche's own capability-guarded reserve. The reserve guard cap
+        ;; must be acquired FIRST so DEBIT's enforce-guard on it is satisfied.
+        ;; Dispatch is over the fixed three-row key space — the with-read above
+        ;; already rejected anything else.
+        (if (= tranche TRANCHE-TREASURY)
+          (with-capability (TREASURY-GUARD)
+            (with-capability (DEBIT TREASURY-ACCOUNT) (debit TREASURY-ACCOUNT amount)))
+          (if (= tranche TRANCHE-FOUNDER)
+            (with-capability (FUNDERS-GUARD)
+              (with-capability (DEBIT FUNDERS-ACCOUNT) (debit FUNDERS-ACCOUNT amount)))
+            (let ((known (enforce (= tranche TRANCHE-LIQUIDITY) "unknown tranche")))
+              (with-capability (LIQUIDITY-GUARD)
+                (with-capability (DEBIT LIQUIDITY-ACCOUNT) (debit LIQUIDITY-ACCOUNT amount))))))
+        (with-capability (CREDIT ben) (credit ben g amount))
+        (update tranche-locks tranche { "released": (+ rel amount) })
+        (emit-event (TRANCHE-RELEASED tranche ben amount (+ rel amount)))
+        amount)))
 )
 
-(create-table accounts)
-(create-table state)
-(create-table funder-allocations)
-(create-table init-state)
-(create-table proposals)        ; LIVE-VOTE governance (ADR-006): per-chain replicas
-(create-table account-votes)    ; per-(chain,account,proposal) live recorded vote
-(create-table tallies)          ; THIS chain's per-proposal running tally
-(create-table prop-index)       ; active-proposal index (debit release-loop scans it)
-(create-table prop-count)       ; active-proposal-index counter
-(create-table final-reports)    ; post-close per-(proposal,chain) frozen reports (hub)
-(create-table final-aggs)       ; post-close aggregated final result (hub)
+;; Deploy footer. On a FRESH deploy create every table; on an UPGRADE
+;; (tx data upgrade: true) skip them — re-running create-table for an
+;; existing table aborts the whole tx.
+(if (read-msg 'upgrade)
+  ["upgrade"]
+  [ (create-table accounts)
+    (create-table state)
+    (create-table tranche-locks)    ; pre-committed tranche time-locks (3 rows, chain 0)
+    (create-table init-state)
+    (create-table proposals)        ; live-vote governance: per-chain replicas
+    (create-table account-votes)    ; per-(chain,account,proposal) live recorded vote
+    (create-table vote-delegates)   ; dedicated voting keys (hot key votes, cold key holds)
+    (create-table tallies)          ; THIS chain's per-proposal running tally
+    (create-table prop-index)       ; active-proposal index (debit release-loop scans it)
+    (create-table prop-count)       ; active-proposal-index counter
+    (create-table final-reports)    ; post-close per-(proposal,chain) frozen reports (hub)
+    (create-table final-aggs)       ; post-close aggregated final result (hub)
+  ])
