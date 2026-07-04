@@ -1,0 +1,33 @@
+;; ===========================================================================
+;; Like setup.repl but STOPS before init-supply — for testing the init guards
+;; (chain-0-only mint, admin gate, double-init) from a clean, uninitialized state.
+;; ===========================================================================
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+
+(begin-tx "load coin")
+(load "fixtures/fungible-v2.pact")
+(load "fixtures/fungible-xchain-v1.pact")
+(load "fixtures/coin.pact")
+(create-table coin.coin-table)
+(create-table coin.allocation-table)
+(commit-tx)
+
+(begin-tx "fund sender00")
+(env-data { "sender00": { "keys": ["admin-key"], "pred": "keys-all" } })
+(test-capability (coin.COINBASE))
+(coin.coinbase "sender00" (read-keyset "sender00") 1000000.0)
+(commit-tx)
+
+(begin-tx "load SPT modules")
+(env-data
+  { "ns": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641"
+  , "upgrade": false
+  , "spt-admin-name": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.spt-admin"
+  , "spt-admin": { "keys": ["admin-key"], "pred": "keys-all" }
+  , "sender00": { "keys": ["admin-key"], "pred": "keys-all" } })
+(env-keys ["admin-key"])
+(define-namespace "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641" (read-keyset 'spt-admin) (read-keyset 'spt-admin))
+(load "../contracts/smartpacts-shares.pact")   ; includes live-vote governance
+(load "../contracts/smartpacts-ipo.pact")
+(commit-tx)
+;; NOTE: init-supply intentionally NOT called here.

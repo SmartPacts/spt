@@ -1,0 +1,42 @@
+;; ===========================================================================
+;; smartpacts-ipo EXTENSIONS — buy negatives: non-positive / sub-precision amounts,
+;; dust (cost floors to 0), oversell beyond the reserve, and missing payment cap.
+;; Builds on setup.repl; initialises + activates the sale. Buyer = sender00.
+;; ===========================================================================
+(load "setup.repl")
+
+(begin-tx "init + activate sale")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(expect "sale active" true (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.is-active))
+(commit-tx)
+
+;; --- SALE-R08: non-positive and sub-precision amounts rejected ---
+(begin-tx "SALE-R08 amount negatives")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT 1.0)] }])
+(expect-failure "amount must be positive" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "sender00" (read-keyset 'sender00) 0.0))
+(expect-failure "sub-precision amount rejected" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "sender00" (read-keyset 'sender00) 1.0000000000001))
+(commit-tx)
+
+;; --- SALE-R09: dust amount where floor(amount*price)=0 -> cost must be positive ---
+(begin-tx "SALE-R09 dust cost floors to 0")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT 1.0)] }])
+;; 0.000000000001 SPT * 0.5 = 5e-13 -> floor to 12 dp = 0.0
+(expect-failure "cost must be positive" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "sender00" (read-keyset 'sender00) 0.000000000001))
+(commit-tx)
+
+;; --- SALE-R10: oversell beyond the 20000 reserve rejected (reserve debit fails) ---
+(begin-tx "SALE-R10 oversell")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT 12500.0)] }])
+(expect-failure "insufficient funds (reserve has only 20000)" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "sender00" (read-keyset 'sender00) 25000.0))
+(expect "reserve still 20000 (tx rolled back)" 20000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT))
+(commit-tx)
+
+;; --- SALE-R11: buyer without the coin.TRANSFER payment cap rejected ---
+(begin-tx "SALE-R11 missing payment cap")
+(env-sigs [])
+(expect-failure "no payment capability -> rejected" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "sender00" (read-keyset 'sender00) 100.0))
+(commit-tx)
+
+(print "smartpacts-ipo-ext REPL suite PASSED")

@@ -1,0 +1,310 @@
+;; ===========================================================================
+;; smartpacts-gas-station REPL suite — adversarial gas-station policy tests.
+;; Proves the GAS_PAYER cap sponsors ONLY the 3 SPT end-user functions and is
+;; hardened against drain (tx-type, single-call, allowlist, gas-price/limit
+;; ceilings), and that the station coin account/guard behave. Run from pact/test/.
+;;
+;; Note: a real gas buy is miner machinery (coin.GAS in scope). In REPL we drive
+;; the policy directly: simulate the tx envelope with (env-data tx-type/exec-code)
+;; + (env-chain-data gas-price/gas-limit), then test-capability (GAS_PAYER ...).
+;; test-capability returns () on success and ABORTS the tx on failure — so the
+;; positive path is asserted by "did not abort" (expect-failure absent) plus an
+;; ALLOW_GAS compose check; the negative path uses expect-failure.
+;; ===========================================================================
+(load "setup.repl")
+
+;; Canonical allowlisted call strings (what the client would put in exec-code).
+;; Pull the live prefixes so the strings can't drift from the module constants.
+(begin-tx "fixtures: sponsored call strings")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+(commit-tx)
+
+;; ===========================================================================
+;; GROUP 1 — allowlist matrix (allowlisted? — pure, returns bool)
+;; ===========================================================================
+(begin-tx "allowlist matrix")
+(expect "claim-dividends sponsored" true
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.allowlisted? "(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends \"k:alice\")"))
+(expect "cast-vote sponsored" true
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.allowlisted? "(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote \"k:alice\" \"P1\" true)"))
+(expect "cast-vote-xchain NOT sponsored (no such function — voting is chain-local)" false
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.allowlisted? "(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote-xchain \"k:alice\" \"P1\" true)"))
+
+;; --- admin / out-of-scope functions are NOT sponsored ---
+(expect "fund-dividends NOT sponsored" false
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.allowlisted? "(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 10.0 0.001)"))
+(expect "withdraw-revenue NOT sponsored" false
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.allowlisted? "(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.withdraw-revenue \"k:adm\" 5.0)"))
+(expect "create-proposal NOT sponsored" false
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.allowlisted? "(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-proposal \"P1\" \"t\" \"d\" (time \"2026-06-02T00:00:00Z\") 259200)"))
+(expect "report-tally-hub NOT sponsored (ops path, not a shareholder action)" false
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.allowlisted? "(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.report-tally-hub \"P1\")"))
+(expect "withdraw-proceeds (sale) NOT sponsored" false
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.allowlisted? "(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.withdraw-proceeds \"k:adm\" 5.0)"))
+(expect "buy-shares NOT sponsored" false
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.allowlisted? "(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares \"k:b\" (read-keyset 'g) 10.0)"))
+(expect "release-tranche NOT sponsored" false
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.allowlisted? "(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche \"treasury\")"))
+
+;; --- spoofing / boundary attacks ---
+(expect "cast-vote-evil spoof rejected (trailing-space boundary)" false
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.allowlisted? "(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote-evil \"k:a\")"))
+(expect "claim-dividends-drain spoof rejected" false
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.allowlisted? "(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends-drain \"k:a\")"))
+(expect "leading-space / wrapped call rejected (must start at index 0)" false
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.allowlisted? " (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends \"k:a\")"))
+;; AUDIT test-gap: a bare prefix with NO trailing args still matches (the prefix
+;; itself is a valid shape; the underlying module enforces its own arg validation).
+(expect "bare prefix (no args) matches — boundary" true
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.allowlisted? "(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "))
+(expect "wrong namespace rejected" false
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.allowlisted? "(evil.smartpacts-shares.claim-dividends \"k:a\")"))
+(expect "module-admin grab rejected" false
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.allowlisted? "(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer \"k:s\" \"k:r\" 1.0)"))
+(commit-tx)
+
+;; ===========================================================================
+;; GROUP 2 — GAS_PAYER acquires for each sponsored exec (within ceilings)
+;;   On success it composes ALLOW_GAS — assert that cap is then in scope.
+;; ===========================================================================
+(begin-tx "GAS_PAYER: claim-dividends exec accepted")
+(env-chain-data { "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "exec"
+          , "exec-code": ["(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends \"k:alice\")"] })
+(test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:alice" 1500 0.000001))
+(expect "ALLOW_GAS composed after a sponsored claim" true
+  (require-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.ALLOW_GAS)))
+(commit-tx)
+
+(begin-tx "GAS_PAYER: cast-vote exec accepted")
+(env-chain-data { "gas-price": 0.0000005, "gas-limit": 800 })
+(env-data { "tx-type": "exec"
+          , "exec-code": ["(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote \"k:bob\" \"P1\" true)"] })
+(test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:bob" 800 0.0000005))
+(expect "ALLOW_GAS composed after a sponsored vote" true
+  (require-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.ALLOW_GAS)))
+(commit-tx)
+
+(begin-tx "GAS_PAYER: cast-vote-xchain exec is REJECTED (voting is chain-local)")
+(env-chain-data { "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "exec"
+          , "exec-code": ["(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote-xchain \"k:carol\" \"P1\" false)"] })
+(expect-failure "removed defpact is no longer a sponsored exec" "Not a sponsored call"
+  (test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:carol" 1500 0.000001)))
+(commit-tx)
+
+;; ===========================================================================
+;; GROUP 3 — cross-chain continuation (cont): funded with NO exec-code,
+;;   bounded only by the gas ceilings.
+;; ===========================================================================
+(begin-tx "GAS_PAYER: cont accepted within ceilings (no exec-code)")
+(env-chain-data { "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "cont" })   ; deliberately no exec-code key
+(test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:carol" 1500 0.000001))
+(expect "ALLOW_GAS composed for a cont (cross-chain vote step 1)" true
+  (require-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.ALLOW_GAS)))
+(commit-tx)
+
+(begin-tx "GAS_PAYER: cont still bounded by gas ceilings")
+(env-chain-data { "gas-price": 0.000001, "gas-limit": 99999 })
+(env-data { "tx-type": "cont" })
+(expect-failure "cont over gas-limit rejected" "Gas limit must be <="
+  (test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:carol" 99999 0.000001)))
+(commit-tx)
+
+;; AUDIT residual #1 (documented, ACCEPTED): a cont funds the continuation of ANY
+;; defpact — the station has no exec-code to allowlist on the cont leg. This test
+;; PINS that behavior (it is intentionally funded, bounded by the per-tx KDA cap).
+(begin-tx "GAS_PAYER: cont of an ARBITRARY (non-vote) defpact is funded — residual #1")
+(env-chain-data { "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "cont" })   ; cont carries no exec-code regardless of which defpact it advances
+(test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:attacker" 1500 0.000001))
+(expect "cont of any defpact is funded within ceilings (documented residual)" true
+  (require-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.ALLOW_GAS)))
+(commit-tx)
+
+;; ===========================================================================
+;; GROUP 4 — drain defenses on exec
+;; ===========================================================================
+(begin-tx "non-allowlisted exec rejected")
+(env-chain-data { "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "exec"
+          , "exec-code": ["(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 10.0 0.001)"] })
+(expect-failure "admin fund-dividends not sponsored" "Not a sponsored call"
+  (test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:adm" 1500 0.000001)))
+(commit-tx)
+
+;; AUDIT residual #2 (documented, ACCEPTED — rate-limiter is YAGNI for v1): there is
+;; NO aggregate cap, so repeated validly-shaped sponsored txs each acquire GAS_PAYER.
+;; This PINS that the station funds claim N+1 the same as claim N (whole-balance grief
+;; is mitigated operationally, not in code).
+(begin-tx "no aggregate rate limit: a 2nd permissionless claim is also funded — residual #2")
+(env-chain-data { "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "exec"
+          , "exec-code": ["(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends \"k:alice\")"] })
+(test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:alice" 1500 0.000001))
+(expect "first sponsored claim funded" true
+  (require-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.ALLOW_GAS)))
+(commit-tx)
+(begin-tx "...and again with no per-account/global limiter")
+(env-chain-data { "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "exec"
+          , "exec-code": ["(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends \"k:alice\")"] })
+(test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:alice" 1500 0.000001))
+(expect "second sponsored claim ALSO funded (no aggregate cap by design)" true
+  (require-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.ALLOW_GAS)))
+(commit-tx)
+
+(begin-tx "multi-call exec rejected (no batching a free call alongside a paid one)")
+(env-chain-data { "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "exec"
+          , "exec-code": [ "(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends \"k:alice\")"
+                           "(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.withdraw-revenue \"k:atk\" 1000.0)" ] })
+(expect-failure "more than one call rejected" "exactly one allowlisted call"
+  (test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:alice" 1500 0.000001)))
+(commit-tx)
+
+(begin-tx "empty exec-code rejected")
+(env-chain-data { "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "exec", "exec-code": [] })
+(expect-failure "zero calls rejected" "exactly one allowlisted call"
+  (test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:alice" 1500 0.000001)))
+(commit-tx)
+
+(begin-tx "unknown tx-type rejected")
+(env-chain-data { "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "exotic"
+          , "exec-code": ["(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends \"k:alice\")"] })
+(expect-failure "tx-type must be exec or cont" "tx-type must be exec or cont"
+  (test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:alice" 1500 0.000001)))
+(commit-tx)
+
+;; ===========================================================================
+;; GROUP 5 — gas-price / gas-limit ceilings (the per-tx KDA cap)
+;; ===========================================================================
+(begin-tx "gas-price over ceiling rejected")
+(env-chain-data { "gas-price": 0.00001, "gas-limit": 1500 })   ; 10x the max price
+(env-data { "tx-type": "exec"
+          , "exec-code": ["(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends \"k:alice\")"] })
+(expect-failure "over-price rejected" "Gas price must be <="
+  (test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:alice" 1500 0.00001)))
+(commit-tx)
+
+(begin-tx "gas-limit over ceiling rejected")
+(env-chain-data { "gas-price": 0.000001, "gas-limit": 1501 })   ; one over the max limit
+(env-data { "tx-type": "exec"
+          , "exec-code": ["(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends \"k:alice\")"] })
+(expect-failure "over-limit rejected" "Gas limit must be <="
+  (test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:alice" 1501 0.000001)))
+(commit-tx)
+
+(begin-tx "ceilings hold at the exact boundary (accepted)")
+(env-chain-data { "gas-price": 0.000001, "gas-limit": 1500 })   ; == both ceilings
+(env-data { "tx-type": "exec"
+          , "exec-code": ["(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends \"k:alice\")"] })
+(test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:alice" 1500 0.000001))
+(expect "boundary values accepted" true
+  (require-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.ALLOW_GAS)))
+(commit-tx)
+
+;; ===========================================================================
+;; GROUP 6 — station account & guard
+;; ===========================================================================
+(begin-tx "station principal is a user-guard principal bound to this module")
+(expect "GAS_STATION is a u: principal" "u:" (take 2 n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION))
+(expect "station coin account was created at init with 0 balance"
+  0.0 (at 'balance (coin.details n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION)))
+(commit-tx)
+
+;; admin keyset alone satisfies the station guard (funding / recovery leg)
+(begin-tx "station guard: admin keyset leg passes")
+(env-keys ["admin-key"])
+(env-sigs [{ "key": "admin-key", "caps": [] }])
+(expect "admin can satisfy the station guard" true
+  (enforce-guard (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.create-gas-payer-guard)))
+(commit-tx)
+
+;; with neither a sanctioned gas buy (GAS/ALLOW_GAS not in scope) nor the admin
+;; key, the station guard must fail — nobody can drain it arbitrarily.
+(begin-tx "station guard: stranger with no caps and no admin key fails")
+(env-keys ["attacker-key"])
+(env-sigs [{ "key": "attacker-key", "caps": [] }])
+(expect-failure "stranger cannot satisfy the station guard"
+  (enforce-guard (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.create-gas-payer-guard)))
+(commit-tx)
+
+;; ===========================================================================
+;; GROUP 7 — AGGREGATE SPONSORSHIP BOUND (the per-epoch cap)
+;; The per-epoch cap makes the whole-balance grief-drain (F-04) and the arbitrary-
+;; defpact cont drain (F-03) BOUNDED on-chain: at most EPOCH-CAP KDA per epoch, reset
+;; on block-time (no attacker can pay to reset). Pre-fix these drains were unbounded.
+;; ===========================================================================
+(begin-tx "F-BOUND: EPOCH-CAP is exactly 100 sponsored txs (0.15 / 0.0015)")
+(expect "EPOCH-CAP / MAX-TX-COST == 100"
+  100.0 (/ n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.EPOCH-CAP n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.MAX-TX-COST))
+(commit-tx)
+
+;; FINDING-2 REGRESSION: charge-epoch is NOT externally callable (require METER,
+;; composed only by GAS_PAYER). A stranger can no longer exhaust the cap for free.
+(begin-tx "F-BOUND: direct charge-epoch is blocked")
+(env-keys ["attacker-key"])
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-07-01T00:00:00Z") })
+(let ((before (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.get-epoch-spent)))
+  (expect-failure "external charge-epoch blocked (METER not granted)"
+    "require-capability"
+    (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.charge-epoch))
+  (expect "external actor could NOT move the meter (unchanged by the blocked call)"
+    before (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.get-epoch-spent)))
+(commit-tx)
+
+;; The meter advances ONLY through a genuine sponsored GAS_PAYER acquisition. Drive 100
+;; distinct sponsored acquisitions (distinct `user` args -> the cap body re-runs each time)
+;; in one epoch; the meter reaches EPOCH-CAP.
+;; Use a FRESH epoch (2026-08-01) so the first acquisition rolls the meter to 0, isolating
+;; this group from the ~8 sponsored acquisitions earlier in the suite.
+(begin-tx "F-BOUND: 100 sponsored GAS_PAYER acquisitions reach EPOCH-CAP")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-01T00:00:00Z")
+                , "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "cont" })   ; a cont (F-03 path) also charges the cap
+(map (lambda (i:integer)
+       (test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER (format "k:u{}" [i]) 1500 0.000001)))
+  (enumerate 1 100))
+(expect "meter spent == EPOCH-CAP after 100 sponsored acquisitions"
+  n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.EPOCH-CAP (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.get-epoch-spent))
+(commit-tx)
+
+;; the 101st sponsored acquisition in the SAME epoch is REFUSED — drain is bounded.
+(begin-tx "F-BOUND: 101st sponsored acquisition in the epoch is refused (fail-closed)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-01T12:00:00Z")
+                , "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "cont" })
+(expect-failure "aggregate bound holds: epoch cap reached"
+  "epoch cap reached"
+  (test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:over" 1500 0.000001)))
+(commit-tx)
+
+;; once the epoch cap is hit, a legit EXEC is paused too (aggregate, not per-function).
+(begin-tx "F-BOUND: legit exec also paused once the epoch cap is exhausted")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-01T13:00:00Z")
+                , "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "exec"
+          , "exec-code": ["(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends \"k:alice\")"] })
+(expect-failure "even a valid claim is paused when the epoch cap is spent"
+  "epoch cap reached"
+  (test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:alice" 1500 0.000001)))
+(commit-tx)
+
+;; epoch rollover on BLOCK-TIME (24h later) resets the cap — self-healing, no reset fee.
+(begin-tx "F-BOUND: next epoch (24h later) resets, sponsorship resumes")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-02T00:00:01Z")
+                , "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "exec"
+          , "exec-code": ["(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends \"k:alice\")"] })
+(test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:alice" 1500 0.000001))
+(expect "meter reset to a single tx's cost after rollover"
+  n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.MAX-TX-COST (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.get-epoch-spent))
+(expect "ALLOW_GAS composed again after the epoch reset" true
+  (require-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.ALLOW_GAS)))
+(commit-tx)
+
+(print "smartpacts-gas-station suite: PASSED")

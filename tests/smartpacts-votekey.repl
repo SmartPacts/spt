@@ -1,0 +1,147 @@
+;; ===========================================================================
+;; smartpacts-shares VOTING KEY — hot key votes, transfer key stays cold.
+;; Proves: main-guard-only registration; hot key CAN vote (and re-vote); main key
+;; still votes (never locked out); hot key CANNOT transfer / rotate / re-register /
+;; clear; clear deactivates; re-registration works; weight semantics unchanged;
+;; delegate vote gas stays under the 1500 gas-station ceiling (gasless intact).
+;; Run from pact/test/.
+;; ===========================================================================
+(load "setup.repl")
+
+;; --- seed alice 3000 SPT via the IPO (float-entry path) ---
+(begin-tx "activate IPO for seeding")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(commit-tx)
+(begin-tx "seed alice 3000 via IPO")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1500.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1500.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "alice" (read-keyset 'alice) 3000.0)
+(commit-tx)
+
+;; --- a proposal to vote on ---
+(begin-tx "announce VK proposal")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-proposal "VK" "votekey test" "d" (time "2026-06-01T00:00:00Z") 259200)
+(commit-tx)
+
+;; --- registration is MAIN-guard-only ---
+(begin-tx "hot key cannot self-register")
+(env-data { "hot": { "keys": ["alice-hot"], "pred": "keys-all" } })
+(env-keys ["alice-hot"])
+(expect-failure "Keyset failure"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.set-vote-key "alice" (read-keyset 'hot)))
+(commit-tx)
+
+(begin-tx "main key registers the vote key — with a SCOPED signature")
+(env-data { "hot": { "keys": ["alice-hot"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.VOTE-KEY-ADMIN "alice")] }])
+(expect "registered via scoped sig" "vote key set"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.set-vote-key "alice" (read-keyset 'hot)))
+(expect "getter shows active" true
+  (at 'active (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-vote-key "alice")))
+(commit-tx)
+
+;; --- the hot key votes (weight = balance, tally correct) ---
+(begin-tx "hot key votes YES 3000")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(env-keys ["alice-hot"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "VK" true)
+(expect "yes = 3000 via hot key" 3000.0 (at 'yes (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "VK")))
+(commit-tx)
+
+;; --- main key is never locked out: re-votes NO, correcting the hot key ---
+(begin-tx "main key re-votes NO (corrects the hot vote)")
+(env-keys ["alice-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "VK" false)
+(expect "yes back to 0" 0.0 (at 'yes (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "VK")))
+(expect "no = 3000" 3000.0 (at 'no (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "VK")))
+(commit-tx)
+
+;; --- hot-key blast radius: votes ONLY ---
+(begin-tx "hot key cannot transfer")
+(env-data { "bob": { "keys": ["bob-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-hot", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "bob" 1.0)] }])
+(expect-failure "Keyset failure"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "bob" (read-keyset 'bob) 1.0))
+(commit-tx)
+
+(begin-tx "hot key cannot rotate the account guard")
+(env-data { "hot": { "keys": ["alice-hot"], "pred": "keys-all" } })
+(env-keys ["alice-hot"])
+(expect-failure "Keyset failure"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.rotate "alice" (read-keyset 'hot)))
+(commit-tx)
+
+(begin-tx "hot key cannot clear or replace itself")
+(env-data { "hot2": { "keys": ["alice-hot2"], "pred": "keys-all" } })
+(env-keys ["alice-hot"])
+(expect-failure "Keyset failure"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.clear-vote-key "alice"))
+(expect-failure "Keyset failure"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.set-vote-key "alice" (read-keyset 'hot2)))
+(commit-tx)
+
+;; --- clear (main) deactivates the hot key ---
+(begin-tx "main clears the vote key; hot vote now rejected")
+(env-keys ["alice-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.clear-vote-key "alice")
+(env-keys ["alice-hot"])
+(expect-failure "neither account guard nor registered vote key satisfied"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "VK" true))
+(commit-tx)
+
+;; --- clear without any registration fails cleanly (bob) ---
+(begin-tx "clear without registration rejected")
+(env-data { "bob": { "keys": ["bob-key"], "pred": "keys-all" } })
+(env-keys ["bob-key"])
+(expect-failure "No row found"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.clear-vote-key "bob"))
+(commit-tx)
+
+;; --- re-registration works; delegate vote gas stays gasless-compatible (< 1500) ---
+(begin-tx "re-register a NEW hot key; gas-measured delegate vote")
+(env-data { "hot2": { "keys": ["alice-hot2"], "pred": "keys-all" } })
+(env-keys ["alice-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.set-vote-key "alice" (read-keyset 'hot2))
+(env-keys ["alice-hot2"])
+(env-gasmodel "table")
+(env-gaslimit 150000)
+(env-gas 0)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "VK" true)
+(expect "delegate cast-vote gas under the 1500 station ceiling" true (< (env-gas) 1500))
+(print (format "delegate cast-vote gas: {}" [(env-gas)]))
+(env-gaslimit 999999999)
+(expect "yes = 3000 via NEW hot key" 3000.0 (at 'yes (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "VK")))
+(commit-tx)
+
+;; --- rotating the MAIN guard revokes an active vote key ---
+(begin-tx "rotate revokes the vote key (compromise-recovery hygiene)")
+(env-data { "v1": { "keys": ["vicky-1"], "pred": "keys-all" }
+          , "v2": { "keys": ["vicky-2"], "pred": "keys-all" }
+          , "vhot": { "keys": ["vicky-hot"], "pred": "keys-all" } })
+(env-keys ["vicky-1"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-account "vicky" (read-keyset 'v1))
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.set-vote-key "vicky" (read-keyset 'vhot))
+(expect "vicky vote key active" true (at 'active (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-vote-key "vicky")))
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.rotate "vicky" (read-keyset 'v2))
+(expect "rotation revoked the vote key" false (at 'active (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-vote-key "vicky")))
+(commit-tx)
+
+;; --- keyset-REF guard as the vote key (DB lookup at enforcement) ---
+(begin-tx "keyset-ref-guard vote key (REPL leg; node leg in f9-devnet)")
+(env-data { "refks": { "keys": ["alice-ref"], "pred": "keys-all" } })
+(env-keys ["admin-key"])
+(namespace "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641")   ; define-keyset requires namespace context on-chain
+(define-keyset "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.vote-ref" (read-keyset 'refks))
+(env-keys ["alice-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.set-vote-key "alice" (keyset-ref-guard "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.vote-ref"))
+(env-keys ["alice-ref"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "VK" false)
+(expect "keyset-ref vote key voted (no = 3000)" 3000.0 (at 'no (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "VK")))
+(commit-tx)
+
+(print "smartpacts-votekey VOTING-KEY suite PASSED")

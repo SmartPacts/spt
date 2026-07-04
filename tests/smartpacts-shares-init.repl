@@ -1,0 +1,90 @@
+;; ===========================================================================
+;; smartpacts-shares INIT-PATH guards (clean, uninitialized state via setup-noinit).
+;; Covers TOK-R03 (init-supply off chain 0), TOK-R04 (non-admin init-supply),
+;; init-on-chain-0 forbidden, double-init rejection, and the tranche mint + time-locks.
+;; ===========================================================================
+(load "setup-noinit.repl")
+
+;; Shared tranche beneficiaries (k: principals w/ synthetic-but-valid 64-hex keys).
+(env-data
+  { "founder-ks":       { "keys": ["f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"], "pred": "keys-all" }
+  , "treasury-ops-ks":  { "keys": ["a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"], "pred": "keys-all" }
+  , "liquidity-ops-ks": { "keys": ["b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"], "pred": "keys-all" } })
+
+;; --- TOK-R03: init-supply on a non-0 chain is rejected ---
+(begin-tx "init-supply off chain 0 rejected")
+(env-chain-data { "chain-id": "1", "block-time": (time "2026-06-01T00:00:00Z") })
+(env-keys ["admin-key"])
+(expect-failure "Supply init only on chain 0"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.init-supply
+    n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-G
+    "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0" (read-keyset 'founder-ks)
+    "k:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1" (read-keyset 'treasury-ops-ks)
+    "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" (read-keyset 'liquidity-ops-ks)))
+(commit-tx)
+
+;; --- TOK-R04: non-admin init-supply is rejected (keyset gate) ---
+(begin-tx "non-admin init-supply rejected")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+(env-keys ["intruder-key"])
+(expect-failure "Keyset failure"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.init-supply
+    n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-G
+    "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0" (read-keyset 'founder-ks)
+    "k:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1" (read-keyset 'treasury-ops-ks)
+    "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" (read-keyset 'liquidity-ops-ks)))
+(commit-tx)
+
+;; --- init (non-supply) is forbidden on chain 0 ---
+(begin-tx "init on chain 0 forbidden")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+(env-keys ["admin-key"])
+(expect-failure "Use init-supply on chain 0" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.init "ipo-x"))
+(commit-tx)
+
+;; --- happy path: init-supply on chain 0 succeeds; mint + tranche locks ---
+(begin-tx "init-supply chain 0 ok")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+(env-keys ["admin-key"])
+(expect "init-supply ok" "supply initialized"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.init-supply
+    n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-G
+    "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0" (read-keyset 'founder-ks)
+    "k:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1" (read-keyset 'treasury-ops-ks)
+    "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" (read-keyset 'liquidity-ops-ks)))
+(expect "treasury 55k" 55000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT))
+(expect "founder 10k"  10000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.FUNDERS-ACCOUNT))
+(expect "liquidity 15k" 15000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.LIQUIDITY-ACCOUNT))
+(expect "ipo reserve 20k" 20000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT))
+(expect "circulating 0" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
+(commit-tx)
+
+;; --- double init-supply rejected ---
+(begin-tx "double init-supply rejected")
+(env-keys ["admin-key"])
+(expect-failure "module already initialized"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.init-supply
+    n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-G
+    "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0" (read-keyset 'founder-ks)
+    "k:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1" (read-keyset 'treasury-ops-ks)
+    "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" (read-keyset 'liquidity-ops-ks)))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; TOK-R24 — fund-dividends with circulating-supply = 0 is rejected.
+;; fund-dividends enforces `circulating-supply > 0`.
+;; The guard rejects funding at zero float, which would otherwise bump rps and
+;; strand the funded KDA in the pool (a future holder's reward-debt would init to
+;; the bumped rps, so it could never be claimed).
+;; ---------------------------------------------------------------------------
+(begin-tx "TOK-R24: fund-dividends at circulating 0 rejected (no float)")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT 100.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" 100.0)
+(env-keys ["admin-key"])
+(expect "circulating is 0" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
+(expect-failure "no circulating float"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 100.0 0.02))
+(expect "rps unchanged at zero float" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps))
+(commit-tx)
+
+(print "smartpacts-shares-init REPL suite PASSED")

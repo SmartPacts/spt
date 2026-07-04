@@ -1,0 +1,207 @@
+;; ===========================================================================
+;; smartpacts-attacks-voting — RED-TEAM for the LIVE-VOTE governance, under the
+;; lens: "for every state field that gates a right/payout, who else can write it,
+;; and to whose detriment?" Targets the tally + account-votes. Each block asserts
+;; the SECURE outcome. (Cross-chain tally is validated on DEVNET, not here.)
+;; ===========================================================================
+(load "setup.repl")
+
+;; seed alice 2500, bob 2000, carol 500, atk 100 (funders reserve = 5000; = 5100 > 5000?
+;; funders is 5000 -> use 2500+2000+400+100 = 5000)
+(begin-tx "activate IPO for seeding")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(commit-tx)
+(begin-tx "seed holders via IPO (alice 2500, bob 2000, carol 400, atk 100 = 5000)")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+          , "bob":   { "keys": ["bob-key"],   "pred": "keys-all" }
+          , "carol": { "keys": ["carol-key"], "pred": "keys-all" }
+          , "atk":   { "keys": ["atk-key"],   "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1250.0) (coin.TRANSFER "sender00" "bob" 1000.0) (coin.TRANSFER "sender00" "carol" 200.0) (coin.TRANSFER "sender00" "atk" 50.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1250.0)
+(coin.transfer-create "sender00" "bob"   (read-keyset 'bob)   1000.0)
+(coin.transfer-create "sender00" "carol" (read-keyset 'carol) 200.0)
+(coin.transfer-create "sender00" "atk"   (read-keyset 'atk)   50.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1250.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "alice" (read-keyset 'alice) 2500.0)
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "bob" (read-keyset 'bob) 2000.0)
+(env-sigs [{ "key": "carol-key", "caps": [(coin.TRANSFER "carol" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 200.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "carol" (read-keyset 'carol) 400.0)
+(env-sigs [{ "key": "atk-key", "caps": [(coin.TRANSFER "atk" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 50.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "atk" (read-keyset 'atk) 100.0)
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+(commit-tx)
+
+(begin-tx "open P")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-proposal "P" "t" "d" (time "2026-06-02T00:00:00Z") 259200)
+(commit-tx)
+
+;; helper: assert Σ recorded votes <= circulating after each step
+(begin-tx "V0 baseline invariant (no votes yet)")
+(let ((r (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P")))
+  (expect "V0: participation 0 <= circulating" true (<= (at 'participation r) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))))
+(commit-tx)
+
+;; ===========================================================================
+;; V1 — DUST cannot suppress: alice votes 2500; atk dusts her; vote unchanged.
+;; ===========================================================================
+(begin-tx "V1 alice votes then gets dusted")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })
+(env-keys ["alice-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "P" true)
+(env-sigs [{ "key": "atk-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "atk" "alice" 0.000000000001)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "atk" "alice" 0.000000000001)
+(expect "V1: dust did not reduce alice's vote" 2500.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.vote-weight "alice" "0" "P"))
+(commit-tx)
+
+;; ===========================================================================
+;; V2 — TRANSFER RELEASE: a voter's outgoing transfer releases exactly the moved
+;; portion from the tally; the receiver's shares are unvoted. No under/over-release.
+;; ===========================================================================
+(begin-tx "V2 alice sends 500 to carol")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T02:00:00Z") })
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "carol" 500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "alice" "carol" 500.0)
+(expect "V2: alice vote released by exactly 500 -> 2000" 2000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.vote-weight "alice" "0" "P"))
+(expect "V2: carol (received) is unvoted" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.vote-weight "carol" "0" "P"))
+(let ((r (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P")))
+  (expect "V2: tally yes == alice's 2000" 2000.0 (at 'yes r))
+  (expect "V2: Σ votes <= circulating" true (<= (at 'participation r) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))))
+(commit-tx)
+
+;; ===========================================================================
+;; V3 — NO DOUBLE-VOTE across a transfer (the Shareholder-Agreements gap): the
+;; released shares, once re-voted by the receiver, count ONCE.
+;; ===========================================================================
+(begin-tx "V3 carol votes her 900 (400 seed + 500 received)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T03:00:00Z") })
+(env-keys ["carol-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "carol" "P" true)
+(let ((r (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P")))
+  ;; yes = alice 2000 + carol 900 = 2900 (NOT 2000+500 double-counted)
+  (expect "V3: yes 2900 (no double-count across the transfer)" 2900.0 (at 'yes r))
+  (expect "V3: Σ votes <= circulating" true (<= (at 'participation r) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))))
+(commit-tx)
+
+;; ===========================================================================
+;; V4 — release is bounded by the VOTED amount (over-transfer of unvoted shares
+;; doesn't over-release). bob holds 2000, votes only after receiving; then sends.
+;; ===========================================================================
+(begin-tx "V4 bob votes 2000 then sends 2500? (only has 2000) — send 1500")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T04:00:00Z") })
+(env-keys ["bob-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "bob" "P" false)
+(env-sigs [{ "key": "bob-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "bob" "carol" 1500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "bob" "carol" 1500.0)
+(expect "V4: bob vote released by 1500 -> 500" 500.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.vote-weight "bob" "0" "P"))
+(let ((r (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P")))
+  (expect "V4: no side is negative" true (and (>= (at 'yes r) 0.0) (>= (at 'no r) 0.0)))
+  (expect "V4: Σ votes <= circulating" true (<= (at 'participation r) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))))
+(commit-tx)
+
+;; ===========================================================================
+;; V5 — cap boundary: no external actor can write the tally / account-votes.
+;; ===========================================================================
+(begin-tx "V5 internal caps unacquirable externally")
+(env-keys ["atk-key"])
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(expect-failure "external TALLY cap unacquirable"
+  (with-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TALLY) "nope"))
+(expect-failure "external apply-tally blocked (require TALLY)"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.apply-tally "P" 1000000.0 true))
+(expect-failure "external release-votes-on-debit blocked (require TALLY)"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-votes-on-debit "alice" 1.0))
+(expect-failure "external record-live-vote blocked (require VOTE of voter's guard)"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.record-live-vote "alice" "0" "P" true 999999.0))
+(commit-tx)
+
+;; ===========================================================================
+;; V6 — CONSERVATION: the governance merge did not break dividend accounting.
+;; ===========================================================================
+(begin-tx "V6 dividends still work")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT 50.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" 50.0)
+(env-keys ["admin-key"])
+(let ((circ (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating)))
+  (expect "V6: circulating still 5000 through all the transfers" 5000.0 circ)
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 50.0 (/ 50.0 circ)))
+(let ((pend (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "carol")))
+  (expect "V6: carol accrues dividends on her CURRENT balance (indep. of votes)" true (> pend 0.0)))
+(commit-tx)
+
+;; ===========================================================================
+;; V7 — final Σ-votes-≤-circulating invariant after everything.
+;; ===========================================================================
+(begin-tx "V7 final invariant")
+(let ((r (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P")))
+  (expect "V7: Σ votes <= circulating (final)"
+    true (<= (at 'participation r) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating)))
+  (print (format "V7 final: yes={} no={} participation={} circulating={}"
+    [(at 'yes r) (at 'no r) (at 'participation r) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating)])))
+(commit-tx)
+
+;; ===========================================================================
+;; V8 — REPORT-PATH boundary: nobody can inject numbers into the final
+;; aggregate, report early, or report a chain that was never announced.
+;; ===========================================================================
+(begin-tx "V8a external record-final-tally blocked (require AGGREGATE)")
+(env-keys ["atk-key"])
+(expect-failure "cannot inject fake final numbers"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.record-final-tally "P" "7" 999999.0 0.0))
+(commit-tx)
+
+(begin-tx "V8b report BEFORE close-at blocked (tally not frozen yet)")
+;; P was created 2026-06-02 with 259200s duration -> close-at 2026-06-05.
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-04T00:00:00Z") })
+(env-keys ["atk-key"])
+(expect-failure "premature report rejected" "voting still open"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.report-tally-hub "P"))
+(commit-tx)
+
+(begin-tx "V8c report of a never-announced proposal blocked (no zero-report suppression)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-06T00:00:00Z") })
+(env-keys ["atk-key"])
+(expect-failure "unannounced proposal cannot be reported" "No value found in table"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.report-tally-hub "GHOST"))
+(commit-tx)
+
+(begin-tx "V8d report-tally-xchain rejected on the hub (disjoint entry points)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-06T00:00:00Z") })
+(env-keys ["atk-key"])
+(expect-failure "hub must use report-tally-hub" "use report-tally-hub on the hub"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.report-tally-xchain "P"))
+(commit-tx)
+
+;; ===========================================================================
+;; V9 — AGGREGATION integrity: the hub report copies the FROZEN tally exactly,
+;; is idempotent (duplicate dies on the (proposal,chain) insert), and a PARTIAL
+;; aggregate can never read complete/passed (needs all 20 chains).
+;; ===========================================================================
+(begin-tx "V9 report hub tally after close; verify aggregate")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-06T00:00:00Z") })
+(env-keys ["atk-key"])   ; PERMISSIONLESS: even the attacker reporting yields the truth
+(let ((r (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P")))
+  (expect "hub report records the frozen tally" "reported" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.report-tally-hub "P"))
+  (let ((f (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-final-results "P")))
+    (expect "V9: aggregate yes == frozen chain-0 yes" (at 'yes r) (at 'yes f))
+    (expect "V9: aggregate no == frozen chain-0 no" (at 'no r) (at 'no f))
+    (expect "V9: 1 of 20 chains reported" 1 (at 'chains-reported f))
+    (expect "V9: NOT complete with 1/20 chains" false (at 'complete f))
+    (expect "V9: a partial aggregate can NEVER read passed" false (at 'passed f))))
+(commit-tx)
+
+(begin-tx "V9b duplicate report rejected (insert idempotency)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-06T01:00:00Z") })
+(env-keys ["atk-key"])
+(expect-failure "second chain-0 report dies on the (proposal,chain) insert"
+  "Value already found while in Insert mode"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.report-tally-hub "P"))
+(expect "aggregate unchanged after the rejected duplicate" 1
+  (at 'chains-reported (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-final-results "P")))
+(commit-tx)
+
+(print "smartpacts-attacks-voting LIVE-VOTE RED-TEAM suite PASSED")

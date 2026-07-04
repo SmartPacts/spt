@@ -1,0 +1,79 @@
+;; ===========================================================================
+;; smartpacts-ipo REPL suite — IPO purchases (KDA in / SPT out), no per-buyer cap,
+;; pause/price/withdraw, and admin-gating negatives. Run from pact/test/.
+;; Buyer = sender00 (funded with KDA in setup).
+;; ===========================================================================
+(load "setup.repl")
+
+;; --- init the sale (creates SALES-INCOME account + price config) ---
+(begin-tx "sale init")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(expect "price 0.5" 0.5 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.get-price))
+(expect "inactive until resumed" false (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.is-active))
+(commit-tx)
+
+(begin-tx "double init rejected")
+(env-keys ["admin-key"])
+(expect-failure "sale already initialized" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5))
+(commit-tx)
+
+(begin-tx "buy before active rejected")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT 500.0)] }])
+(expect-failure "sale is not active" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "sender00" (read-keyset 'sender00) 1000.0))
+(commit-tx)
+
+;; --- activate + buy ---
+(begin-tx "resume + buy 1000 @ 0.5")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT 500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "sender00" (read-keyset 'sender00) 1000.0)
+(expect "buyer got 1000 SPT" 1000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "sender00"))
+(expect "reserve 19000" 19000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT))
+(expect "circulating 1000 (reserve excluded, buyer participates)" 1000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
+(expect "sales income 500 KDA" 500.0 (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT))
+(commit-tx)
+
+;; --- no per-buyer cap: same buyer buys again ---
+(begin-tx "buy 500 more (no per-buyer cap)")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT 250.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "sender00" (read-keyset 'sender00) 500.0)
+(expect "buyer now holds 1500 SPT" 1500.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "sender00"))
+(expect "sales income 750 KDA" 750.0 (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT))
+(commit-tx)
+
+;; --- pause blocks purchases ---
+(begin-tx "pause blocks buy")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.pause)
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT 50.0)] }])
+(expect-failure "sale is not active" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "sender00" (read-keyset 'sender00) 100.0))
+(commit-tx)
+
+;; --- set-price + resume + buy at new price ---
+(begin-tx "set-price 1.0 + buy 100")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.set-price 1.0)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT 100.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "sender00" (read-keyset 'sender00) 100.0)
+(expect "buyer now 1600 SPT" 1600.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "sender00"))
+(expect "sales income 850 KDA" 850.0 (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT))
+(commit-tx)
+
+;; --- admin gating negatives ---
+(begin-tx "non-admin set-price / withdraw rejected")
+(env-keys ["intruder-key"])
+(expect-failure "Keyset failure" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.set-price 9.0))
+(expect-failure "Keyset failure" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.withdraw-proceeds "sender00" 1.0))
+(commit-tx)
+
+;; --- withdraw proceeds ---
+(begin-tx "withdraw-proceeds")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.withdraw-proceeds "sender00" 850.0)
+(expect "sales income drained to 0" 0.0 (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT))
+(commit-tx)
+
+(print "smartpacts-ipo REPL suite PASSED")

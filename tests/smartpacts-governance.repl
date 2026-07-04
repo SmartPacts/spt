@@ -1,0 +1,310 @@
+;; ===========================================================================
+;; smartpacts-governance REPL suite — LIVE-VOTE governance, merged into
+;; smartpacts-shares. Vote weight = current shares; transfers release voted shares from the
+;; tally; re-vote updates in place; dust cannot suppress. Proposals + tally hub-only.
+;; (Cross-chain cast-vote-xchain needs SPV -> validated on DEVNET, not here.)
+;; ===========================================================================
+(load "setup.repl")
+
+;; seed alice 3000, bob 2000, carol 500 (funders reserve = 5000)
+(begin-tx "activate IPO for seeding")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(commit-tx)
+(begin-tx "seed voters via IPO (alice 2500, bob 2000, carol 200)")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+          , "bob":   { "keys": ["bob-key"],   "pred": "keys-all" }
+          , "carol": { "keys": ["carol-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1250.0) (coin.TRANSFER "sender00" "bob" 1000.0) (coin.TRANSFER "sender00" "carol" 100.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1250.0)
+(coin.transfer-create "sender00" "bob"   (read-keyset 'bob)   1000.0)
+(coin.transfer-create "sender00" "carol" (read-keyset 'carol) 100.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1250.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "alice" (read-keyset 'alice) 2500.0)
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "bob" (read-keyset 'bob) 2000.0)
+(env-sigs [{ "key": "carol-key", "caps": [(coin.TRANSFER "carol" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 100.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "carol" (read-keyset 'carol) 200.0)
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+(commit-tx)
+
+;; --- proposal duration bounds + explicit created-at (chain-local: the SAME payload is
+;; replicated to every chain, so close-at is one shared timestamp) ---
+(begin-tx "GOV: duration bounds + created-at validation")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(expect-failure "duration below 72h"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-proposal "PB" "t" "d" (time "2026-06-02T00:00:00Z") 100))
+(expect-failure "duration above 14d"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-proposal "PB" "t" "d" (time "2026-06-02T00:00:00Z") 2000000))
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-proposal "P1" "Adopt plan" "desc" (time "2026-06-02T00:00:00Z") 259200)
+(expect-failure "duplicate id rejected"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-proposal "P1" "t" "d" (time "2026-06-02T00:00:00Z") 259200))
+(commit-tx)
+
+;; --- LIVE vote: weight = current shares ---
+(begin-tx "GOV: alice votes yes 3000, bob votes no 2000")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })
+(env-keys ["alice-key"])
+(expect "alice votes" "vote cast" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "P1" true))
+(env-keys ["bob-key"])
+(expect "bob votes" "vote cast" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "bob" "P1" false))
+(let ((r (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P1")))
+  (expect "yes 2500" 2500.0 (at 'yes r))
+  (expect "no 2000" 2000.0 (at 'no r))
+  (expect "participation 4500" 4500.0 (at 'participation r))
+  (expect "quorum met" true (at 'quorum-met r))
+  (expect "passed (yes>no)" true (at 'passed r)))
+(commit-tx)
+
+;; --- vote-stealing + non-existent + zero-weight + excluded rejected ---
+(begin-tx "GOV: rejections")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T01:00:00Z") })
+(env-keys ["intruder-key"])
+(expect-failure "vote-stealing blocked (guard)" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "P1" true))
+(env-keys ["ghost-key"])
+(expect-failure "non-existent account rejected" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "ghost" "P1" true))
+(env-keys ["admin-key"])
+;; treasury is BOTH excluded AND capability-guarded — the guard check (VOTE) fires first,
+;; so it cannot even authenticate (defense in depth; "excluded" is the backstop).
+(expect-failure "excluded treasury cannot vote (guard unacquirable)"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT "P1" true))
+(commit-tx)
+
+;; --- RE-VOTE updates in place (alice flips to no) ---
+(begin-tx "GOV: alice re-votes (flip yes->no); tally updates in place")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T02:00:00Z") })
+(env-keys ["alice-key"])
+(expect "alice re-votes" "vote cast" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "P1" false))
+(let ((r (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P1")))
+  ;; yes loses alice's 2500 -> 0; no gains 2500 -> 4500
+  (expect "yes now 0 (alice flipped)" 0.0 (at 'yes r))
+  (expect "no now 4500" 4500.0 (at 'no r))
+  (expect "participation still 4500 (no double count)" 4500.0 (at 'participation r)))
+(env-keys ["alice-key"])   ; flip alice back to yes for the transfer tests
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "P1" true)
+(commit-tx)
+
+;; ===========================================================================
+;; THE INVARIANT — transfer releases the voted shares from the tally (no double-vote).
+;; State now: alice yes 2500, bob no 2000. alice sends 1000 to carol.
+;; ===========================================================================
+(begin-tx "GOV: alice (voted yes 2500) sends 1000 to carol -> tally releases 1000")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T03:00:00Z") })
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "carol" 1000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "alice" "carol" 1000.0)
+(let ((r (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P1")))
+  (expect "yes dropped by 1000 -> 1500 (alice's moved shares released)" 1500.0 (at 'yes r)))
+(expect "alice recorded vote now 1500" 1500.0
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.vote-weight "alice" "0" "P1"))
+(expect "carol received 1000 but has NOT voted (weight 0)" 0.0
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.vote-weight "carol" "0" "P1"))
+(commit-tx)
+
+(begin-tx "GOV: carol votes her 1200 (200 seed + 1000 received) — counted ONCE")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T04:00:00Z") })
+(env-keys ["carol-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "carol" "P1" true)
+(let ((r (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P1")))
+  ;; yes = alice 1500 + carol 1200 = 2700 ; no = bob 2000
+  (expect "yes 2700 (no double count from the transfer)" 2700.0 (at 'yes r))
+  (expect "no 2000" 2000.0 (at 'no r))
+  (expect "total votes <= circulating"
+    true (<= (at 'participation r) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))))
+(commit-tx)
+
+;; --- ATTACK: transfer-then-revote double-vote is CLOSED (the SA gap) ---
+;; alice sends all her 1500 to a fresh account, then tries to re-vote with 0 shares.
+(begin-tx "GOV: transfer-then-revote double-vote blocked")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T05:00:00Z") })
+(env-data { "dave": { "keys": ["dave-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "dave" 1500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "dave" (read-keyset 'dave) 1500.0)
+(let ((r (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P1")))
+  ;; alice's full 1500 released -> yes = carol 1200 only
+  (expect "yes 1200 after alice sent everything (her vote fully released)" 1200.0 (at 'yes r)))
+(env-keys ["alice-key"])
+(expect-failure "alice cannot vote with 0 shares" "no voting weight"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "P1" true))
+;; dave (received 1500) votes -> counted once; NO double count with alice's released vote
+(env-keys ["dave-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "dave" "P1" true)
+(let ((r (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P1")))
+  (expect "yes = carol 1200 + dave 1500 = 2700 (no double-vote from the SA transfer gap)"
+    2700.0 (at 'yes r))
+  (expect "total votes <= circulating (final)"
+    true (<= (at 'participation r) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))))
+(commit-tx)
+
+;; --- DUST cannot suppress: dust to a voter leaves their vote untouched ---
+(begin-tx "GOV: dust to dave does not change his vote")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T06:00:00Z") })
+(env-sigs [{ "key": "bob-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "bob" "dave" 0.000000000001)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "bob" "dave" 0.000000000001)
+(expect "dave's recorded vote unchanged by the dust he received" 1500.0
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.vote-weight "dave" "0" "P1"))
+;; bob SENT the dust (a debit) -> his own vote releases by the dust (1e-12), still ~2000
+(let ((r (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P1")))
+  (expect "no ~2000 (bob's tiny send released 1e-12)" 1999.999999999999 (at 'no r)))
+(commit-tx)
+
+;; --- deadline + close/cancel lifecycle ---
+(begin-tx "GOV: vote after deadline rejected")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-06T00:00:00Z") })
+(env-keys ["dave-key"])
+(expect-failure "voting closed" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "dave" "P1" true))
+(commit-tx)
+(begin-tx "GOV: close + guards")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-06T00:00:00Z") })
+(expect "close P1" "proposal closed" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.close-proposal "P1"))
+(expect-failure "re-close rejected" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.close-proposal "P1"))
+(commit-tx)
+(begin-tx "GOV: vote on closed rejected")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-06T00:00:00Z") })
+(env-keys ["dave-key"])
+(expect-failure "proposal not active" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "dave" "P1" true))
+(commit-tx)
+
+;; --- quorum NOT met: a fresh proposal with only a sub-quorum vote ---
+(begin-tx "GOV: quorum not met")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-proposal "PQ" "Quorum test" "d" (time "2026-06-02T00:00:00Z") 259200)
+(commit-tx)
+(begin-tx "GOV: only carol (1200) votes PQ -> below 4000 quorum")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })
+(env-keys ["carol-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "carol" "PQ" true)
+(let ((r (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "PQ")))
+  (expect "participation 1200" 1200.0 (at 'participation r))
+  (expect "quorum NOT met (<4000)" false (at 'quorum-met r))
+  (expect "not passed (quorum fails)" false (at 'passed r)))
+(commit-tx)
+
+;; --- cancel lifecycle ---
+(begin-tx "GOV: cancel lifecycle")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-proposal "PC" "Cancel test" "d" (time "2026-06-02T00:00:00Z") 259200)
+(expect "cancel active ok" "proposal cancelled" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cancel-proposal "PC"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })
+(env-keys ["carol-key"])
+(expect-failure "vote on cancelled rejected" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "carol" "PC" true))
+(env-keys ["admin-key"])
+(expect-failure "re-cancel non-active rejected" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cancel-proposal "PC"))
+(commit-tx)
+
+;; --- tally is FROZEN at close-at — a transfer PAST the voting deadline
+;; does NOT release votes / move the tally, so get-results is final even before the admin
+;; closes the proposal. Uses a fresh holder `frank` seeded here. ---
+(begin-tx "F1 seed frank 300 + create PF; frank votes 300")
+(env-data { "frank": { "keys": ["frank-key"], "pred": "keys-all" }
+          , "sink":  { "keys": ["sink-key"],  "pred": "keys-all" } })
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-10T00:00:00Z") })
+;; seed frank 300 via IPO (own tx — commit so signer state is clean before create-proposal)
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "frank" 150.0)] }])
+(coin.transfer-create "sender00" "frank" (read-keyset 'frank) 150.0)
+(env-sigs [{ "key": "frank-key", "caps": [(coin.TRANSFER "frank" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 150.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "frank" (read-keyset 'frank) 300.0)
+(commit-tx)
+(begin-tx "F1 create PF")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-10T00:00:00Z") })
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-proposal "PF" "freeze test" "d" (time "2026-06-10T00:00:00Z") 259200)   ; created 06-10, closes 06-13
+(commit-tx)
+(begin-tx "F1 frank votes 300 within the window")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-11T00:00:00Z") })
+(env-keys ["frank-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "frank" "PF" true)
+(let ((r (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "PF"))) (expect "PF yes 300 before close" 300.0 (at 'yes r)))
+(commit-tx)
+(begin-tx "F1 frank transfers all 300 AFTER close-at -> tally MUST stay 300 (frozen)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-14T00:00:00Z") })  ; > close-at 06-13
+(env-data { "sink": { "keys": ["sink-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "frank-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "frank" "sink" 300.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "frank" "sink" (read-keyset 'sink) 300.0)
+(let ((r (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "PF")))
+  (expect "tally frozen at close-at — post-deadline transfer did NOT release the vote"
+    300.0 (at 'yes r)))
+(commit-tx)
+
+;; --- deindex: closing a proposal removes it from the active release-loop set ---
+(begin-tx "GOV: close removes proposal from the active index (bounded release-loop)")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-proposal "PX" "t" "d" (time "2026-06-02T00:00:00Z") 259200)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-proposal "PY" "t" "d" (time "2026-06-02T00:00:00Z") 259200)
+(let ((before (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-prop-count)))
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.close-proposal "PX")
+  (expect "active-proposal count decremented on close" (- before 1) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-prop-count)))
+;; PY (was the tail, swapped into PX's slot) is still active + votable
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })
+(env-keys ["carol-key"])
+(expect "PY still votable after PX was swapped-and-popped" "vote cast"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "carol" "PY" true))
+(expect-failure "PX (closed) not votable" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "carol" "PX" true))
+(commit-tx)
+
+;; ===========================================================================
+;; CHAIN-LOCAL VOTING — the same live-vote machinery on a NON-hub chain.
+;; NOTE: the REPL shares ONE DB, so "chain 5" here shares tables with chain 0 —
+;; this exercises the code paths (no hub enforce; vkey chain-scoping; local release;
+;; local freeze), NOT per-chain isolation. Isolation + SPV are DEVNET-only.
+;; ===========================================================================
+(begin-tx "CL: admin announces PL on chain 5 (identical payload as everywhere)")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "5", "block-time": (time "2026-06-02T00:00:00Z") })
+(expect "replica announced off-hub" "proposal created"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-proposal "PL" "chain-local" "d" (time "2026-06-02T00:00:00Z") 259200))
+(commit-tx)
+
+(begin-tx "CL: dave votes PL on chain 5 with his CURRENT local shares")
+(env-chain-data { "chain-id": "5", "block-time": (time "2026-06-03T00:00:00Z") })
+(env-keys ["dave-key"])
+(expect "off-hub vote accepted (no hub enforce)" "vote cast"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "dave" "PL" true))
+(expect "vote recorded under chain-5 scope" 1500.000000000001
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.vote-weight "dave" "5" "PL"))
+(expect "chain-0 scope untouched for PL" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.vote-weight "dave" "0" "PL"))
+(commit-tx)
+
+(begin-tx "CL: dave's transfer on chain 5 releases his chain-5 vote ")
+(env-chain-data { "chain-id": "5", "block-time": (time "2026-06-04T00:00:00Z") })
+(env-sigs [{ "key": "dave-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "dave" "sink" 500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "dave" "sink" 500.0)
+(expect "chain-5 vote released by the moved 500" 1000.000000000001
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.vote-weight "dave" "5" "PL"))
+(expect "chain-5 tally dropped in step" 1000.000000000001
+  (at 'yes (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "PL")))
+(expect "receiver (sink) unvoted on chain 5" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.vote-weight "sink" "5" "PL"))
+(commit-tx)
+
+(begin-tx "CL: chain-5 tally FROZEN at close-at (post-deadline transfer releases nothing)")
+(env-chain-data { "chain-id": "5", "block-time": (time "2026-06-06T00:00:00Z") })  ; > close 06-05
+(env-sigs [{ "key": "dave-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "dave" "sink" 1000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "dave" "sink" 1000.0)
+(expect "frozen: post-close transfer did not release the chain-5 vote" 1000.000000000001
+  (at 'yes (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "PL")))
+(commit-tx)
+
+;; ===========================================================================
+;; AGGREGATION — post-close, the hub's own frozen tally is recorded into
+;; the canonical aggregate, permissionlessly. (Report-path attack boundaries are in
+;; smartpacts-attacks-voting V8/V9; the 19 xchain reports are SPV — devnet-only.)
+;; ===========================================================================
+(begin-tx "AGG: permissionless hub report copies P1's frozen tally exactly")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-07T00:00:00Z") })
+(env-keys ["carol-key"])   ; not the admin — reporting is permissionless
+(let ((r (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P1")))
+  (expect "hub report ok" "reported" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.report-tally-hub "P1"))
+  (let ((f (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-final-results "P1")))
+    (expect "aggregate yes == frozen tally yes" (at 'yes r) (at 'yes f))
+    (expect "aggregate no == frozen tally no" (at 'no r) (at 'no f))
+    (expect "1/20 chains reported" 1 (at 'chains-reported f))
+    (expect "incomplete until every chain reports" false (at 'complete f))
+    (expect "partial aggregate can never pass" false (at 'passed f))))
+(commit-tx)
+
+(print "smartpacts-governance LIVE-VOTE suite PASSED")

@@ -1,0 +1,243 @@
+;; ===========================================================================
+;; smartpacts-attacks — ADVERSARIAL red-team regression suite (cold re-derivation).
+;; Each block asserts the SECURE outcome: an attack is BLOCKED, or a fix holds.
+;; Maps 1:1 to docs/security/RED-TEAM-2026-06-29.md attack IDs (A-*).
+;; Run from pact/test/.  Pre-fix, A-B/A-C/A-D2 FAIL (exploit present); the
+;; root-cause fixes flip them green. Do not weaken — these pin the fixes.
+;; ===========================================================================
+(load "setup.repl")
+
+;; seed two float holders (alice 3000, bob 2000), received 2026-06-01 (pre any proposal)
+(begin-tx "activate IPO for seeding")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(commit-tx)
+
+;; Seed via sender00 IPO-buy then SPT transfer, so alice/bob hold SPT but have NO coin
+;; account of their own (A-C's squat test needs bob's vanity coin name to be unclaimed).
+(begin-tx "seed float holders (alice 3000, bob 2000) w/o coin accounts")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+          , "bob": { "keys": ["bob-key"], "pred": "keys-all" }
+          , "sender00": { "keys": ["admin-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 2500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "sender00" (read-keyset 'sender00) 5000.0)
+(env-sigs [{ "key": "admin-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "sender00" "alice" 3000.0) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "sender00" "bob" 2000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "sender00" "alice" (read-keyset 'alice) 3000.0)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "sender00" "bob" (read-keyset 'bob) 2000.0)
+(commit-tx)
+
+;; ===========================================================================
+;; A-A — FREE MINT / unauthorized credit (weak-body CREDIT cap). MUST be blocked.
+;; ===========================================================================
+(begin-tx "A-A free mint blocked")
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(env-keys ["atk-key"])
+(expect-failure "external acquisition of CREDIT cap is impossible"
+  (with-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.CREDIT "atk")
+    (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.credit "atk" (read-keyset 'atk) 1000000.0)))
+(expect-failure "direct credit() blocked by require-capability"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.credit "atk" (read-keyset 'atk) 1000000.0))
+(expect-failure "direct debit() blocked by require-capability"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.debit "alice" 1.0))
+(commit-tx)
+
+;; ===========================================================================
+;; A-INT — internal reserve drain (treasury/funders/revenue/pool). MUST be blocked.
+;; ===========================================================================
+(begin-tx "A-INT reserve drain blocked")
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(env-keys ["atk-key"])
+;; cannot acquire any internal account cap-guard from tx code
+(expect-failure "TREASURY-GUARD unacquirable externally"
+  (with-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-GUARD) "nope"))
+(expect-failure "REVENUE-GUARD unacquirable externally"
+  (with-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-GUARD) "nope"))
+;; cannot move SPT out of the treasury (DEBIT needs the cap guard)
+(env-sigs [{ "key": "atk-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT "atk" 100.0)] }])
+(expect-failure "treasury SPT cannot be transferred out"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT "atk" (read-keyset 'atk) 100.0))
+;; non-admin cannot withdraw KDA revenue
+(expect-failure "non-admin revenue withdraw blocked"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.withdraw-revenue "atk" 1.0))
+(commit-tx)
+
+;; ===========================================================================
+;; A-D1 — dividend double-claim + checkpoint theft + excluded claim. MUST be blocked.
+;; ===========================================================================
+(begin-tx "A-D1 fund a round (circ 5000)")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT 100.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" 100.0)
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 100.0 0.02)              ; alice 3000->60, bob 2000->40
+(commit-tx)
+(begin-tx "A-D1 double-claim + excluded claim blocked")
+(expect "alice claims once" 60.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "alice"))
+(expect-failure "alice cannot double-claim" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "alice"))
+(expect-failure "treasury (excluded) cannot claim" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT))
+(commit-tx)
+
+;; ===========================================================================
+;; A-C — dividend-claim DoS via coin-account-name squatting. FIX: claim pays to
+;; (create-principal guard), which a squatter cannot pre-occupy with a bad guard.
+;; ===========================================================================
+(begin-tx "A-C attacker squats coin account 'bob' with attacker guard")
+(env-data { "atkg": { "keys": ["atk-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "bob" 0.001)] }])
+(coin.transfer-create "sender00" "bob" (read-keyset 'atkg) 0.001)   ; coin 'bob' guard != SPT 'bob' guard
+(commit-tx)
+(begin-tx "A-C bob's dividend claim still succeeds (squat cannot block)")
+(env-data { "bob": { "keys": ["bob-key"], "pred": "keys-all" } })
+;; bob accrued 40 in A-D1 and has not claimed yet
+(expect "bob claim succeeds despite squatted coin name" 40.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "bob"))
+;; paid to the guard-bound principal, not the squatted vanity name
+(expect "dividend landed at bob's guard principal"
+  40.0 (coin.get-balance (create-principal (read-keyset 'bob))))
+(commit-tx)
+
+;; ===========================================================================
+;; A-B — ambiguous vote key (':' is legal in account names, incl. principals).
+;; FIX: vkey = (hash [voter chain proposal]) — structurally unambiguous. (Now on
+;; smartpacts-shares — governance is part of the token module.)
+;; ===========================================================================
+(begin-tx "A-B vote key is unambiguous")
+(expect "distinct triples -> distinct keys (no colon collision)"
+  true
+  (!= (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.vkey "bob:0" "0" "P1")
+      (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.vkey "bob" "0" "0:P1")))
+(commit-tx)
+
+;; ===========================================================================
+;; A-V — LIVE-VOTE integrity: guard required to vote, excluded rejected,
+;; re-vote allowed (updates in place — NOT a double-count). MUST hold.
+;; ===========================================================================
+(begin-tx "A-V create proposal P1 on hub (chain 0)")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-proposal "P1" "t" "d" (time "2026-06-02T00:00:00Z") 259200)
+(commit-tx)
+(begin-tx "A-V vote-for-others blocked; re-vote updates; excluded blocked")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })
+(env-keys ["atk-key"])  ;; attacker cannot vote AS alice (no alice guard)
+(expect-failure "cannot vote for another account" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "P1" true))
+(env-keys ["alice-key"])
+(expect "alice votes yes 3000" "vote cast" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "P1" true))
+;; re-vote is ALLOWED and updates in place (no double count): flip to no.
+(expect "alice re-votes (flip) — updates in place" "vote cast" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "P1" false))
+(let ((r (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P1")))
+  (expect "yes 0 after flip (no double count)" 0.0 (at 'yes r))
+  (expect "no 3000 after flip" 3000.0 (at 'no r)))
+(env-keys ["admin-key"])
+(expect-failure "excluded treasury cannot vote"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT "P1" true))
+(commit-tx)
+
+;; ===========================================================================
+;; A-GRIEF — dust-transfer vote suppression. THE fix (live
+;; voting): a vote weighs CURRENT shares; receiving dust never REMOVES shares,
+;; so a dust to a voter cannot reduce their vote. (Pre-fix, last-received-time was
+;; reset by the dust and disqualified the whole balance.)
+;; ===========================================================================
+(begin-tx "A-GRIEF create P-GRIEF; bob votes his 2000")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-proposal "P-GRIEF" "grief target" "d" (time "2026-06-02T00:00:00Z") 259200)
+(commit-tx)
+(begin-tx "A-GRIEF bob votes yes 2000")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T06:00:00Z") })
+(env-keys ["bob-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "bob" "P-GRIEF" true)
+(expect "bob's recorded vote is 2000" 2000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.vote-weight "bob" "0" "P-GRIEF"))
+(commit-tx)
+
+;; ---- THE ATTACK: attacker dusts bob AFTER he voted. His vote must NOT change. ----
+(begin-tx "A-GRIEF fund attacker + dust bob after he voted")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "atk" 0.000000000005)] }])
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "atk" (read-keyset 'atk) 0.000000000005)
+(env-sigs [{ "key": "atk-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "atk" "bob" 0.000000000001)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "atk" "bob" 0.000000000001)
+(commit-tx)
+(begin-tx "A-GRIEF assert bob's vote is untouched by the dust (suppression defeated)")
+(expect "dust-grief fixed (live-vote): dust did NOT reduce bob's recorded vote"
+  2000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.vote-weight "bob" "0" "P-GRIEF"))
+(let ((r (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P-GRIEF")))
+  (expect "tally yes still 2000 (dust cannot suppress)" 2000.0 (at 'yes r)))
+;; multi-dust: dust bob two more times; his vote still holds
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T02:00:00Z") })
+(env-sigs [{ "key": "atk-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "atk" "bob" 0.000000000001)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "atk" "bob" 0.000000000001)
+(expect "multi-dust: bob's vote still 2000" 2000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.vote-weight "bob" "0" "P-GRIEF"))
+(commit-tx)
+
+;; ===========================================================================
+;; A-D2 — CHAIN-LOCAL proposals: admin replicates the proposal to every
+;; chain (identical created-at/duration => identical close-at); a NON-admin still
+;; cannot create one anywhere; a replica whose close-at already passed is rejected
+;; (fail closed — a lagging chain can never be zero-reported into the aggregate).
+;; ===========================================================================
+(begin-tx "A-D2 replica creation: admin-only, any chain, never after close-at")
+(env-keys ["atk-key"])
+(env-chain-data { "chain-id": "5", "block-time": (time "2026-06-02T00:00:00Z") })
+(expect-failure "non-admin cannot create a proposal on any chain"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-proposal "P5" "t" "d" (time "2026-06-02T00:00:00Z") 259200))
+(env-keys ["admin-key"])
+(expect-failure "replica with already-passed close-at rejected (fail closed)"
+  "close-at already passed"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-proposal "P5" "t" "d" (time "2026-05-01T00:00:00Z") 259200))
+(expect-failure "created-at in the future rejected"
+  "created-at cannot be in the future"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-proposal "P5" "t" "d" (time "2026-06-03T00:00:00Z") 259200))
+(expect "chain-local: admin CAN announce a replica off the hub" "proposal created"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-proposal "P5" "t" "d" (time "2026-06-02T00:00:00Z") 259200))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })
+(commit-tx)
+
+;; ===========================================================================
+;; A-S — sale: cannot get SPT without paying; sub-cost purchase blocked;
+;; reserve cannot be drained without the IPO cap. MUST hold.
+;; ===========================================================================
+;; (IPO already initialized + resumed in setup.repl for test seeding — no re-init needed)
+(begin-tx "A-S sale drain attempts blocked")
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(env-keys ["atk-key"])
+;; cannot pull SPT from the IPO reserve directly (needs IPO-RESERVE-CAP)
+(env-sigs [{ "key": "atk-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT "atk" 100.0)] }])
+(expect-failure "IPO reserve SPT cannot be transferred without sale cap"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT "atk" (read-keyset 'atk) 100.0))
+;; sub-precision / zero purchase rejected
+(expect-failure "zero-amount buy rejected" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "atk" (read-keyset 'atk) 0.0))
+(commit-tx)
+
+;; ===========================================================================
+;; A-R — rotate: principal account cannot drift to a non-matching guard (F-01).
+;; ===========================================================================
+(begin-tx "A-R principal rotate guard re-bind")
+(env-data { "kp":  { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+          , "kp2": { "keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], "pred": "keys-all" } })
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-account "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" (read-keyset 'kp))
+(env-keys ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"])
+(expect-failure "principal cannot rotate to mismatched guard" "unsafe for principal"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.rotate "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" (read-keyset 'kp2)))
+(commit-tx)
+
+;; ===========================================================================
+;; A-G — gas station allowlist: only exact sponsored prefixes pass; no bypass.
+;; ===========================================================================
+(begin-tx "A-G allowlist tightness")
+(expect "sponsored cast-vote allowed" true
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.allowlisted? "(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote \"alice\" \"P1\" true)"))
+(expect "sponsored claim allowed" true
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.allowlisted? "(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends \"alice\")"))
+(expect "admin fund-dividends NOT sponsored" false
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.allowlisted? "(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 1.0 0.01)"))
+(expect "prefix-extension attack rejected (no trailing-space boundary)" false
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.allowlisted? "(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends-evil \"x\")"))
+(expect "leading-whitespace wrap rejected" false
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.allowlisted? " (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends \"alice\")"))
+(expect "wrong-namespace rejected" false
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.allowlisted? "(evil.smartpacts-shares.claim-dividends \"alice\")"))
+(commit-tx)
+
+(print "smartpacts-attacks RED-TEAM suite PASSED")

@@ -1,0 +1,138 @@
+;; ===========================================================================
+;; smartpacts-shares REPL test suite — fungible-v2 surface, FLOAT dividends, funders
+;; vesting, revenue, and the audit-fix solvency check. Run from pact/test/.
+;; ===========================================================================
+(load "setup.repl")
+
+;; ---------------------------------------------------------------------------
+;; init-supply outcome
+;; ---------------------------------------------------------------------------
+(begin-tx "init outcome")
+(expect "treasury 55k" 55000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT))
+(expect "founder 10k"  10000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.FUNDERS-ACCOUNT))
+(expect "liquidity 15k" 15000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.LIQUIDITY-ACCOUNT))
+(expect "ipo reserve 20k" 20000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT))
+(expect "circulating 0" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
+(expect "precision 12" 12 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.precision))
+(commit-tx)
+
+(begin-tx "double init-supply rejected")
+(env-keys ["admin-key"])
+(expect-failure "already initialized" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.init-supply "x" (read-keyset 'spt-admin) "kf" (read-keyset 'spt-admin) "kt" (read-keyset 'spt-admin) "kl" (read-keyset 'spt-admin)))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; fungible-v2: enforce-unit / create-account / rotate / details
+;; ---------------------------------------------------------------------------
+(begin-tx "enforce-unit")
+(expect "12-place amount ok" true (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.enforce-unit 1.000000000001))
+(expect-failure "over-precise amount rejected" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.enforce-unit 1.0000000000001))
+(commit-tx)
+
+(begin-tx "create-account + details + rotate")
+(env-data { "u": { "keys": ["u-key"], "pred": "keys-all" }, "u2": { "keys": ["u2-key"], "pred": "keys-all" } })
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-account "ursula" (read-keyset 'u))
+(expect "new account balance 0" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "ursula"))
+(expect "details account" "ursula" (at 'account (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.details "ursula")))
+(env-keys ["u-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.rotate "ursula" (read-keyset 'u2))
+(expect "guard rotated" (read-keyset 'u2) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-guard "ursula"))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Seed the float via the IPO (alice 3000, bob 2000) — the legitimate float-entry
+;; path. sender00 pre-funds each buyer's
+;; KDA; the buyer signs its own coin.TRANSFER into the IPO income account.
+;; ---------------------------------------------------------------------------
+(begin-tx "activate IPO for seeding")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(commit-tx)
+
+(begin-tx "seed holders via IPO (alice 3000, bob 2000)")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+          , "bob": { "keys": ["bob-key"], "pred": "keys-all" } })
+;; fund buyers with KDA from sender00 (cost = amt * 0.5)
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1500.0) (coin.TRANSFER "sender00" "bob" 1000.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1500.0)
+(coin.transfer-create "sender00" "bob"   (read-keyset 'bob)   1000.0)
+;; buyers purchase SPT from the IPO reserve
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "alice" (read-keyset 'alice) 3000.0)
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "bob" (read-keyset 'bob) 2000.0)
+(expect "alice 3000" 3000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "alice"))
+(expect "bob 2000" 2000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "bob"))
+(expect "circulating now 5000" 5000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Dividends round 1 — float base; treasury excluded; real KDA claim
+;; ---------------------------------------------------------------------------
+(begin-tx "receive revenue 100 KDA")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT 100.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" 100.0)
+(expect "revenue account holds 100 KDA" 100.0 (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT))
+(commit-tx)
+
+(begin-tx "fund-dividends underfunded rejected (audit #2)")
+(env-keys ["admin-key"])
+;; circulating 5000; rps-inc 0.02 needs pool >= 100, but pool-amount 50 -> reject
+(expect-failure "pool underfunded" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 50.0 0.02))
+(commit-tx)
+
+(begin-tx "fund-dividends round 1 (100 KDA, rps += 0.02)")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 100.0 0.02)
+(expect "alice pending 60" 60.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "alice"))
+(expect "bob pending 40"   40.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "bob"))
+(expect "treasury accrues 0 (excluded)" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT))
+(expect "ipo reserve accrues 0 (excluded)" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT))
+(commit-tx)
+
+(begin-tx "non-admin fund-dividends rejected")
+(env-keys ["intruder-key"])
+(expect-failure "Keyset failure" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 100.0 0.02))
+(commit-tx)
+
+(begin-tx "permissionless claim alice -> real KDA (paid to her guard principal)")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "alice")
+;; A-C fix: dividends land at (create-principal guard), squat-proof, not the raw name.
+(expect "alice received 60 KDA at her guard principal" 60.0 (coin.get-balance (create-principal (read-keyset 'alice))))
+(expect "alice pending reset to 0" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "alice"))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; reward-debt init — late joiner gets 0 for a round funded before they held
+;; ---------------------------------------------------------------------------
+(begin-tx "alice transfers 1000 to fresh carol AFTER round 1")
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "carol" 1000.0)] }])
+(env-data { "carol": { "keys": ["carol-key"], "pred": "keys-all" } })
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "carol" (read-keyset 'carol) 1000.0)
+(expect "carol 1000" 1000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "carol"))
+(expect "carol pending 0 (joined after round 1)" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "carol"))
+(expect "circulating unchanged 5000 (holder->holder)" 5000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
+(commit-tx)
+
+(begin-tx "round 2 -> carol earns only round 2")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT 100.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" 100.0)
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 100.0 0.02)
+(expect "carol earns 1000*0.02 = 20 (round 2 only)" 20.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "carol"))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Revenue withdrawal (admin)
+;; ---------------------------------------------------------------------------
+(begin-tx "withdraw-revenue")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT 50.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" 50.0)
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.withdraw-revenue "sender00" 50.0)
+(expect "revenue drained after withdrawal" 0.0 (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT))
+(commit-tx)
+
+(print "smartpacts-shares REPL suite PASSED")

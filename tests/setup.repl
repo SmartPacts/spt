@@ -1,0 +1,62 @@
+;; ===========================================================================
+;; Shared REPL environment for SPT module tests.
+;; Loads coin + fungible interfaces (root), then the 3 production modules into
+;; the `free` namespace, funds the admin (sender00), and runs init-supply (chain 0).
+;; Run test files from pact/test/ (relative load paths). admin keyset key = "admin-key".
+;; ===========================================================================
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+
+;; --- coin environment (root namespace) ---
+(begin-tx "load coin")
+(load "fixtures/fungible-v2.pact")
+(load "fixtures/fungible-xchain-v1.pact")
+(load "fixtures/gas-payer-v1.pact")
+(load "fixtures/coin.pact")
+(create-table coin.coin-table)
+(create-table coin.allocation-table)
+(commit-tx)
+
+;; --- fund the admin/funder account "sender00" with KDA ---
+(begin-tx "fund sender00")
+(env-data { "sender00": { "keys": ["admin-key"], "pred": "keys-all" } })
+(test-capability (coin.COINBASE))
+(coin.coinbase "sender00" (read-keyset "sender00") 1000000.0)
+(commit-tx)
+
+;; --- SPT namespace + admin keyset, then load the 3 modules ---
+(begin-tx "load SPT modules")
+(env-data
+  { "ns": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641"
+  , "upgrade": false
+  , "spt-admin-name": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.spt-admin"
+  , "spt-admin": { "keys": ["admin-key"], "pred": "keys-all" }
+  , "sender00": { "keys": ["admin-key"], "pred": "keys-all" } })
+(env-keys ["admin-key"])
+(define-namespace "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641" (read-keyset 'spt-admin) (read-keyset 'spt-admin))
+(load "../contracts/smartpacts-shares.pact")   ; defines n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.spt-admin; includes live-vote governance
+(load "../contracts/smartpacts-ipo.pact")
+(load "../contracts/smartpacts-gas-station.pact") ; sponsors vote/claim gas; init = station coin acct
+(commit-tx)
+
+;; --- initial supply on chain 0; IPO reserve = smartpacts-ipo's capability-guarded account.
+;; init-supply also fixes the three tranche beneficiaries (k: principals; synthetic
+;; but valid 64-hex keys) and creates the pre-committed locks atomically. T = the env
+;; block-time (2026-06-01T00:00:00Z) — tranche suites compute cliff/vest bounds from it. ---
+(begin-tx "init-supply")
+(env-data
+  { "founder-ks":       { "keys": ["f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"], "pred": "keys-all" }
+  , "treasury-ops-ks":  { "keys": ["a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"], "pred": "keys-all" }
+  , "liquidity-ops-ks": { "keys": ["b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"], "pred": "keys-all" }
+  , "sender00":         { "keys": ["admin-key"], "pred": "keys-all" } })  ; keep ambient — suites read it
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.init-supply
+  n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT
+  n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-G
+  "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0" (read-keyset 'founder-ks)
+  "k:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1" (read-keyset 'treasury-ops-ks)
+  "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" (read-keyset 'liquidity-ops-ks))
+(commit-tx)
+
+;; NOTE: the IPO is intentionally NOT initialized here — the IPO test suites
+;; (smartpacts-ipo{,-ext}) exercise init/pause from scratch. Suites that seed float
+;; holders via the IPO (the float-entry path) init+resume it themselves in their own seed tx.

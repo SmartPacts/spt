@@ -1,0 +1,113 @@
+;; ===========================================================================
+;; smartpacts-shares TRANCHE TIME-LOCKS — founder / treasury / liquidity.
+;; Proves: locks created at init with the source-derived calendar; pre-cliff release
+;; fails; partial linear release is exact + monotonic; vest-end releases exactly the
+;; remainder (Σ = total, no dust); released SPT enters the float (circulating +,
+;; dividend-accruing, votable); unknown tranche + double-past-full are rejected;
+;; per-release gas is well under the 150k ceiling. Run from pact/test/.
+;; T (calendar origin) = setup block-time 2026-06-01T00:00:00Z.
+;; Reserves are on chain 0; releases happen on chain 0.
+;; ===========================================================================
+(load "setup.repl")
+
+(begin-tx "tranche rows created at init with the pre-committed calendar")
+;; init-supply (in setup) created 3 rows; verify balances + schedule origins.
+(expect "founder reserve 10k"   10000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.FUNDERS-ACCOUNT))
+(expect "treasury reserve 55k"  55000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT))
+(expect "liquidity reserve 15k" 15000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.LIQUIDITY-ACCOUNT))
+(expect "reserves sum to full 100k with IPO 20k"
+  100000.0
+  (+ (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.FUNDERS-ACCOUNT)
+     (+ (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT)
+        (+ (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.LIQUIDITY-ACCOUNT)
+           (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT)))))
+(expect "founder cliff-end T+365d"    (time "2027-06-01T00:00:00Z") (at 'cliff-end (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-tranche "founder")))
+(expect "founder vest-end T+1460d"    (time "2030-05-31T00:00:00Z") (at 'vest-end  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-tranche "founder")))
+(expect "treasury cliff-end T+365d"   (time "2027-06-01T00:00:00Z") (at 'cliff-end (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-tranche "treasury")))
+(expect "treasury vest-end T+1825d"   (time "2031-05-31T00:00:00Z") (at 'vest-end  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-tranche "treasury")))
+(expect "liquidity cliff-end T+90d"   (time "2026-08-30T00:00:00Z") (at 'cliff-end (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-tranche "liquidity")))
+(expect "liquidity vest-end T+730d"   (time "2028-05-31T00:00:00Z") (at 'vest-end  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-tranche "liquidity")))
+(expect "founder released starts 0"   0.0 (at 'released (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-tranche "founder")))
+(commit-tx)
+
+;; --- before cliff: nothing releasable ---
+(begin-tx "pre-cliff release fails")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-29T00:00:00Z") })  ; 1 day before liquidity cliff
+(expect "liquidity not releasable at 0" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.tranche-releasable "liquidity"))
+(expect-failure "nothing releasable before liquidity cliff" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity"))
+(expect-failure "nothing releasable before founder cliff"   (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "founder"))
+(expect-failure "nothing releasable before treasury cliff"  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "treasury"))
+(commit-tx)
+
+;; --- unknown tranche rejected (fixed 3-row key space) ---
+(begin-tx "unknown tranche rejected")
+(expect-failure "unknown tranche" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "bogus"))
+(commit-tx)
+
+;; --- liquidity partial release: 1 year after cliff, exact linear amount ---
+(begin-tx "liquidity partial release exact + enters float")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-08-30T00:00:00Z") })  ; 1yr after liquidity cliff
+(expect "releasable = 8554.6875 (exact floor-12)" 8554.6875 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.tranche-releasable "liquidity"))
+(expect "release returns the amount" 8554.6875 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity"))
+;; beneficiary (liquidity-ops k:) received it; it entered the float
+(expect "liquidity beneficiary holds it" 8554.6875 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"))
+(expect "liquidity reserve drained by the release" 6445.3125 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.LIQUIDITY-ACCOUNT))
+(expect "released amount enters circulating" 8554.6875 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
+(expect "released bookkeeping updated" 8554.6875 (at 'released (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-tranche "liquidity")))
+;; a second release at the SAME instant yields nothing (already claimed to date)
+(expect-failure "no double-release at same time" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity"))
+(commit-tx)
+
+;; --- monotonic: a later release pays only the NEW accrual ---
+(begin-tx "liquidity second release = incremental only")
+(env-chain-data { "chain-id": "0", "block-time": (time "2028-05-31T00:00:00Z") })  ; vest-end
+(expect "remainder to full = 15000 - 8554.6875" 6445.3125 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.tranche-releasable "liquidity"))
+(expect "release the remainder" 6445.3125 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity"))
+(expect "beneficiary now holds full 15000" 15000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"))
+(expect "liquidity reserve empty (Σ = total, no dust)" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.LIQUIDITY-ACCOUNT))
+(expect "released bookkeeping = total" 15000.0 (at 'released (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-tranche "liquidity")))
+(commit-tx)
+
+;; --- at/after vest-end: full remainder in one shot (founder) ---
+(begin-tx "founder single release at vest-end pays exactly total")
+(env-chain-data { "chain-id": "0", "block-time": (time "2030-05-31T00:00:00Z") })  ; founder vest-end
+(expect "founder full 10000 releasable" 10000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.tranche-releasable "founder"))
+(expect "release pays 10000" 10000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "founder"))
+(expect "founder beneficiary holds 10000" 10000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"))
+(expect "founder reserve empty" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.FUNDERS-ACCOUNT))
+;; nothing further to release once fully paid
+(expect-failure "founder fully released" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "founder"))
+(commit-tx)
+
+;; --- treasury after vest-end: whole 55k in one shot; total conservation.
+;; The release itself is GAS-MEASURED here (the one new transactional path F9 adds) —
+;; must sit far under the 150k KDA-CE ceiling. ---
+(begin-tx "treasury release after vest-end (gas-measured)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2031-06-01T00:00:00Z") })  ; past treasury vest-end
+(expect "treasury full 55000 releasable" 55000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.tranche-releasable "treasury"))
+(env-gasmodel "table")
+(env-gaslimit 150000)
+(env-gas 0)
+(expect "release pays 55000" 55000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "treasury"))
+(expect "release-tranche gas under the 150k ceiling" true (< (env-gas) 150000))
+(print (format "release-tranche gas: {}" [(env-gas)]))
+(env-gaslimit 999999999)  ; keep table model on, but never bind later txs
+(expect "treasury reserve empty" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT))
+;; ALL three tranches fully released -> circulating = 80,000 (100k minus the still-unsold 20k IPO reserve)
+(expect "circulating = 80000 (all tranches out, IPO unsold)" 80000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
+(commit-tx)
+
+;; --- released treasury SPT is now votable + dividend-eligible (entered the float) ---
+(begin-tx "released treasury SPT can vote (no longer excluded)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2031-06-01T00:00:00Z") })
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-proposal "TP" "post-release" "d" (time "2031-06-01T00:00:00Z") 259200)
+(commit-tx)
+(begin-tx "treasury beneficiary votes its released shares")
+(env-chain-data { "chain-id": "0", "block-time": (time "2031-06-02T00:00:00Z") })
+(env-sigs [{ "key": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.VOTE "k:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1")] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "k:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1" "TP" true)
+(expect "released treasury shares voted (55000 yes)" 55000.0 (at 'yes (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "TP")))
+(commit-tx)
+
+(print "smartpacts-tranches TIME-LOCK suite PASSED")

@@ -1,0 +1,9 @@
+{
+  "name": "spt-verify",
+  "private": true,
+  "type": "module",
+  "description": "Trustless verification of the SPT repository against the live network",
+  "dependencies": {
+    "blakejs": "^1.2.1"
+  }
+}

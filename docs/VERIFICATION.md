@@ -3,6 +3,12 @@
 Nothing in this repository needs to be taken on trust. Everything below can be checked against the
 live network with free, public tooling.
 
+**The one-command version:** `cd scripts && npm install && node verify.mjs` byte-compares every
+contract in this repository against the source stored on all 20 chains, checks hash uniformity,
+and prints the deployment request keys. The rest of this page is the manual version, plus the
+supply/time-lock/vote checks the script doesn't cover. Deployment and upgrade history (with
+request keys) is in [DEPLOYMENTS.md](DEPLOYMENTS.md).
+
 ## Deployment facts
 
 | Fact | Value |

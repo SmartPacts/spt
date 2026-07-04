@@ -1,0 +1,136 @@
+;; ===========================================================================
+;; smartpacts-shares EXTENSIONS — fungible negatives, account validation, plain transfer,
+;; checkpoint-at-transfer (no dividend theft), circulating conservation, claim
+;; negatives, and admin-gate negatives. Builds on setup.repl (post init-supply).
+;; ===========================================================================
+(load "setup.repl")
+
+;; --- seed two participating holders via the IPO (the float-entry path) ---
+(begin-tx "activate IPO for seeding")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(commit-tx)
+(begin-tx "seed alice 3000 / bob 2000 via IPO")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+          , "bob": { "keys": ["bob-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1500.0) (coin.TRANSFER "sender00" "bob" 1000.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1500.0)
+(coin.transfer-create "sender00" "bob"   (read-keyset 'bob)   1000.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "alice" (read-keyset 'alice) 3000.0)
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "bob" (read-keyset 'bob) 2000.0)
+(expect "TOK-R19a: circulating 5000 after seed" 5000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
+(commit-tx)
+
+;; --- TOK-R07: account-name + principal-guard validation ---
+(begin-tx "TOK-R07 account validation")
+(env-data { "g": { "keys": ["gk"], "pred": "keys-all" } })
+(expect-failure "name too short (<3)" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-account "ab" (read-keyset 'g)))
+(expect-failure "invalid charset" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-account "bad€name" (read-keyset 'g)))
+;; principal account whose guard does NOT match -> reserved-guard violation
+(env-data { "mismatch": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(expect-failure "Reserved protocol guard violation"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-account "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'mismatch)))
+(commit-tx)
+
+;; --- TOK-R08: rotate by wrong key rejected ---
+(begin-tx "TOK-R08 rotate wrong key")
+(env-keys ["bob-key"]) ;; bob tries to rotate alice's guard
+(env-data { "new": { "keys": ["newk"], "pred": "keys-all" } })
+(expect-failure "guard failure" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.rotate "alice" (read-keyset 'new)))
+(commit-tx)
+
+;; --- F-01: principal account cannot rotate to a non-matching guard (coin parity).
+;;     old-guard IS satisfied here, so this exercises the principal re-bind enforce,
+;;     not the wrong-key path above. ---
+(begin-tx "F-01 principal rotate guard re-bind")
+(env-data
+  { "kp":  { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+  , "kp2": { "keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], "pred": "keys-all" } })
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-account "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" (read-keyset 'kp))
+(env-keys ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"])
+(expect-failure "principal cannot rotate to a mismatched guard" "unsafe for principal"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.rotate "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" (read-keyset 'kp2)))
+(expect "principal may re-bind to its own matching guard" "guard rotated"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.rotate "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" (read-keyset 'kp)))
+(commit-tx)
+
+;; --- TOK-R20: plain transfer (not -create) between existing accounts ---
+(begin-tx "TOK-R20 plain transfer alice->bob 500")
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "bob" 500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "alice" "bob" 500.0)
+(expect "alice 2500" 2500.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "alice"))
+(expect "bob 2500" 2500.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "bob"))
+(expect "TOK-R19b: circulating unchanged 5000 (holder->holder)" 5000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
+(commit-tx)
+
+;; --- TOK-R21: transfer negatives ---
+(begin-tx "TOK-R21 transfer negatives")
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "alice" 1.0)] }])
+(expect-failure "self-transfer rejected" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "alice" "alice" 1.0))
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "bob" 999999.0)] }])
+(expect-failure "over-balance rejected" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "alice" "bob" 999999.0))
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "bob" 0.0)] }])
+(expect-failure "non-positive rejected" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "alice" "bob" 0.0))
+(expect-failure "sub-precision rejected" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.enforce-unit 0.0000000000001))
+(commit-tx)
+
+;; --- TOK-R22: transfer without TRANSFER cap rejected ---
+(begin-tx "TOK-R22 transfer without cap")
+(env-sigs [])
+(expect-failure "managed cap not installed / unauthorized" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "alice" "bob" 10.0))
+(commit-tx)
+
+;; --- TOK-R10: tranche release gating ---
+(begin-tx "TOK-R10 tranche release gating")
+;; before any cliff (liquidity cliff is the earliest, at T+90d = 2026-08-30), nothing releasable
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-15T00:00:00Z") })
+(expect-failure "nothing releasable before cliff" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity"))
+;; an unknown tranche name is rejected (fixed 3-row key space)
+(expect-failure "unknown tranche rejected" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "bogus"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+(commit-tx)
+
+;; --- TOK-R13: fund-dividends guards (circulating is 5000 here) ---
+(begin-tx "TOK-R13 fund-dividends guards")
+(env-keys ["admin-key"])
+(expect-failure "non-positive pool rejected" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 0.0 0.01))
+(expect-failure "non-positive rps rejected" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 100.0 0.0))
+(env-keys ["intruder-key"])
+(expect-failure "non-admin rejected" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 100.0 0.01))
+(commit-tx)
+
+;; --- dividend round (circ 5000): alice 2500 -> 50, bob 2500 -> 50 ---
+(begin-tx "fund dividend round")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT 100.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" 100.0)
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 100.0 0.02)
+(expect "alice pending 50" 50.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "alice"))
+(expect "bob pending 50" 50.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "bob"))
+(commit-tx)
+
+;; --- TOK-R18: checkpoint-at-transfer — receiver cannot inherit sender's pending ---
+(begin-tx "TOK-R18 checkpoint no theft (bob -> fresh carol 1000)")
+(env-sigs [{ "key": "bob-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "bob" "carol" 1000.0)] }])
+(env-data { "carol": { "keys": ["carol-key"], "pred": "keys-all" } })
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "bob" "carol" (read-keyset 'carol) 1000.0)
+(expect "bob pending crystallized = 50 (kept by sender)" 50.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "bob"))
+(expect "carol pending 0 (received after the round; no theft)" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "carol"))
+(expect "TOK-R19c: circulating still 5000 (holder->holder)" 5000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
+(commit-tx)
+
+;; --- TOK-R15: double-claim rejected; TOK-R16: excluded claim rejected ---
+(begin-tx "TOK-R15/R16 claim negatives")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "alice")
+;; A-C fix: paid to alice's guard principal, not the raw vanity name (squat-proof).
+(expect "alice claimed 50 KDA at her guard principal" 50.0 (coin.get-balance (create-principal (read-keyset 'alice))))
+(expect-failure "TOK-R15 double-claim -> nothing to claim" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "alice"))
+(expect-failure "TOK-R16 excluded treasury -> nothing to claim" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT))
+(expect-failure "carol (received late) nothing to claim" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "carol"))
+(commit-tx)
+
+(print "smartpacts-shares-ext REPL suite PASSED")
