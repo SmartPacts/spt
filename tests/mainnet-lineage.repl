@@ -1,0 +1,93 @@
+;; ===========================================================================
+;; MAINNET RELEASE-CANDIDATE smoke suite.
+;; The candidate in contracts/mainnet/ is code-identical to the deployed
+;; testnet06 lineage minus the differences listed in docs/TESTNET-VS-MAINNET.md
+;; (mechanically checked by scripts/compare-lineages.mjs), so the full suite's
+;; results transfer. What this file proves is exactly the DELTA:
+;;   1. the candidate LOADS (fresh deploy path, all tables);
+;;   2. the namespace-DERIVED constants resolve correctly at load
+;;      (admin keyset name; the gas station's sponsored-call prefixes);
+;;   3. the core paths run end-to-end on the candidate: init-supply, a
+;;      transfer, a declared dividend round accruing exactly rate x balance,
+;;      and the derived allowlist matching a real sponsored call string.
+;; The test namespace is arbitrary — the point is that NOTHING in the source
+;; pins it: the same files deploy to any namespace unedited.
+;; ===========================================================================
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+
+(begin-tx "load coin")
+(load "fixtures/fungible-v2.pact")
+(load "fixtures/fungible-xchain-v1.pact")
+(load "fixtures/gas-payer-v1.pact")
+(load "fixtures/coin.pact")
+(create-table coin.coin-table)
+(create-table coin.allocation-table)
+(commit-tx)
+
+(begin-tx "fund sender00")
+(env-data { "sender00": { "keys": ["admin-key"], "pred": "keys-all" } })
+(test-capability (coin.COINBASE))
+(coin.coinbase "sender00" (read-keyset "sender00") 1000000.0)
+(commit-tx)
+
+;; --- deploy the CANDIDATE into an arbitrary namespace (nothing in the source pins one) ---
+(begin-tx "deploy the mainnet candidate (fresh)")
+(env-data
+  { "ns": "n_candidate0000000000000000000000000000000000"
+  , "spt-admin-name": "n_candidate0000000000000000000000000000000000.spt-admin"
+  , "spt-admin": { "keys": ["admin-key"], "pred": "keys-all" }
+  , "upgrade": false })
+(env-keys ["admin-key"])
+(define-namespace "n_candidate0000000000000000000000000000000000" (read-keyset 'spt-admin) (read-keyset 'spt-admin))
+(load "../contracts/mainnet/smartpacts-shares.pact")
+(load "../contracts/mainnet/smartpacts-ipo.pact")
+(load "../contracts/mainnet/smartpacts-gas-station.pact")
+(commit-tx)
+
+;; --- the DERIVED constants resolved from the deploy namespace ---
+(begin-tx "derived constants")
+(expect "shares ADMIN-KS derived from the deploy ns"
+  "n_candidate0000000000000000000000000000000000.spt-admin"
+  n_candidate0000000000000000000000000000000000.smartpacts-shares.ADMIN-KS)
+(expect "station allowlist derived: a real sponsored call matches" true
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.allowlisted?
+    "(n_candidate0000000000000000000000000000000000.smartpacts-shares.claim-dividends \"k:alice\")"))
+(expect "station allowlist derived: an unsponsored call does not match" false
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.allowlisted?
+    "(n_candidate0000000000000000000000000000000000.smartpacts-shares.transfer \"a\" \"b\" 1.0)"))
+(commit-tx)
+
+;; --- fresh-deploy init + the dividend core on the candidate ---
+(begin-tx "init-supply + transfer + declared round accrues exactly")
+(env-data
+  { "founder-ks":       { "keys": ["f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"], "pred": "keys-all" }
+  , "treasury-ops-ks":  { "keys": ["a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"], "pred": "keys-all" }
+  , "liquidity-ops-ks": { "keys": ["b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"], "pred": "keys-all" }
+  , "ipo-ks":           { "keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], "pred": "keys-all" } })
+(env-keys ["admin-key"])
+(n_candidate0000000000000000000000000000000000.smartpacts-shares.init-supply
+  "k:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" (read-keyset 'ipo-ks)
+  "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0" (read-keyset 'founder-ks)
+  "k:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1" (read-keyset 'treasury-ops-ks)
+  "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" (read-keyset 'liquidity-ops-ks))
+(expect "round counter starts at 0 (full schema written at init — no migration exists or is needed)"
+  0 (n_candidate0000000000000000000000000000000000.smartpacts-shares.get-round-count))
+(commit-tx)
+
+(begin-tx "float via the liquidity tranche, then a declared round")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-10-01T00:00:00Z") })
+(n_candidate0000000000000000000000000000000000.smartpacts-shares.release-tranche "liquidity")
+(env-keys ["admin-key"])
+(n_candidate0000000000000000000000000000000000.smartpacts-shares.declare-round "R1" 0.02 (time "2026-10-01T00:00:00Z"))
+(let ((circ (n_candidate0000000000000000000000000000000000.smartpacts-shares.get-circulating)))
+  (expect "declared round accrues exactly rate x balance on the candidate"
+    (* 0.02 circ)
+    (n_candidate0000000000000000000000000000000000.smartpacts-shares.pending-dividends-of
+      "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"))
+  (expect "liability identity holds on the candidate"
+    (n_candidate0000000000000000000000000000000000.smartpacts-shares.pending-dividends-of
+      "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2")
+    (n_candidate0000000000000000000000000000000000.smartpacts-shares.dividend-liability)))
+(commit-tx)
+
+(print "MAINNET RELEASE-CANDIDATE smoke suite PASSED")

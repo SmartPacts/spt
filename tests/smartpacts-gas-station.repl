@@ -321,7 +321,7 @@
   , "spt-admin-name": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.spt-admin"
   , "spt-admin": { "keys": ["admin-key"], "pred": "keys-all" } })
 (env-keys ["admin-key"])
-(load "../contracts/smartpacts-gas-station.pact")
+(load "../contracts/testnet06/smartpacts-gas-station.pact")
 ;; init did NOT re-run: the meter row still carries the pre-redeploy epoch spend
 (expect "meter row survived the redeploy"
   n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.MAX-TX-COST

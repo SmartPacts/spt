@@ -57,7 +57,7 @@ async function local(code, chainId) {
 
 let failures = 0;
 for (const m of MODULES) {
-  const localSrc = moduleForm(readFileSync(new URL(`../contracts/${m}.pact`, import.meta.url), 'utf8'));
+  const localSrc = moduleForm(readFileSync(new URL(`../contracts/testnet06/${m}.pact`, import.meta.url), 'utf8'));
   const results = await Promise.all(CHAINS.map(async (c) => {
     const d = await local(`(describe-module "${NS}.${m}")`, c);
     return { c, match: d.code === localSrc, hash: d.hash, rk: d.tx_hash };

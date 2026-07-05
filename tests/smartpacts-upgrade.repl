@@ -57,7 +57,7 @@
   , "spt-admin": { "keys": ["admin-key"], "pred": "keys-all" }
   , "upgrade": true })                                 ; UPGRADE path: only new tables
 (env-keys ["admin-key"])
-(load "../contracts/smartpacts-shares.pact")
+(load "../contracts/testnet06/smartpacts-shares.pact")
 ;; On the live network these two tables were created by the dividend-accrual upgrade's
 ;; deploy footer (the intermediate version); this release's footer creates nothing on
 ;; upgrade (they already exist on-chain). REPL stand-in for that intermediate step:

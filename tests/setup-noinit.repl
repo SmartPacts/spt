@@ -27,7 +27,7 @@
   , "sender00": { "keys": ["admin-key"], "pred": "keys-all" } })
 (env-keys ["admin-key"])
 (define-namespace "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641" (read-keyset 'spt-admin) (read-keyset 'spt-admin))
-(load "../contracts/smartpacts-shares.pact")     ; governance merged in
-(load "../contracts/smartpacts-ipo.pact")
+(load "../contracts/testnet06/smartpacts-shares.pact")     ; governance merged in
+(load "../contracts/testnet06/smartpacts-ipo.pact")
 (commit-tx)
 ;; NOTE: init-supply intentionally NOT called here.
