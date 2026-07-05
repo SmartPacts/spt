@@ -11,6 +11,8 @@ KDA/SPT**; nothing here is a real security, a real offer, or a real payment.
 - **Modules:** `…​.smartpacts-shares` (the share + governance + dividends), `…​.smartpacts-ipo`
   (the sale), `…​.smartpacts-gas-station` (pays your gas so voting/claiming is free).
 - **Portal (same journey in the browser):** https://smartpacts.io/event/
+- **Browser-first guide (recommended for most people):** https://smartpacts.io/event/guide/ —
+  this document is the CLI/tooling reference for the same journey.
 - **Deployment verification** (module hashes + deploy request keys):
   [VERIFICATION.md](VERIFICATION.md).
 
@@ -76,6 +78,24 @@ while the proposal is open; if you transfer shares away, exactly that many leave
 - *(tested end-to-end: a buyer with ~0.02 KDA voted, the station paid the 356 gas, the buyer's KDA was
   unchanged.)*
 
+## 4b. Optional: register a dedicated VOTING key (hot key that can only vote)
+
+You can register a second key that is valid **only for `cast-vote`** — keep your main key cold and
+vote with the hot one. A stolen voting key cannot transfer, cannot claim to another account, and
+cannot replace itself; your main key always keeps working and can override, replace, or clear it.
+
+```pact
+(NS.smartpacts-shares.set-vote-key "YOU" (read-keyset 'vk))   ; register/replace (vk = the hot keyset)
+(NS.smartpacts-shares.get-vote-key "YOU")                     ; read: {guard, active}
+(NS.smartpacts-shares.clear-vote-key "YOU")                   ; deactivate (main key only)
+```
+- `set-vote-key`/`clear-vote-key` are signed by your **MAIN** key — scope the signature to
+  `NS.smartpacts-shares.VOTE-KEY-ADMIN "YOU"` (a scoped signature, so a malicious dapp can't
+  sneak a registration onto an unrelated transaction). Self-paid gas; registration is per-chain.
+- To vote with the hot key afterwards: identical gasless setup as §4, but the **voting key** signs
+  the `VOTE` cap (the contract accepts the main guard OR the active voting key — main guard first,
+  so a registration can never lock you out).
+
 ## 5. Receive & claim dividends — also GASLESS
 
 Dividend rounds are **declared on-chain in advance**: a round is a rate per test-share plus an
@@ -127,6 +147,27 @@ outweighs NO.
 contract yet — that's the whole question). Smart Pacts will treat the result as **strong advisory
 input** to its mainnet decision; the vote is not binding and creates no obligation. Show up and your
 test-shares are counted.
+
+## 7. Test it yourself — try to break it
+
+The contracts make exact promises; every one is checkable with the reads above (the portal's
+"Test it yourself" section wraps these same experiments in buttons and a live readout):
+
+1. **Vote, then move across chains.** Vote on chain A, `transfer-crosschain` part of your holding
+   to chain B: `vote-weight` on A drops by exactly the moved amount (and A's `get-results` with
+   it); the arrivals are unvoted and can vote on B. The same test-share can never back two live
+   votes.
+2. **Vote, then transfer to another account.** Same-chain `transfer` releases exactly the sent
+   amount from your vote at the moment of the debit; the receiver's test-shares arrive unvoted.
+3. **Re-vote and partial release.** `cast-vote` again flips your full current weight in place,
+   once — check the tally moves by exactly your weight. Transfer 1 test-share away: your recorded
+   vote drops by exactly 1.
+4. **A voting key can only vote.** After §4b, sign a `transfer` with the voting key instead of the
+   main key — the module rejects it (the `TRANSFER`/`DEBIT` guard only accepts the account's main
+   guard). The same key signs a `cast-vote` fine.
+
+If any number disagrees with the promise, that's a finding — report it (see
+[SECURITY.md](../SECURITY.md)).
 
 ## Fair-play notes
 
