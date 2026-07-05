@@ -17,7 +17,7 @@ request keys) is in [DEPLOYMENTS.md](DEPLOYMENTS.md).
 | Namespace | `n_d97ffd2ca290429b5dc85ce551a8d07d038e9641` |
 | Modules | `smartpacts-shares` · `smartpacts-ipo` · `smartpacts-gas-station` |
 | On-chain hash — `smartpacts-shares` | `B_zwM2m9mGLteCrakCBPPGf7Gs_aI67GbGSTEpPaSCw` |
-| On-chain hash — `smartpacts-ipo` | `SoJNqSOzo92Ne3OCoKt3McTk28MRWm4UwUBGhR2SX5Q` |
+| On-chain hash — `smartpacts-ipo` | `vT4Z0Zwui8x5t_FbeRePsdcWLSG-gWFGsjoJWL3PPPA` |
 | On-chain hash — `smartpacts-gas-station` | `2RuamqPZHYxvvYzymfFZ90LcLfmYSqiTn47bPBpe6s4` |
 | API base | `https://api.testnet.chainweb-community.org` |
 | Pact endpoint pattern | `{base}/chainweb/0.0/testnet06/chain/{0-19}/pact/api/v1/local` |
