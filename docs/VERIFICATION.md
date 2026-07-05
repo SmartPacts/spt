@@ -9,6 +9,10 @@ and prints the deployment request keys. The rest of this page is the manual vers
 supply/time-lock/vote checks the script doesn't cover. Deployment and upgrade history (with
 request keys) is in [DEPLOYMENTS.md](DEPLOYMENTS.md).
 
+The **mainnet release candidate** ([`contracts/mainnet/`](../contracts/mainnet/)) is not deployed,
+so there is no chain to verify it against — `node compare-lineages.mjs` proves its exact
+relationship to the deployed lineage instead ([TESTNET-VS-MAINNET.md](TESTNET-VS-MAINNET.md)).
+
 ## Deployment facts
 
 | Fact | Value |
@@ -24,7 +28,7 @@ request keys) is in [DEPLOYMENTS.md](DEPLOYMENTS.md).
 | Explorer | `https://explorer.chainweb-community.org/testnet` |
 | Faucet (test KDA) | `https://tools.chainweb-community.org/faucet/new` |
 
-The sources in [`contracts/`](../contracts/) are the deployed modules verbatim — the network
+The sources in [`contracts/testnet06/`](../contracts/testnet06/) are the deployed modules verbatim — the network
 stores the module source, and you can read it back and compare byte for byte.
 
 ## 1. Verify the deployed code
@@ -40,7 +44,7 @@ module view:
 Three fields matter:
 
 - **`code`** — the module source **as stored on-chain**. It equals the `(module …)` form in the
-  corresponding file under [`contracts/`](../contracts/) **byte for byte** (the file additionally
+  corresponding file under [`contracts/testnet06/`](../contracts/testnet06/) **byte for byte** (the file additionally
   carries the deployment wrapper — the header comment, `(namespace …)`, the keyset definition,
   and the table-creation footer — which are part of the deploy transaction but not of the stored
   module body).
@@ -70,7 +74,7 @@ hash and the same stored source.
 ```
 
 Supply is fixed: the module exposes no mint function — inspect
-[`contracts/smartpacts-shares.pact`](../contracts/smartpacts-shares.pact) and confirm the only
+[`contracts/testnet06/smartpacts-shares.pact`](../contracts/testnet06/smartpacts-shares.pact) and confirm the only
 credits to reserves happen inside the one-time `init-supply`.
 
 **The reserve time-locks** (founder / treasury / liquidity) are on-chain rows — read them on

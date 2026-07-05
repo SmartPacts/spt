@@ -33,9 +33,9 @@
   , "sender00": { "keys": ["admin-key"], "pred": "keys-all" } })
 (env-keys ["admin-key"])
 (define-namespace "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641" (read-keyset 'spt-admin) (read-keyset 'spt-admin))
-(load "../contracts/smartpacts-shares.pact")     ; defines n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.spt-admin; includes governance
-(load "../contracts/smartpacts-ipo.pact")
-(load "../contracts/smartpacts-gas-station.pact") ; sponsors vote/claim gas; init = station coin acct
+(load "../contracts/testnet06/smartpacts-shares.pact")     ; defines n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.spt-admin; includes governance
+(load "../contracts/testnet06/smartpacts-ipo.pact")
+(load "../contracts/testnet06/smartpacts-gas-station.pact") ; sponsors vote/claim gas; init = station coin acct
 (commit-tx)
 
 ;; --- initial supply on chain 0; IPO reserve = smartpacts-ipo's capability-guarded account.

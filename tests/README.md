@@ -1,7 +1,7 @@
 # Test suites
 
 The full regression suite for the deployed contracts — the same suites the project runs before
-any change ships. Everything runs **offline** against the sources in [`contracts/`](../contracts/)
+any change ships. Everything runs **offline** against the sources in [`contracts/testnet06/`](../contracts/testnet06/)
 (the deployed modules, verbatim): no network, no keys, no accounts needed.
 
 ## Run them
@@ -35,6 +35,7 @@ Every suite prints `… PASSED` on success; `run-tests.sh` exits non-zero on any
 | `smartpacts-upgrade.repl` | The in-place upgrade path: pre-upgrade state survives, the un-migrated window fails closed, `migrate-adr015` heals and is idempotent, dead-chain funding refused |
 | `smartpacts-upgrade-float.repl` | Upgrade with real balances present: zeroed counters proven exact, first post-upgrade round accrues exactly rate × balance, pre-funding at zero liability allowed |
 | `smartpacts-upgrade-rps-guard.repl` | The migration's safety precondition: a chain that had funded a round under the old model is refused |
+| `mainnet-lineage.repl` | The mainnet release candidate's delta: fresh deploy into an arbitrary namespace, namespace-derived constants resolve, dividend core exact (see [TESTNET-VS-MAINNET.md](../docs/TESTNET-VS-MAINNET.md)) |
 
 The `attacks` suites are the threat model in executable form, and the `dividend-fairness` suite is the test-event finding in executable form: each documented attack is run
 and shown to fail.
@@ -43,7 +44,7 @@ and shown to fail.
 
 - `setup.repl` loads the coin contract and interface fixtures (in [`fixtures/`](fixtures/), from
   [kda-community/chainweb-node](https://github.com/kda-community/chainweb-node)), then the three
-  modules from `contracts/` — so what you test is exactly what is deployed.
+  modules from `contracts/testnet06/` — so what you test is exactly what is deployed. The mainnet release candidate has its own smoke suite (`mainnet-lineage.repl`) covering exactly its delta — see [TESTNET-VS-MAINNET.md](../docs/TESTNET-VS-MAINNET.md).
 - Cross-chain SPV transport (the second step of `transfer-crosschain` and
   `report-tally-xchain`) cannot be exercised in the REPL — SPV proofs need a real
   multi-chain network. Those paths are validated against a devnet before deployment; the REPL
