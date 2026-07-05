@@ -5,7 +5,7 @@
 ;; ===========================================================================
 (load "setup.repl")
 
-;; --- seed two participating holders via the IPO (the float-entry path) ---
+;; --- seed two participating holders via the IPO (float-entry path) ---
 (begin-tx "activate IPO for seeding")
 (env-keys ["admin-key"])
 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
@@ -83,7 +83,7 @@
 (expect-failure "managed cap not installed / unauthorized" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "alice" "bob" 10.0))
 (commit-tx)
 
-;; --- TOK-R10: tranche release gating ---
+;; --- TOK-R10: tranche release gating (replaces create-funder-allocation) ---
 (begin-tx "TOK-R10 tranche release gating")
 ;; before any cliff (liquidity cliff is the earliest, at T+90d = 2026-08-30), nothing releasable
 (env-chain-data { "chain-id": "0", "block-time": (time "2026-06-15T00:00:00Z") })
@@ -93,21 +93,25 @@
 (env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
 (commit-tx)
 
-;; --- TOK-R13: fund-dividends guards (circulating is 5000 here) ---
-(begin-tx "TOK-R13 fund-dividends guards")
+;; --- TOK-R13: declare-round + fund-dividends guards (circulating is 5000 here) ---
+(begin-tx "TOK-R13 dividend API guards")
 (env-keys ["admin-key"])
-(expect-failure "non-positive pool rejected" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 0.0 0.01))
-(expect-failure "non-positive rps rejected" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 100.0 0.0))
+;; declare-round guards
+(expect-failure "non-positive rate rejected" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "G0" 0.0 (time "2026-06-01T00:00:00Z")))
+;; fund-dividends guards (now single-arg cash-only)
+(expect-failure "non-positive pool rejected" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 0.0))
 (env-keys ["intruder-key"])
-(expect-failure "non-admin rejected" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 100.0 0.01))
+(expect-failure "non-admin declare-round rejected" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "G1" 0.01 (time "2026-06-01T00:00:00Z")))
+(expect-failure "non-admin fund-dividends rejected" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 100.0))
 (commit-tx)
 
 ;; --- dividend round (circ 5000): alice 2500 -> 50, bob 2500 -> 50 ---
-(begin-tx "fund dividend round")
+(begin-tx "declare + fund dividend round")
 (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT 100.0)] }])
 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" 100.0)
 (env-keys ["admin-key"])
-(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 100.0 0.02)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R1" 0.02 (time "2026-06-01T00:00:00Z"))
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 100.0)
 (expect "alice pending 50" 50.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "alice"))
 (expect "bob pending 50" 50.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "bob"))
 (commit-tx)

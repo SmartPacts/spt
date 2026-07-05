@@ -1,0 +1,111 @@
+;; ===========================================================================
+;; UPGRADE with PRE-EXISTING FLOAT (the realistic live case). The load-bearing
+;; assumption of the zeroed migrate-adr015 is: on the live chain, accounts already
+;; hold balances but every reward-debt = 0 (rps was always 0, no dividend funded),
+;; so sum-debt = Σ(balance*reward-debt) = 0 and sum-pending = 0 are EXACTLY correct.
+;; This suite seeds real float under the OLD module, upgrades, migrates (rps=0 so it
+;; succeeds), and proves: (a) balances survive, (b) dividend-liability == Σ pending
+;; == 0 right after migration WITH float present, (c) the first post-upgrade round
+;; accrues exactly rate*balance — i.e. the zeroed counters were right.
+;; ===========================================================================
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+
+(begin-tx "load coin")
+(load "fixtures/fungible-v2.pact")
+(load "fixtures/fungible-xchain-v1.pact")
+(load "fixtures/gas-payer-v1.pact")
+(load "fixtures/coin.pact")
+(create-table coin.coin-table)
+(create-table coin.allocation-table)
+(commit-tx)
+
+(begin-tx "fund sender00")
+(env-data { "sender00": { "keys": ["admin-key"], "pred": "keys-all" } })
+(test-capability (coin.COINBASE))
+(coin.coinbase "sender00" (read-keyset "sender00") 1000000.0)
+(commit-tx)
+
+(begin-tx "deploy PRE-module fresh + init-supply chain 0")
+(env-data
+  { "ns": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641"
+  , "spt-admin-name": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.spt-admin"
+  , "spt-admin": { "keys": ["admin-key"], "pred": "keys-all" }
+  , "upgrade": false })
+(env-keys ["admin-key"])
+(define-namespace "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641" (read-keyset 'spt-admin) (read-keyset 'spt-admin))
+(load "fixtures/pre-adr015-shares.pact")
+(commit-tx)
+
+(begin-tx "init-supply + release liquidity tranche -> real FLOAT with reward-debt 0")
+(env-data
+  { "founder-ks":       { "keys": ["f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"], "pred": "keys-all" }
+  , "treasury-ops-ks":  { "keys": ["a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"], "pred": "keys-all" }
+  , "liquidity-ops-ks": { "keys": ["b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"], "pred": "keys-all" }
+  , "ipo-ks": { "keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], "pred": "keys-all" }
+  , "sender00": { "keys": ["admin-key"], "pred": "keys-all" } })
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.init-supply
+  "k:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" (read-keyset 'ipo-ks)
+  "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0" (read-keyset 'founder-ks)
+  "k:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1" (read-keyset 'treasury-ops-ks)
+  "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" (read-keyset 'liquidity-ops-ks))
+(commit-tx)
+
+(begin-tx "release liquidity tranche -> float holder with reward-debt 0")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-10-01T00:00:00Z") })  ; > 90d cliff
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity")
+(let ((float (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating)))
+  (expect "float present pre-upgrade (partial liquidity vest 750)" 750.0 float)
+  (expect "OLD rps still 0 (no dividend funded)" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps)))
+(commit-tx)
+
+;; --- UPGRADE + migrate (rps=0 so it succeeds despite the float) ---
+(begin-tx "UPGRADE to + migrate a chain WITH float")
+(env-data
+  { "ns": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641"
+  , "spt-admin-name": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.spt-admin"
+  , "spt-admin": { "keys": ["admin-key"], "pred": "keys-all" }
+  , "upgrade": true })
+(env-keys ["admin-key"])
+(load "../contracts/smartpacts-shares.pact")
+;; On the live network these two tables were created by the dividend-accrual upgrade's
+;; deploy footer (the intermediate version); this release's footer creates nothing on
+;; upgrade (they already exist on-chain). REPL stand-in for that intermediate step:
+(create-table n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-rounds)
+(create-table n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.round-count)
+(expect "migrate succeeds (rps=0 even with float)" "migrated" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.migrate-adr015))
+;; THE LOAD-BEARING ASSERTION: with real float present (reward-debt=0 on every account),
+;; sum-debt/sum-pending zeroed by migration are EXACTLY correct -> liability == Σ pending
+;; == 0, and circulating survived the upgrade.
+(expect "circulating survived the upgrade (750)" 750.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
+(expect "dividend-liability == 0 with float present (sum-debt=0 correct)" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+(expect "float holder pending == 0 post-migration" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"))
+(commit-tx)
+
+;; --- Amendment 4 PRE-FUNDING regression: the traditional declare-then-rebalance
+;;     pattern funds chains BEFORE a round's effective-at, i.e. while liability is
+;;     still 0. The fundability guard (circ > 0 OR floor12(L) > 0) must accept a
+;;     live-float chain with zero liability — a guard on floor12(L) alone would
+;;     brick pre-funding and force claims to wait for post-effective cash moves. ---
+(begin-tx "pre-funding with L=0 and live float is LEGAL (declare-then-rebalance)")
+(env-keys ["admin-key"])
+(expect "liability still 0 (no round effective)" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT 1.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" 1.0)
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 1.0)
+(expect "pool pre-funded ahead of the round" 1.0 (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT))
+(commit-tx)
+
+;; --- first post-upgrade round accrues EXACTLY rate*balance (proves counters were right) ---
+(begin-tx "post-upgrade round: float accrues exactly rate*balance")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R1" 0.02 (time "2026-10-01T00:00:00Z"))
+(expect "global rps 0.02" 0.02 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps))
+(expect "float holder now owed 750*0.02 = 15 (exact — no phantom/lost accrual)"
+  15.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"))
+(expect "dividend-liability == 15 == Σ pending (invariant exact post-upgrade)"
+  15.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+(commit-tx)
+
+(print "smartpacts-shares UPGRADE-WITH-FLOAT suite PASSED")

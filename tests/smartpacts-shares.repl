@@ -41,7 +41,7 @@
 
 ;; ---------------------------------------------------------------------------
 ;; Seed the float via the IPO (alice 3000, bob 2000) — the legitimate float-entry
-;; path. sender00 pre-funds each buyer's
+;; path (removed create-funder-allocation). sender00 pre-funds each buyer's
 ;; KDA; the buyer signs its own coin.TRANSFER into the IPO income account.
 ;; ---------------------------------------------------------------------------
 (begin-tx "activate IPO for seeding")
@@ -76,24 +76,32 @@
 (expect "revenue account holds 100 KDA" 100.0 (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT))
 (commit-tx)
 
-(begin-tx "fund-dividends underfunded rejected (audit #2)")
+;; a dividend round is DECLARED (rate + effective-at, global) then FUNDED per chain.
+(begin-tx "declare dividend round 1 (rate 0.02, effective now)")
 (env-keys ["admin-key"])
-;; circulating 5000; rps-inc 0.02 needs pool >= 100, but pool-amount 50 -> reject
-(expect-failure "pool underfunded" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 50.0 0.02))
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R1" 0.02 (time "2026-06-01T00:00:00Z"))
+(expect "global rps now 0.02 (round effective)" 0.02 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps))
 (commit-tx)
 
-(begin-tx "fund-dividends round 1 (100 KDA, rps += 0.02)")
+(begin-tx "fund-dividends underfunded rejected (audit #2)")
 (env-keys ["admin-key"])
-(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 100.0 0.02)
+;; circulating 5000; global rps 0.02 needs pool >= 100, but pool-amount 50 -> reject
+(expect-failure "pool underfunded" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 50.0))
+(commit-tx)
+
+(begin-tx "fund-dividends round 1 (100 KDA solvency)")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 100.0)
 (expect "alice pending 60" 60.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "alice"))
 (expect "bob pending 40"   40.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "bob"))
 (expect "treasury accrues 0 (excluded)" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT))
 (expect "ipo reserve accrues 0 (excluded)" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT))
 (commit-tx)
 
-(begin-tx "non-admin fund-dividends rejected")
+(begin-tx "non-admin fund-dividends + declare-round rejected")
 (env-keys ["intruder-key"])
-(expect-failure "Keyset failure" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 100.0 0.02))
+(expect-failure "Keyset failure" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 100.0))
+(expect-failure "Keyset failure" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "X" 0.01 (time "2026-06-01T00:00:00Z")))
 (commit-tx)
 
 (begin-tx "permissionless claim alice -> real KDA (paid to her guard principal)")
@@ -117,10 +125,14 @@
 (commit-tx)
 
 (begin-tx "round 2 -> carol earns only round 2")
-(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT 100.0)] }])
-(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" 100.0)
+;; pool holds 40 (100 funded - 60 claimed by alice); round 2 (rps 0.02->0.04) needs pool >= 5000*0.04=200.
+;; So deposit 160 to reach 200; fund the revenue account that much first.
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT 160.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" 160.0)
 (env-keys ["admin-key"])
-(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 100.0 0.02)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R2" 0.02 (time "2026-06-01T00:00:00Z"))
+(expect "global rps now 0.04 (two rounds)" 0.04 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps))
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 160.0)
 (expect "carol earns 1000*0.02 = 20 (round 2 only)" 20.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "carol"))
 (commit-tx)
 

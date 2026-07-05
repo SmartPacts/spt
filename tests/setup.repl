@@ -33,7 +33,7 @@
   , "sender00": { "keys": ["admin-key"], "pred": "keys-all" } })
 (env-keys ["admin-key"])
 (define-namespace "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641" (read-keyset 'spt-admin) (read-keyset 'spt-admin))
-(load "../contracts/smartpacts-shares.pact")   ; defines n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.spt-admin; includes live-vote governance
+(load "../contracts/smartpacts-shares.pact")     ; defines n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.spt-admin; includes governance
 (load "../contracts/smartpacts-ipo.pact")
 (load "../contracts/smartpacts-gas-station.pact") ; sponsors vote/claim gas; init = station coin acct
 (commit-tx)
@@ -59,4 +59,5 @@
 
 ;; NOTE: the IPO is intentionally NOT initialized here — the IPO test suites
 ;; (smartpacts-ipo{,-ext}) exercise init/pause from scratch. Suites that seed float
-;; holders via the IPO (the float-entry path) init+resume it themselves in their own seed tx.
+;; holders via the IPO (float-entry path, since create-funder-allocation was
+;; removed) init+resume it themselves in their own seed tx.

@@ -27,12 +27,12 @@
   (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.allowlisted? "(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends \"k:alice\")"))
 (expect "cast-vote sponsored" true
   (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.allowlisted? "(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote \"k:alice\" \"P1\" true)"))
-(expect "cast-vote-xchain NOT sponsored (no such function — voting is chain-local)" false
+(expect "cast-vote-xchain NOT sponsored (function DELETED with chain-local voting)" false
   (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.allowlisted? "(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote-xchain \"k:alice\" \"P1\" true)"))
 
 ;; --- admin / out-of-scope functions are NOT sponsored ---
 (expect "fund-dividends NOT sponsored" false
-  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.allowlisted? "(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 10.0 0.001)"))
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.allowlisted? "(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 10.0)"))
 (expect "withdraw-revenue NOT sponsored" false
   (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.allowlisted? "(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.withdraw-revenue \"k:adm\" 5.0)"))
 (expect "create-proposal NOT sponsored" false
@@ -85,7 +85,7 @@
   (require-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.ALLOW_GAS)))
 (commit-tx)
 
-(begin-tx "GAS_PAYER: cast-vote-xchain exec is REJECTED (voting is chain-local)")
+(begin-tx "GAS_PAYER: deleted cast-vote-xchain exec is REJECTED (regression)")
 (env-chain-data { "gas-price": 0.000001, "gas-limit": 1500 })
 (env-data { "tx-type": "exec"
           , "exec-code": ["(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote-xchain \"k:carol\" \"P1\" false)"] })
@@ -95,7 +95,7 @@
 
 ;; ===========================================================================
 ;; GROUP 3 — cross-chain continuation (cont): funded with NO exec-code,
-;;   bounded only by the gas ceilings.
+;;   bounded only by the gas ceilings (policy §5).
 ;; ===========================================================================
 (begin-tx "GAS_PAYER: cont accepted within ceilings (no exec-code)")
 (env-chain-data { "gas-price": 0.000001, "gas-limit": 1500 })
@@ -129,7 +129,7 @@
 (begin-tx "non-allowlisted exec rejected")
 (env-chain-data { "gas-price": 0.000001, "gas-limit": 1500 })
 (env-data { "tx-type": "exec"
-          , "exec-code": ["(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 10.0 0.001)"] })
+          , "exec-code": ["(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 10.0)"] })
 (expect-failure "admin fund-dividends not sponsored" "Not a sponsored call"
   (test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:adm" 1500 0.000001)))
 (commit-tx)
@@ -137,7 +137,7 @@
 ;; AUDIT residual #2 (documented, ACCEPTED — rate-limiter is YAGNI for v1): there is
 ;; NO aggregate cap, so repeated validly-shaped sponsored txs each acquire GAS_PAYER.
 ;; This PINS that the station funds claim N+1 the same as claim N (whole-balance grief
-;; is mitigated operationally, not in code).
+;; is mitigated operationally operationally, not in code).
 (begin-tx "no aggregate rate limit: a 2nd permissionless claim is also funded — residual #2")
 (env-chain-data { "gas-price": 0.000001, "gas-limit": 1500 })
 (env-data { "tx-type": "exec"
@@ -234,7 +234,7 @@
 (commit-tx)
 
 ;; ===========================================================================
-;; GROUP 7 — AGGREGATE SPONSORSHIP BOUND (the per-epoch cap)
+;; GROUP 7 — F-03/F-04 AGGREGATE BOUND (aggregate spend bound)
 ;; The per-epoch cap makes the whole-balance grief-drain (F-04) and the arbitrary-
 ;; defpact cont drain (F-03) BOUNDED on-chain: at most EPOCH-CAP KDA per epoch, reset
 ;; on block-time (no attacker can pay to reset). Pre-fix these drains were unbounded.
@@ -246,7 +246,7 @@
 
 ;; FINDING-2 REGRESSION: charge-epoch is NOT externally callable (require METER,
 ;; composed only by GAS_PAYER). A stranger can no longer exhaust the cap for free.
-(begin-tx "F-BOUND: direct charge-epoch is blocked")
+(begin-tx "F-BOUND: direct charge-epoch is blocked (review Finding 2 fix)")
 (env-keys ["attacker-key"])
 (env-chain-data { "chain-id": "0", "block-time": (time "2026-07-01T00:00:00Z") })
 (let ((before (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.get-epoch-spent)))
@@ -305,6 +305,27 @@
   n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.MAX-TX-COST (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.get-epoch-spent))
 (expect "ALLOW_GAS composed again after the epoch reset" true
   (require-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.ALLOW_GAS)))
+(commit-tx)
+
+;; ===========================================================================
+;; GROUP 6 — 5th-pass MED-2 regression: an IN-PLACE upgrade redeploy must not abort.
+;; (create-table meter) used to sit OUTSIDE the upgrade guard, so every documented
+;; redeploy path (EPOCH-CAP tuning, allowlist change, the FROZEN-MODULE freeze
+;; itself) aborted with "table already exists". The footer now creates/inits only
+;; on a fresh deploy.
+;; ===========================================================================
+(begin-tx "upgrade redeploy (upgrade:true) loads clean; meter row survives")
+(env-data
+  { "ns": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641"
+  , "upgrade": true
+  , "spt-admin-name": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.spt-admin"
+  , "spt-admin": { "keys": ["admin-key"], "pred": "keys-all" } })
+(env-keys ["admin-key"])
+(load "../contracts/smartpacts-gas-station.pact")
+;; init did NOT re-run: the meter row still carries the pre-redeploy epoch spend
+(expect "meter row survived the redeploy"
+  n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.MAX-TX-COST
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.get-epoch-spent))
 (commit-tx)
 
 (print "smartpacts-gas-station suite: PASSED")

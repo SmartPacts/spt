@@ -36,7 +36,7 @@
   (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.set-vote-key "alice" (read-keyset 'hot)))
 (commit-tx)
 
-(begin-tx "main key registers the vote key — with a SCOPED signature")
+(begin-tx "main key registers the vote key — with a SCOPED signature (review F1)")
 (env-data { "hot": { "keys": ["alice-hot"], "pred": "keys-all" } })
 (env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.VOTE-KEY-ADMIN "alice")] }])
 (expect "registered via scoped sig" "vote key set"
@@ -118,7 +118,7 @@
 (expect "yes = 3000 via NEW hot key" 3000.0 (at 'yes (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "VK")))
 (commit-tx)
 
-;; --- rotating the MAIN guard revokes an active vote key ---
+;; --- review F2 fix: rotating the MAIN guard revokes an active vote key ---
 (begin-tx "rotate revokes the vote key (compromise-recovery hygiene)")
 (env-data { "v1": { "keys": ["vicky-1"], "pred": "keys-all" }
           , "v2": { "keys": ["vicky-2"], "pred": "keys-all" }
@@ -131,7 +131,7 @@
 (expect "rotation revoked the vote key" false (at 'active (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-vote-key "vicky")))
 (commit-tx)
 
-;; --- keyset-REF guard as the vote key (DB lookup at enforcement) ---
+;; --- review F3: keyset-REF guard as the vote key (DB lookup at enforcement) ---
 (begin-tx "keyset-ref-guard vote key (REPL leg; node leg in f9-devnet)")
 (env-data { "refks": { "keys": ["alice-ref"], "pred": "keys-all" } })
 (env-keys ["admin-key"])
@@ -144,4 +144,4 @@
 (expect "keyset-ref vote key voted (no = 3000)" 3000.0 (at 'no (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "VK")))
 (commit-tx)
 
-(print "smartpacts-votekey VOTING-KEY suite PASSED")
+(print "smartpacts-votekey suite PASSED")

@@ -1,0 +1,124 @@
+;; ===========================================================================
+;; smartpacts-shares UPGRADE / MIGRATION suite.
+;; Proves the in-place pre-declared-rounds -> declared-rounds upgrade path that the live testnet
+;; event would take: an already-initialized chain running the PRE-schema
+;; (no rounds-applied/sum-pending/sum-debt fields, no dividend-rounds/round-count
+;; tables) is upgraded to the module and healed by migrate-adr015.
+;;
+;; The 4th-pass review found that WITHOUT this: (a) unconditional create-table
+;; aborts the upgrade load, and (b) even guarded, get-rps/dividend-liability read
+;; absent fields and BRICK every transfer/claim (get-rps is inside debit/credit).
+;; Fix: upgrade-guarded footer creates ONLY the two new tables; migrate-adr015
+;; backfills the singleton + three state fields (enforcing old rps=0).
+;; ===========================================================================
+(env-chain-data { "chain-id": "1", "block-time": (time "2026-06-01T00:00:00Z") })
+
+(begin-tx "load coin")
+(load "fixtures/fungible-v2.pact")
+(load "fixtures/fungible-xchain-v1.pact")
+(load "fixtures/gas-payer-v1.pact")
+(load "fixtures/coin.pact")
+(create-table coin.coin-table)
+(create-table coin.allocation-table)
+(commit-tx)
+
+(begin-tx "fund sender00")
+(env-data { "sender00": { "keys": ["admin-key"], "pred": "keys-all" } })
+(test-capability (coin.COINBASE))
+(coin.coinbase "sender00" (read-keyset "sender00") 1000000.0)
+(commit-tx)
+
+;; --- 1) deploy the PRE-(v2-schema) module fresh, and init a chain ---
+(begin-tx "deploy PRE-module (fresh)")
+(env-data
+  { "ns": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641"
+  , "spt-admin-name": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.spt-admin"
+  , "spt-admin": { "keys": ["admin-key"], "pred": "keys-all" }
+  , "upgrade": false })
+(env-keys ["admin-key"])
+(define-namespace "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641" (read-keyset 'spt-admin) (read-keyset 'spt-admin))
+(load "fixtures/pre-adr015-shares.pact")
+(commit-tx)
+
+(begin-tx "init the chain under the OLD schema (chain 1, non-hub -> init)")
+(env-keys ["admin-key"])
+;; init needs an ipo-reserve-account principal; any valid principal string works here.
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.init "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+(expect "OLD get-rps works (0.0, no dividends)" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps))
+(expect "OLD circulating 0" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
+(commit-tx)
+
+;; --- 2) UPGRADE in place to the module (upgrade:true skips existing tables,
+;;        creates ONLY dividend-rounds + round-count) ---
+(begin-tx "UPGRADE to module (upgrade:true)")
+(env-data
+  { "ns": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641"
+  , "spt-admin-name": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.spt-admin"
+  , "spt-admin": { "keys": ["admin-key"], "pred": "keys-all" }
+  , "upgrade": true })                                 ; UPGRADE path: only new tables
+(env-keys ["admin-key"])
+(load "../contracts/smartpacts-shares.pact")
+;; On the live network these two tables were created by the dividend-accrual upgrade's
+;; deploy footer (the intermediate version); this release's footer creates nothing on
+;; upgrade (they already exist on-chain). REPL stand-in for that intermediate step:
+(create-table n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-rounds)
+(create-table n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.round-count)
+(commit-tx)
+
+;; --- 3) BEFORE migration: the chain is BRICKED (reads of absent fields fail) ---
+(begin-tx "pre-migration: get-rps / dividend-liability BRICK on the un-migrated chain")
+(expect-failure "get-rps bricks (rounds-applied field absent + round-count singleton missing)"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps))
+(expect-failure "dividend-liability bricks (sum-pending/sum-debt fields absent)"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+(commit-tx)
+
+;; --- 4) run migrate-adr015 -> everything heals ---
+(begin-tx "migrate-adr015 heals the chain")
+(env-keys ["admin-key"])
+(expect "migration runs" "migrated" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.migrate-adr015))
+(expect "get-rps now works -> 0.0" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps))
+(expect "dividend-liability now works -> 0.0" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+(expect "round-count singleton present -> 0" 0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-round-count))
+(commit-tx)
+
+;; --- 5) migration is IDEMPOTENT (second call is a no-op) ---
+(begin-tx "migrate-adr015 idempotent")
+(env-keys ["admin-key"])
+(expect "second migration is a no-op" "already migrated" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.migrate-adr015))
+(commit-tx)
+
+;; --- 6) the upgraded+migrated chain is FULLY FUNCTIONAL: declare a round, and a
+;;        transfer (which calls get-rps in debit/credit) works ---
+(begin-tx "post-migration: dividends + transfers work")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R1" 0.02 (time "2026-06-01T00:00:00Z"))
+(expect "declare-round works; global rps now 0.02" 0.02 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps))
+;; create two accounts and move value -> exercises debit+credit (get-rps + counters)
+(env-data { "usr1": { "keys": ["u1-key"], "pred": "keys-all" }, "usr2": { "keys": ["u2-key"], "pred": "keys-all" } })
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-account "usr1" (read-keyset 'usr1))
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-account "usr2" (read-keyset 'usr2))
+(expect "dividend-liability stays exact (0, no float yet)" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+(commit-tx)
+
+;; --- 7) Amendment 4 DEAD-CHAIN rejection: circ = 0 AND liability exactly 0 -> the
+;;        fundability guard refuses to park cash in the no-exit pool for no one.
+;;        (The circ=0-with-stranded-pending POSITIVE case is DF-11 in the fairness
+;;        suite; the aggregate-dust edge keeps that suite's L above 0, so the true
+;;        dead-chain state lives here: migrated chain, round effective, zero float.)
+(begin-tx "dead chain (circ=0, L=0) refused by fund-dividends")
+(expect "circ is 0" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
+(expect "liability is exactly 0" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT 1.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" 1.0)
+(env-keys ["admin-key"])
+(expect-failure "funding a dead chain rejected" "nothing fundable"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 1.0))
+(commit-tx)
+
+;; NOTE: the non-zero-rps safety guard (migrate-adr015 rejects a chain that funded a
+;; dividend under the OLD model, so its rps != 0 and zeroed counters would be wrong) is
+;; proven in the sibling suite smartpacts-upgrade-rps-guard.repl (needs a fresh init-state
+;; DB, so it lives in its own file rather than sharing this session's chain-1 init).
+
+(print "smartpacts-shares UPGRADE/MIGRATION suite PASSED")

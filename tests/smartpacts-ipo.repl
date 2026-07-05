@@ -76,4 +76,19 @@
 (expect "sales income drained to 0" 0.0 (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT))
 (commit-tx)
 
+;; --- 5th-pass MED-2 regression: an IN-PLACE upgrade redeploy must not abort ---
+;; The footer had NO upgrade guard, so any redeploy (e.g. the FROZEN-MODULE freeze)
+;; aborted on "table config already exists". Config/init-state must survive.
+(begin-tx "upgrade redeploy (upgrade:true) loads clean; config survives")
+(env-data
+  { "ns": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641"
+  , "upgrade": true
+  , "spt-admin-name": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.spt-admin"
+  , "spt-admin": { "keys": ["admin-key"], "pred": "keys-all" } })
+(env-keys ["admin-key"])
+(load "../contracts/smartpacts-ipo.pact")
+;; init did NOT re-run and the pre-redeploy price config survived
+(expect "price config survived the redeploy" 1.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.get-price))
+(commit-tx)
+
 (print "smartpacts-ipo REPL suite PASSED")

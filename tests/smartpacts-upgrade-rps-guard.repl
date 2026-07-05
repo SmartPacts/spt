@@ -1,0 +1,85 @@
+;; ===========================================================================
+;; migrate-adr015 SAFETY GUARD: rejects a chain whose PRE-reward-per-share
+;; is non-zero (a dividend was funded under the OLD per-chain model). Zeroing the new
+;; sum-pending/sum-debt counters there would be WRONG — the old rps has different
+;; (per-chain) semantics and there is real un-crystallized pending. The migration
+;; enforces old-rps = 0 before backfilling. Own file (fresh init-state DB).
+;; ===========================================================================
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+
+(begin-tx "load coin")
+(load "fixtures/fungible-v2.pact")
+(load "fixtures/fungible-xchain-v1.pact")
+(load "fixtures/gas-payer-v1.pact")
+(load "fixtures/coin.pact")
+(create-table coin.coin-table)
+(create-table coin.allocation-table)
+(commit-tx)
+
+(begin-tx "fund sender00")
+(env-data { "sender00": { "keys": ["admin-key"], "pred": "keys-all" } })
+(test-capability (coin.COINBASE))
+(coin.coinbase "sender00" (read-keyset "sender00") 1000000.0)
+(commit-tx)
+
+(begin-tx "deploy PRE-module fresh")
+(env-data
+  { "ns": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641"
+  , "spt-admin-name": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.spt-admin"
+  , "spt-admin": { "keys": ["admin-key"], "pred": "keys-all" }
+  , "upgrade": false })
+(env-keys ["admin-key"])
+(define-namespace "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641" (read-keyset 'spt-admin) (read-keyset 'spt-admin))
+(load "fixtures/pre-adr015-shares.pact")
+(commit-tx)
+
+(begin-tx "chain 0: init-supply + seed float + fund a dividend under the OLD model (rps != 0)")
+(env-data
+  { "founder-ks":       { "keys": ["f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"], "pred": "keys-all" }
+  , "treasury-ops-ks":  { "keys": ["a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"], "pred": "keys-all" }
+  , "liquidity-ops-ks": { "keys": ["b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"], "pred": "keys-all" }
+  , "ipo-ks": { "keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], "pred": "keys-all" }
+  , "holder": { "keys": ["holder-key"], "pred": "keys-all" }
+  , "sender00": { "keys": ["admin-key"], "pred": "keys-all" } })
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.init-supply
+  "k:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" (read-keyset 'ipo-ks)
+  "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0" (read-keyset 'founder-ks)
+  "k:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1" (read-keyset 'treasury-ops-ks)
+  "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" (read-keyset 'liquidity-ops-ks))
+(commit-tx)
+
+;; advance past the 90-day liquidity cliff and release the tranche -> the beneficiary
+;; (k:b2b2…) becomes a NON-excluded float holder, so circulating > 0 and we can fund.
+(begin-tx "release liquidity tranche to seed float")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-10-01T00:00:00Z") })  ; > 90d after 2026-06-01
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity")
+(expect "circulating now > 0 (liquidity float released)" true (> (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating) 0.0))
+;; fund a dividend under the OLD model -> reward-per-share becomes non-zero
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT 20.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" 20.0)
+(env-keys ["admin-key"])
+;; circ = 15000 (liquidity tranche); rps-increment 0.001 needs pool >= 15 -> 20 covers it
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 20.0 0.001)
+(expect "OLD rps is now non-zero" 0.001 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps))
+(commit-tx)
+
+(begin-tx "upgrade to the declared-rounds version, then migrate MUST REJECT (non-zero old rps)")
+(env-data
+  { "ns": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641"
+  , "spt-admin-name": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.spt-admin"
+  , "spt-admin": { "keys": ["admin-key"], "pred": "keys-all" }
+  , "upgrade": true })
+(env-keys ["admin-key"])
+(load "../contracts/smartpacts-shares.pact")
+;; On the live network these two tables were created by the dividend-accrual upgrade's
+;; deploy footer (the intermediate version); this release's footer creates nothing on
+;; upgrade (they already exist on-chain). REPL stand-in for that intermediate step:
+(create-table n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-rounds)
+(create-table n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.round-count)
+(expect-failure "migrate REJECTS a chain with a funded pre-dividend (non-zero rps)"
+  "reward-per-share is non-zero"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.migrate-adr015))
+(commit-tx)
+
+(print "smartpacts-shares UPGRADE RPS-GUARD suite PASSED")

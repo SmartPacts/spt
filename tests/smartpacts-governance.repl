@@ -1,5 +1,5 @@
 ;; ===========================================================================
-;; smartpacts-governance REPL suite — LIVE-VOTE governance, merged into
+;; smartpacts-governance REPL suite — LIVE-VOTE governance, now merged into
 ;; smartpacts-shares. Vote weight = current shares; transfers release voted shares from the
 ;; tally; re-vote updates in place; dust cannot suppress. Proposals + tally hub-only.
 ;; (Cross-chain cast-vote-xchain needs SPV -> validated on DEVNET, not here.)
@@ -29,7 +29,7 @@
 (env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
 (commit-tx)
 
-;; --- proposal duration bounds + explicit created-at (chain-local: the SAME payload is
+;; --- proposal duration bounds + explicit created-at (the SAME payload is
 ;; replicated to every chain, so close-at is one shared timestamp) ---
 (begin-tx "GOV: duration bounds + created-at validation")
 (env-keys ["admin-key"])
@@ -196,7 +196,7 @@
 (expect-failure "re-cancel non-active rejected" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cancel-proposal "PC"))
 (commit-tx)
 
-;; --- tally is FROZEN at close-at — a transfer PAST the voting deadline
+;; --- F#1 (review): tally is FROZEN at close-at — a transfer PAST the voting deadline
 ;; does NOT release votes / move the tally, so get-results is final even before the admin
 ;; closes the proposal. Uses a fresh holder `frank` seeded here. ---
 (begin-tx "F1 seed frank 300 + create PF; frank votes 300")
@@ -226,7 +226,7 @@
 (env-sigs [{ "key": "frank-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "frank" "sink" 300.0)] }])
 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "frank" "sink" (read-keyset 'sink) 300.0)
 (let ((r (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "PF")))
-  (expect "tally frozen at close-at — post-deadline transfer did NOT release the vote"
+  (expect "F#1 FIX: tally frozen at close-at — post-deadline transfer did NOT release the vote"
     300.0 (at 'yes r)))
 (commit-tx)
 
@@ -270,7 +270,7 @@
 (expect "chain-0 scope untouched for PL" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.vote-weight "dave" "0" "PL"))
 (commit-tx)
 
-(begin-tx "CL: dave's transfer on chain 5 releases his chain-5 vote ")
+(begin-tx "CL: dave's transfer on chain 5 releases his chain-5 vote (F#2 core mechanics)")
 (env-chain-data { "chain-id": "5", "block-time": (time "2026-06-04T00:00:00Z") })
 (env-sigs [{ "key": "dave-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "dave" "sink" 500.0)] }])
 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "dave" "sink" 500.0)
@@ -292,7 +292,7 @@
 ;; ===========================================================================
 ;; AGGREGATION — post-close, the hub's own frozen tally is recorded into
 ;; the canonical aggregate, permissionlessly. (Report-path attack boundaries are in
-;; smartpacts-attacks-voting V8/V9; the 19 xchain reports are SPV — devnet-only.)
+;; spt-attacks-vote-griefing V8/V9; the 19 xchain reports are SPV — devnet-only.)
 ;; ===========================================================================
 (begin-tx "AGG: permissionless hub report copies P1's frozen tally exactly")
 (env-chain-data { "chain-id": "0", "block-time": (time "2026-06-07T00:00:00Z") })

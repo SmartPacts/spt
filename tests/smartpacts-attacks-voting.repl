@@ -1,5 +1,5 @@
 ;; ===========================================================================
-;; smartpacts-attacks-voting — RED-TEAM for the LIVE-VOTE governance, under the
+;; smartpacts-attacks-vote-griefing — RED-TEAM for the LIVE-VOTE governance, under the
 ;; lens: "for every state field that gates a right/payout, who else can write it,
 ;; and to whose detriment?" Targets the tally + account-votes. Each block asserts
 ;; the SECURE outcome. (Cross-chain tally is validated on DEVNET, not here.)
@@ -128,7 +128,9 @@
 (env-keys ["admin-key"])
 (let ((circ (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating)))
   (expect "V6: circulating still 5000 through all the transfers" 5000.0 circ)
-  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 50.0 (/ 50.0 circ)))
+  ;; rate = 50/5000 = 0.01; pool of 50 exactly covers circ*rate
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R1" (/ 50.0 circ) (time "2026-06-01T00:00:00Z"))
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 50.0))
 (let ((pend (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "carol")))
   (expect "V6: carol accrues dividends on her CURRENT balance (indep. of votes)" true (> pend 0.0)))
 (commit-tx)
@@ -204,4 +206,4 @@
   (at 'chains-reported (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-final-results "P")))
 (commit-tx)
 
-(print "smartpacts-attacks-voting LIVE-VOTE RED-TEAM suite PASSED")
+(print "smartpacts-attacks-vote-griefing LIVE-VOTE RED-TEAM suite PASSED")

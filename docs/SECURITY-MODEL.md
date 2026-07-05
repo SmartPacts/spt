@@ -50,7 +50,7 @@ shown to fail:
 
 ## Operator powers and limits
 
-Without an upgrade, the operator **can**: create/close/cancel proposals; fund dividend rounds;
+Without an upgrade, the operator **can**: create/close/cancel proposals; declare dividend rounds (immutable once declared) and fund them;
 route revenue (publicly, with events); set the sale price; pause/resume the sale; top up the gas
 station. The operator **cannot**: mint; move any reserve outside the release calendar; vote
 reserves; alter a tally or declare an outcome; change a time-lock's schedule or beneficiary;

@@ -11,7 +11,7 @@ prebuilt releases available).
 
 ```bash
 cd tests
-./run-tests.sh          # all 11 suites
+./run-tests.sh          # all 15 suites
 pact smartpacts-governance.repl   # or any single suite
 ```
 
@@ -31,8 +31,12 @@ Every suite prints `… PASSED` on success; `run-tests.sh` exits non-zero on any
 | `smartpacts-gas-station.repl` | Sponsorship policy (adversarial): allowlist boundaries, single-call rule, gas ceilings, per-epoch cap, fail-closed behavior |
 | `smartpacts-attacks.repl` | Red team, token + governance: guard bypasses, reserve-move attempts, dust-grief vote suppression, key collisions, excluded-reserve votes |
 | `smartpacts-attacks-voting.repl` | Red team, voting: double-vote via transfer/re-vote sequences, tally injection attempts, report-path boundaries, quorum edge cases |
+| `smartpacts-dividend-fairness.repl` | Dividend fairness under cross-chain movement (the test-event finding, DF-1..DF-11): no double-pay / no under-pay for moved shares, declared-round ordering, effective-time gating, exact liability == Σ owed, the solvency guard, precision-floored claims with carried remainders, funding at zero float |
+| `smartpacts-upgrade.repl` | The in-place upgrade path: pre-upgrade state survives, the un-migrated window fails closed, `migrate-adr015` heals and is idempotent, dead-chain funding refused |
+| `smartpacts-upgrade-float.repl` | Upgrade with real balances present: zeroed counters proven exact, first post-upgrade round accrues exactly rate × balance, pre-funding at zero liability allowed |
+| `smartpacts-upgrade-rps-guard.repl` | The migration's safety precondition: a chain that had funded a round under the old model is refused |
 
-The two `attacks` suites are the threat model in executable form: each documented attack is run
+The `attacks` suites are the threat model in executable form, and the `dividend-fairness` suite is the test-event finding in executable form: each documented attack is run
 and shown to fail.
 
 ## Notes
