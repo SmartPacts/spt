@@ -78,17 +78,27 @@ while the proposal is open; if you transfer shares away, exactly that many leave
 
 ## 5. Receive & claim dividends — also GASLESS
 
-When the operators fund a dividend round, every circulating shareholder accrues KDA pro-rata to their
-shares (treasury and unsold reserve get nothing). Claiming is **permissionless and gasless** — anyone
-can even trigger *your* claim, and it always pays *your* account.
+Dividend rounds are **declared on-chain in advance**: a round is a rate per test-share plus an
+effective timestamp, announced identically on all 20 chains (watch for the `ROUND-DECLARED`
+event), and immutable once declared. At the effective moment, every circulating test-share accrues
+exactly `rate × shares` — wherever it sits, no matter how it moved between chains before or after
+(treasury and unsold reserve get nothing). Claiming is **permissionless and gasless** — anyone can
+even trigger *your* claim, and it always pays *your* account.
 
 ```pact
+(NS.smartpacts-shares.get-round-count)                       ; read: rounds declared so far
+(read NS.smartpacts-shares.dividend-rounds "1")              ; read: round 1's rate + effective time
 (NS.smartpacts-shares.pending-dividends-of "YOU")            ; read: what you're owed (KDA)
 (NS.smartpacts-shares.claim-dividends "YOU")                 ; pay it to your account
 ```
 - Gasless setup identical to voting (station sender, `claim-dividends` is the other allowlisted call).
-- Dividend rounds accrue only to shares held at the time a round is funded; later buyers do not
-  receive earlier rounds.
+- Rounds accrue to shares held at the round's **effective moment**; later buyers do not receive
+  earlier rounds. Claims pay the exact 12-decimal amount; any finer remainder stays credited and
+  rides into your next claim.
+- One tip: shares mid-flight between chains at the exact effective moment are on no chain and skip
+  that round — don't cross-chain right around an announced effective time.
+- Planned test rounds: round 1 is planned for **July 11, 2026**; a second round after the event
+  ends (after July 22, 2026). Dates are operator actions and may shift until declared on-chain.
 
 ## 6. Verify everything yourself (no keys needed)
 

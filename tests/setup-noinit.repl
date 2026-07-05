@@ -21,13 +21,13 @@
 (begin-tx "load SPT modules")
 (env-data
   { "ns": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641"
-  , "upgrade": false
   , "spt-admin-name": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.spt-admin"
   , "spt-admin": { "keys": ["admin-key"], "pred": "keys-all" }
+  , "upgrade": false                                   ; fresh deploy: create all tables
   , "sender00": { "keys": ["admin-key"], "pred": "keys-all" } })
 (env-keys ["admin-key"])
 (define-namespace "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641" (read-keyset 'spt-admin) (read-keyset 'spt-admin))
-(load "../contracts/smartpacts-shares.pact")   ; includes live-vote governance
+(load "../contracts/smartpacts-shares.pact")     ; governance merged in
 (load "../contracts/smartpacts-ipo.pact")
 (commit-tx)
 ;; NOTE: init-supply intentionally NOT called here.

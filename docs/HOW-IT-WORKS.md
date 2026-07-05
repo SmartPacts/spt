@@ -130,35 +130,53 @@ The mechanism, end to end:
 1. **Revenue arrives on-chain.** Anyone can pay KDA into the contract's per-chain **revenue
    account** (`receive-revenue`). This account is capability-guarded like everything else — the
    operator can route it, but only through public, on-chain functions.
-2. **The operator funds a round.** `fund-dividends` moves an amount from the revenue account into
-   the **dividend pool** and declares the round's per-share increment. The contract checks the
-   pool actually covers what the round promises to circulating holders — an underfunded round is
-   refused. (Routing revenue to operations instead is equally public: `withdraw-revenue` is an
-   admin function that emits an event, so holders can see every KDA that goes either way.)
-3. **Every holder accrues automatically.** The contract keeps one number per chain — the
-   cumulative *dividends per share* — and a per-account checkpoint of the value it last settled
-   at. A holder's pending entitlement is simply their balance times the growth of that number
-   since their checkpoint. Funding a round is one addition — the cost does not grow with the
-   number of holders. Whenever a balance changes (buy, transfer in/out), the contract first
-   settles the account's accrued entitlement at the old balance, then updates the checkpoint —
-   so entitlements are exact even as shares change hands.
-4. **The float is the base.** Only circulating shares — shares in holders' hands — count.
+2. **The operator declares a round — in advance, on every chain, immutably.** A round is a
+   **rate per share plus an effective timestamp** (`declare-round`), submitted identically to all
+   20 chains and announced by an on-chain event. Once declared it cannot be moved or cancelled,
+   and rounds must be declared in time order — the round list is append-only public record.
+   Declaring moves no money; it fixes *who will be owed what*: at the effective moment, every
+   circulating share accrues exactly the rate, wherever it sits.
+3. **Accrual is global and movement-proof.** The dividends-per-share number every account
+   checkpoints against is computed from the declared-round list plus consensus time — the same
+   value on every chain, by construction. Move shares between chains before, during, or after a
+   round: your lifetime entitlement is always `Σ rate × shares held at each round's effective
+   moment`. (An earlier design kept this number per chain and synced it at funding time, which
+   could double- or under-pay shares that moved mid-round — a defect surfaced during the public
+   test event and closed by this design.) Whenever a balance changes, the contract first settles
+   the account's accrued entitlement at the old balance, then updates the checkpoint — so
+   entitlements stay exact as shares change hands.
+4. **Funding is logistics, never fairness.** `fund-dividends` moves cash from the revenue account
+   into the chain's **dividend pool** — that is all it does. The contract refuses the deposit
+   unless the pool then covers the chain's **entire outstanding liability**, computed exactly
+   on-chain — including dividends already earned by shares that have since left the chain. So
+   "funded" is a hard on-chain guarantee that every claim is payable, and *when* the operator
+   funds can never change *what* anyone is owed. (Routing revenue to operations instead is
+   equally public: `withdraw-revenue` emits an event, so holders see every KDA that goes either
+   way.)
+5. **The float is the base.** Only circulating shares — shares in holders' hands — count.
    The treasury, the unsold sale reserve, and the locked tranches neither accrue dividends nor
    appear in the denominator, so 100% of every round reaches actual holders.
-5. **Claims are permissionless and durable.** `claim-dividends` pays the accrued KDA out.
-   Anyone can trigger a claim for any account — but the payout **always** goes to an account
-   bound to the holder's own keys, so triggering someone else's claim just does them a favor.
-   Unclaimed dividends accumulate indefinitely; there is no expiry, no sweep-back.
+6. **Claims are permissionless, exact, and durable.** `claim-dividends` pays the accrued KDA out
+   at the exact 12-decimal precision the KDA ledger supports; any finer remainder stays credited
+   to the account and rides into the next round — nothing is ever rounded away. Anyone can
+   trigger a claim for any account — but the payout **always** goes to an account bound to the
+   holder's own keys, so triggering someone else's claim just does them a favor. Unclaimed
+   dividends accumulate indefinitely; there is no expiry, no sweep-back.
 
 One subtle protection: payouts go to a *principal* account derived from the holder's own key
 material, not to a raw account name. This closes an attack where someone pre-creates a KDA account
 with your name but their keys, which would otherwise make your claims bounce forever.
 
+One practical note: shares that are mid-flight between chains at the exact moment a round becomes
+effective are on no chain, and do not accrue that round. A cross-chain move takes minutes;
+avoid moving right around an announced effective time.
+
 **Why:** the per-share-accumulator design (familiar from DeFi staking systems) is what makes
-dividends scale — a round costs the same to fund whether there are ten holders or ten thousand.
-Excluding the reserves is a fairness statement with teeth: the company cannot pay dividends to
-itself. And permissionless, non-expiring claims mean a holder who goes quiet for a year loses
-nothing.
+dividends scale — a round costs the same whether there are ten holders or ten thousand. Declaring
+rounds in advance with a public, immutable record makes the *fairness* of a distribution checkable
+before any money moves; the exact solvency check makes the *payability* checkable after. Excluding
+the reserves is a fairness statement with teeth: the company cannot pay dividends to itself. And
+permissionless, non-expiring claims mean a holder who goes quiet for a year loses nothing.
 
 ## 6. Governance: live votes that move with the shares
 

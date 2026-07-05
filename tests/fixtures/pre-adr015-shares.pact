@@ -82,41 +82,12 @@
   (deftable final-aggs:{final-agg})         ; key = proposal id
 
   (defschema state-schema
-    @doc "Singleton dividend + supply state for THIS chain. reward-per-share is the GLOBAL \
-         \nreward-per-share materialized on this chain: the sum of the rates of every dividend \
-         \nround already applied here, IDENTICAL on every chain once all effective rounds are \
-         \napplied. It is NOT a per-chain accumulator — the declared-round list is the source \
-         \nof truth and this field is its O(1) materialization."
-    reward-per-share:decimal     ; = Σ rate of applied rounds (global)
-    circulating-supply:decimal   ; participating balances on this chain (rps denominator)
+    @doc "Singleton dividend + supply state for THIS chain."
+    reward-per-share:decimal     ; global accumulator (admin-synced across chains)
+    circulating-supply:decimal   ; rps denominator = participating balances on this chain
     ipo-reserve-account:string   ; excluded principal (smartpacts-ipo reserve), stored at init
-    rounds-applied:integer       ; how many declared rounds have been folded into rps here
-    total-distributed:decimal    ; KDA moved revenue->pool on this chain (solvency bookkeeping)
-    ;; EXACT SOLVENCY (O(1)): the chain's true unclaimed liability is
-    ;;   L = sum-pending + rps*circulating - sum-debt
-    ;; = Σ over non-excluded accounts of (pending + balance*(rps - reward-debt)).
-    ;; circulating*rps ALONE under-counts L: when a share leaves a chain its earned
-    ;; dividend stays claimable here as crystallized pending, but circulating drops.
-    ;; These two counters, maintained on every debit/credit/claim, make fund-dividends
-    ;; enforce pool >= L exactly — so "funded" is a hard guarantee every claim is payable.
-    sum-pending:decimal          ; Σ pending-dividends over non-excluded accounts (crystallized owed)
-    sum-debt:decimal)            ; Σ (balance * reward-debt) over non-excluded accounts
+    total-distributed:decimal)
   (deftable state:{state-schema})
-
-  ;; DIVIDEND ROUNDS. A round is DECLARED once by admin and replicated to EVERY chain
-  ;; with identical params (rate + effective-at) — exactly like create-proposal
-  ;; replicates an identical close-at. The GLOBAL reward-per-share is Σ rate over all
-  ;; rounds whose effective-at <= now; because every chain holds the same round list and
-  ;; reads the same consensus block-time, that value is identical everywhere BY
-  ;; CONSTRUCTION — no per-chain drift, so a share moving between chains is never
-  ;; mis-paid. Rounds are indexed 1..n (like the active-proposal index) so apply-round
-  ;; can fold them in order without scanning. Immutable once declared.
-  (defschema dividend-round rate:decimal effective-at:time)
-  (deftable dividend-rounds:{dividend-round})   ; key = round id (integer as string)
-  (defschema round-count-row n:integer)
-  (deftable round-count:{round-count-row})      ; singleton: how many rounds declared here
-  ;; apply-round fold accumulator: the last consecutive-effective prefix index + its summed rate.
-  (defschema apply-acc i:integer rate:decimal)
 
   (defschema tranche-lock
     @doc "One pre-committed, time-gated tranche: founder | treasury | liquidity. \
@@ -156,7 +127,6 @@
   (defconst STATE-KEY "state")
   (defconst INIT-KEY "init")
   (defconst PROP-COUNT-KEY "pc")               ; active-proposal-index counter singleton key
-  (defconst ROUND-COUNT-KEY "rc")              ; dividend-round counter singleton key
   (defconst EPOCH:time (time "1970-01-01T00:00:00Z"))  ; sentinel (missing-proposal default)
   (defconst ADMIN-KS "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.spt-admin")
   ;; Governance
@@ -169,9 +139,7 @@
   ;; ========================================================================
   ;; EVENTS
   ;; ========================================================================
-  (defcap ROUND-DECLARED (id:string rate:decimal effective-at:time) @event true)
-  (defcap ROUND-APPLIED (id:string chain:string rate:decimal) @event true)
-  (defcap DIVIDEND-FUNDED (amount:decimal) @event true)   ; per-chain cash into the pool
+  (defcap DIVIDEND-FUNDED (amount:decimal rps-increment:decimal) @event true)
   (defcap DIVIDEND-CLAIMED (account:string amount:decimal) @event true)
   (defcap REVENUE-RECEIVED (from:string amount:decimal) @event true)
   (defcap REVENUE-WITHDRAWN (to:string amount:decimal) @event true)
@@ -311,38 +279,8 @@
   (defun curr-time:time () (at 'block-time (chain-data)))
   (defun this-chain:string () (at 'chain-id (chain-data)))
   (defun account-guard:guard (account:string) (at 'guard (read accounts account)))
-  (defun get-round-count:integer () (at 'n (read round-count ROUND-COUNT-KEY)))
-
-  ;; get-rps = the GLOBAL reward-per-share right now: the already-folded rps PLUS the
-  ;; rates of any DECLARED rounds that are effective-at <= now but not yet folded here.
-  ;; PURE READ (no writes) — safe to call from debit/credit/claim. This is what makes rps
-  ;; identical on every chain the instant a round is declared+effective, without requiring
-  ;; apply-round to have run first: the value is derived from the (identically-replicated)
-  ;; round list + consensus block-time, so drift is impossible. apply-round only MATERIALIZES
-  ;; it for O(1) reads; correctness does not depend on apply-round having been called.
-  (defun get-rps:decimal ()
-    (with-read state STATE-KEY { "reward-per-share" := folded, "rounds-applied" := applied }
-      (let* ((n (get-round-count))
-             (now (curr-time))
-             (pending (if (>= applied n) []
-                        (filter (!= 0.0)
-                          (map (lambda (i:integer)
-                                 (with-read dividend-rounds (rkey i)
-                                   { "rate" := rate, "effective-at" := eff }
-                                   (if (<= eff now) rate 0.0)))
-                               (enumerate (+ applied 1) n))))))
-        (fold (+) folded pending))))
+  (defun get-rps:decimal () (at 'reward-per-share (read state STATE-KEY)))
   (defun get-circulating:decimal () (at 'circulating-supply (read state STATE-KEY)))
-
-  ;; Exact solvency: this chain's TRUE unclaimed dividend liability, O(1).
-  ;;   L = sum-pending + rps*circulating - sum-debt
-  ;;     = Σ over non-excluded accounts of (pending + balance*(rps - reward-debt)).
-  ;; This is what fund-dividends must cover — circulating*rps alone under-counts it by
-  ;; the crystallized pending of shares that have since left the chain.
-  (defun dividend-liability:decimal ()
-    (with-read state STATE-KEY
-      { "sum-pending" := sp, "circulating-supply" := circ, "sum-debt" := sd }
-      (+ sp (- (* (get-rps) circ) sd))))
   (defun get-ipo-reserve:string () (at 'ipo-reserve-account (read state STATE-KEY)))
   (defun get-prop-count:integer () (at 'n (read prop-count PROP-COUNT-KEY)))
 
@@ -386,7 +324,6 @@
     ;; element boundaries so distinct triples never collide.
     (hash [voter chain proposal]))
   (defun pkey:string (i:integer) (int-to-str 10 i))
-  (defun rkey:string (i:integer) (int-to-str 10 i))   ; dividend-round key
   (defun active-prop-indices:[integer] ()
     @doc "Indices [1..count] of the active-proposal index, or [] at count 0 (guards the \
          \n(enumerate 1 0) => [1 0] trap)."
@@ -627,15 +564,7 @@
             (with-capability (TALLY) (release-votes-on-debit account amount))
             (update accounts account
               { "balance": (- bal amount), "reward-debt": rps, "pending-dividends": new-pend })
-            ;; Exact solvency counters (this account's contribution changes):
-            ;;   sum-pending += new-pend - pend      = bal*(rps-rd)
-            ;;   sum-debt    += (bal-amount)*rps - bal*rd   (reward-debt: rd->rps, balance: bal->bal-amount)
-            (with-read state STATE-KEY
-              { "circulating-supply" := circ, "sum-pending" := sp, "sum-debt" := sd }
-              (update state STATE-KEY
-                { "circulating-supply": (- circ amount)
-                , "sum-pending": (+ sp (* bal (- rps rd)))
-                , "sum-debt": (+ sd (- (* (- bal amount) rps) (* bal rd))) })))))))
+            (update state STATE-KEY { "circulating-supply": (- (get-circulating) amount) }))))))
 
   (defun credit (account:string guard:guard amount:decimal)
     (require-capability (CREDIT account))
@@ -660,15 +589,7 @@
               (write accounts account
                 { "balance": (+ cur-bal amount), "guard": retg
                 , "reward-debt": rps, "pending-dividends": new-pend })
-              ;; Exact solvency counters (mirror of debit; cur-bal may be 0 for a new acct):
-              ;;   sum-pending += cur-bal*(rps-rd)
-              ;;   sum-debt    += (cur-bal+amount)*rps - cur-bal*rd
-              (with-read state STATE-KEY
-                { "circulating-supply" := circ, "sum-pending" := sp, "sum-debt" := sd }
-                (update state STATE-KEY
-                  { "circulating-supply": (+ circ amount)
-                  , "sum-pending": (+ sp (* cur-bal (- rps rd)))
-                  , "sum-debt": (+ sd (- (* (+ cur-bal amount) rps) (* cur-bal rd))) }))))))))
+              (update state STATE-KEY { "circulating-supply": (+ (get-circulating) amount) })))))))
 
   ;; ========================================================================
   ;; fungible-v2 TRANSFER SURFACE
@@ -875,10 +796,8 @@
         "tranche totals do not sum to TOTAL-SUPPLY")
       (insert state STATE-KEY
         { "reward-per-share": 0.0, "circulating-supply": 0.0
-        , "ipo-reserve-account": ipo-reserve-account, "rounds-applied": 0
-        , "total-distributed": 0.0, "sum-pending": 0.0, "sum-debt": 0.0 })
+        , "ipo-reserve-account": ipo-reserve-account, "total-distributed": 0.0 })
       (insert prop-count PROP-COUNT-KEY { "n": 0 })       ; active-proposal-index counter
-      (insert round-count ROUND-COUNT-KEY { "n": 0 })     ; dividend-round counter
       (coin.create-account REVENUE-ACCOUNT REVENUE-G)
       (coin.create-account POOL-ACCOUNT POOL-G)
       ;; Mint TOTAL-SUPPLY to the (excluded) reserves — inlined (no exported mint surface).
@@ -901,169 +820,43 @@
       (enforce-not-initialized)
       (insert state STATE-KEY
         { "reward-per-share": 0.0, "circulating-supply": 0.0
-        , "ipo-reserve-account": ipo-reserve-account, "rounds-applied": 0
-        , "total-distributed": 0.0, "sum-pending": 0.0, "sum-debt": 0.0 })
+        , "ipo-reserve-account": ipo-reserve-account, "total-distributed": 0.0 })
       (insert prop-count PROP-COUNT-KEY { "n": 0 })       ; active-proposal-index counter
-      (insert round-count ROUND-COUNT-KEY { "n": 0 })     ; dividend-round counter
       (coin.create-account REVENUE-ACCOUNT REVENUE-G)
       (coin.create-account POOL-ACCOUNT POOL-G)
       (insert init-state INIT-KEY { "initialized": true })
       "chain initialized"))
 
-  (defun migrate-adr015:string ()
-    @doc "ONE-SHOT data migration for the in-place upgrade of a chain that was initialized \
-         \nunder the PRE-declared-rounds schema (no rounds-applied/sum-pending/sum-debt \
-         \nfields, no round-count singleton). A fresh deploy runs init/init-supply which \
-         \nwrite the full schema, so it NEVER needs this. On an upgraded chain, get-rps / \
-         \ndividend-liability read those absent fields and would brick every transfer/claim \
-         \nuntil this runs. Idempotent: gated on the ABSENCE of the round-count singleton \
-         \nROW (with-default-read only covers a missing ROW, not a missing FIELD, so we key \
-         \non the row). SAFE ONLY when the pre-upgrade reward-per-share is 0 — i.e. no \
-         \ndividend was ever funded under the old per-chain model; otherwise the zeroed \
-         \nsum-pending/sum-debt would be wrong (they'd need an O(n) account scan) and the \
-         \nold rps has different (per-chain) semantics. We ENFORCE rps=0 rather than trust it."
-    (with-capability (ADMIN)
-      (with-default-read round-count ROUND-COUNT-KEY { "n": -1 } { "n" := rc }
-        (if (= rc -1)
-          ;; PROJECTED read: the pre-upgrade row is missing three schema fields, so never
-          ;; decode it against the full schema — project the one field we need.
-          (let ((old-rps (at 'reward-per-share (read state STATE-KEY ['reward-per-share]))))
-            (enforce (= old-rps 0.0)
-              "cannot migrate: pre-ADR-015 reward-per-share is non-zero (a dividend was funded; needs an account scan)")
-            (insert round-count ROUND-COUNT-KEY { "n": 0 })
-            ;; merge the three new fields onto the existing (old-schema) state row.
-            ;; rps=0 and no funded dividends => counters start at 0.
-            (update state STATE-KEY { "rounds-applied": 0, "sum-pending": 0.0, "sum-debt": 0.0 })
-            "migrated")
-          "already migrated"))))
-
   ;; ========================================================================
-  ;; DIVIDENDS — GLOBAL ACCRUAL via DECLARED ROUNDS
-  ;; ------------------------------------------------------------------------
-  ;; A round = a rate (KDA per share) effective at a timestamp, DECLARED once by
-  ;; admin and replicated to EVERY chain with identical params (like create-proposal
-  ;; replicates identical close-at). The global reward-per-share is Σ rate of effective
-  ;; rounds — identical on every chain by construction, so cross-chain share movement is
-  ;; never mis-paid. fund-dividends is decoupled: it only ensures a chain's POOL holds
-  ;; the KDA to cover its own holders (pure solvency).
+  ;; DIVIDENDS (float base; admin-synced global rps)
   ;; ========================================================================
-
-  ;; declared rounds (chain 0 total, mirrored everywhere) that are effective by `now`
-  ;; but not yet folded into this chain's rps.
-  (defun outstanding-rate:decimal ()
-    @doc "Σ rate of declared rounds effective-at <= now but not yet applied on THIS chain."
-    (with-read state STATE-KEY { "reward-per-share" := _folded, "rounds-applied" := applied }
-      (let ((n (get-round-count)) (now (curr-time)))
-        (if (>= applied n) 0.0
-          (fold (+) 0.0
-            (map (lambda (i:integer)
-                   (with-read dividend-rounds (rkey i) { "rate" := rate, "effective-at" := eff }
-                     (if (<= eff now) rate 0.0)))
-                 (enumerate (+ applied 1) n)))))))
-
-  (defun declare-round:string (id:string rate:decimal effective-at:time)
-    @doc "Admin: DECLARE a dividend round (rate KDA/share, effective at a timestamp), \
-         \nreplicated to EVERY chain with these SAME params (id/rate/effective-at). The \
-         \nglobal rps rises by `rate` once `effective-at` passes — identically on all \
-         \nchains. INSERT by index so the sequence is gap-free and immutable; the id is \
-         \nstored for the event/audit trail. Does NOT move KDA (that is fund-dividends). \
-         \nA future effective-at is allowed on purpose (declare now, fund each chain to \
-         \nliability during the window, rps rises on the date) — but effective-at MUST be \
-         \n>= the previous round's, so the index order and time order agree: that makes a \
-         \nround effective iff every lower-indexed round is (no gaps), which apply-round \
-         \nrelies on to fold+advance the SAME set and never double-count a rate."
-    (with-capability (ADMIN)
-      (enforce (> rate 0.0) "rate must be positive")
-      (enforce-unit rate)
-      (let* ((prev (get-round-count))
-             (slot (+ prev 1)))
-        ;; MONOTONIC effective-at: bind the prior round's timestamp FIRST (a table read
-        ;; inside an enforce condition trips read-only mode on the node), then reject an
-        ;; out-of-order declaration.
-        (if (> prev 0)
-          (let ((prev-eff (at 'effective-at (read dividend-rounds (rkey prev)))))
-            (enforce (>= effective-at prev-eff)
-              "effective-at must be >= the previous round's (declare rounds in time order)"))
-          true)
-        ;; append the round at the next index; the id lives in the event (rounds are
-        ;; index-addressed like the active-proposal index, so apply-round is O(newly-effective)).
-        (insert dividend-rounds (rkey slot) { "rate": rate, "effective-at": effective-at })
-        (update round-count ROUND-COUNT-KEY { "n": slot }))
-      (emit-event (ROUND-DECLARED id rate effective-at))
-      "round declared"))
-
-  (defun apply-round:string (id:string)
-    @doc "Permissionless: MATERIALIZE the now-effective declared rounds into this chain's \
-         \nstored rps, so get-rps stays O(1). Idempotent + monotonic. SELF-CONSISTENT: it \
-         \nfolds and advances over the SAME set — the consecutive-effective PREFIX of the \
-         \nunapplied rounds — so it can never fold a rate it does not advance past (folding \
-         \na wider set than it advances would double-count on the next call). A not-yet- \
-         \neffective round stops the prefix; because declare-round enforces non-decreasing \
-         \neffective-at, that prefix is exactly the set of effective unapplied rounds. \
-         \n`id` is for the event only. No-op-rejects if none."
-    (with-read state STATE-KEY { "reward-per-share" := folded, "rounds-applied" := applied }
-      (let ((n (get-round-count)) (now (curr-time)))
-        ;; guard the empty/descending range: nothing unapplied => reject (no-op) before enumerate.
-        (enforce (< applied n) "no newly-effective rounds to apply")
-        ;; one pass over unapplied rounds: extend the prefix (and sum its rate) only while
-        ;; each next round is CONSECUTIVE and effective. acc = { "i": last-prefix-index, "rate": Σrate }.
-        (let* ((acc (fold (lambda (a:object{apply-acc} k:integer)
-                            (with-read dividend-rounds (rkey k) { "rate" := rate, "effective-at" := eff }
-                              (if (and (= (at 'i a) (- k 1)) (<= eff now))
-                                { "i": k, "rate": (+ (at 'rate a) rate) }
-                                a)))
-                          { "i": applied, "rate": 0.0 }
-                          (enumerate (+ applied 1) n)))
-               (new-applied (at 'i acc))
-               (extra (at 'rate acc)))
-          (enforce (> extra 0.0) "no newly-effective rounds to apply")
-          (update state STATE-KEY
-            { "reward-per-share": (+ folded extra)
-            , "rounds-applied": new-applied })
-          (emit-event (ROUND-APPLIED id (this-chain) extra))
-          "round applied"))))
-
-  (defun fund-dividends:string (pool-amount:decimal)
-    @doc "Admin: move pool-amount KDA revenue->pool on THIS chain (pure SOLVENCY — the \
-         \nrps is set by declare-round, not here). The chain's pool must be able to cover \
-         \nits own holders' claims: pool + deposit >= floor12(dividend-liability). Fundable \
-         \nwhen the chain has live float OR a payable stranded liability; only a dead chain \
-         \n(neither) is refused. Timing of this call does NOT affect what anyone is OWED — \
-         \nonly whether the cash is here; pre-funding ahead of a declared future round is \
-         \nlegal, and a chain that grows after funding is topped up with another call."
+  (defun fund-dividends:string (pool-amount:decimal rps-increment:decimal)
+    @doc "Admin: move pool-amount KDA revenue->pool on THIS chain and bump the \
+         \nadmin-computed GLOBAL rps increment (= global-amount / global-circulating)."
     (with-capability (FUND-DIVIDENDS)
       (enforce (> pool-amount 0.0) "pool-amount must be positive")
-      ;; Bind reads to lets FIRST — a read inside an enforce trips read-only mode on the node.
-      (let* ((circ (get-circulating))
-             (liability (dividend-liability))
-             (fl (floor liability MINIMUM-PRECISION))
-             (poolbal (coin.get-balance POOL-ACCOUNT)))
-        ;; FUNDABILITY: a chain is fundable when it has live float (circ > 0 — includes
-        ;; PRE-funding ahead of a declared future round, the declare-then-rebalance
-        ;; pattern) OR a payable stranded liability (fl > 0 — every holder moved out
-        ;; cross-chain/to reserves but their crystallized pending remains claimable
-        ;; here). Only circ = 0 AND fl = 0 is rejected: a dead chain, where the no-exit
-        ;; pool would strand the cash forever.
-        (enforce (or (> circ 0.0) (> fl 0.0))
-          "nothing fundable: no circulating float and no payable liability on this chain")
-        ;; EXACT solvency: after this deposit the pool must cover the chain's TRUE
-        ;; unclaimed liability = sum-pending + rps*circulating - sum-debt. This counts the
-        ;; crystallized pending of shares that have LEFT the chain (which circulating*rps
-        ;; misses), so "fund-dividends succeeded" is a hard guarantee that every claim on
-        ;; this chain is payable. Funding timing never changes what is OWED (only whether the
-        ;; cash is here); a chain that grows after funding is topped up with another call.
-        ;; The bound is the liability FLOORED to coin precision: claims pay 12-decimal floors
-        ;; (see claim-dividends), so total payable = Sigma floor(owed_i) <= floor(L) — any
-        ;; 12-dp amount <= L is <= floor(L). The sub-1e-12 dust is unpayable by construction
-        ;; and re-covered by the next funding once future accrual lifts it past 1e-12.
-        (enforce (>= (+ poolbal pool-amount) fl)
-          "pool underfunded: pool + deposit must cover this chain's dividend liability"))
+      (enforce (> rps-increment 0.0) "rps-increment must be positive")
+      ;; SOLVENCY: this chain's pool must cover this chain's accrual from the bump
+      ;; (= circulating * rps-increment). With correct admin math (rps-increment =
+      ;; global-amount/global-circulating, pool-amount = local share) this holds with
+      ;; equality; the check rejects admin error/malice that would strand late claimers.
+      ;; Bind the read to a let FIRST — a read inside an enforce condition trips
+      ;; read-only mode on KDA-CE.
+      (let ((circ (get-circulating)))
+        ;; Funding requires positive circulating float. Without this,
+        ;; the solvency bound below degenerates to (>= pool-amount 0.0) at circ=0,
+        ;; so funding would succeed and strand KDA in the pool unclaimably.
+        (enforce (> circ 0.0) "no circulating float")
+        (enforce (>= pool-amount (* circ rps-increment))
+          "pool underfunded: pool-amount must cover circulating * rps-increment"))
       (with-capability (REVENUE-GUARD)
         (install-capability (coin.TRANSFER REVENUE-ACCOUNT POOL-ACCOUNT pool-amount))
         (coin.transfer REVENUE-ACCOUNT POOL-ACCOUNT pool-amount))
-      (with-read state STATE-KEY { "total-distributed" := td }
-        (update state STATE-KEY { "total-distributed": (+ td pool-amount) }))
-      (emit-event (DIVIDEND-FUNDED pool-amount))
+      (with-read state STATE-KEY { "reward-per-share" := rps, "total-distributed" := td }
+        (update state STATE-KEY
+          { "reward-per-share": (+ rps rps-increment)
+          , "total-distributed": (+ td pool-amount) }))
+      (emit-event (DIVIDEND-FUNDED pool-amount rps-increment))
       "dividends funded"))
 
   (defun claim-dividends:decimal (account:string)
@@ -1077,26 +870,10 @@
     (let ((rps (get-rps)))
       (with-read accounts account
         { "balance" := bal, "guard" := g, "reward-debt" := rd, "pending-dividends" := pend }
-        ;; The accrual product bal*(rps-rd) can carry up to 24 decimals, but coin refuses any
-        ;; transfer finer than 12 — paying the raw value would revert EVERY claim whose owed
-        ;; amount is sub-12-decimal, stranding a correctly-owed dividend forever. So pay the
-        ;; 12-decimal FLOOR and carry the sub-precision remainder ("dust", < 1e-12) forward as
-        ;; pending: nothing is lost, the next round's accrual sweeps it up, and the liability
-        ;; identity stays exact (post-claim this account contributes exactly `dust` to L).
-        (let* ((raw (if (excluded? account) 0.0 (+ pend (* bal (- rps rd)))))
-               (payout (floor raw MINIMUM-PRECISION))
-               (dust (- raw payout))
-               (recipient (create-principal g)))
-          (enforce (> payout 0.0) "nothing to claim")   ; excluded or dust-only => rejected
-          (update accounts account { "reward-debt": rps, "pending-dividends": dust })
-          ;; Exact solvency: claim pays out the floored liability. Counters:
-          ;; sum-pending: pend -> dust (delta = dust - pend); sum-debt += bal*(rps-rd)
-          ;; (reward-debt rd->rps, balance unchanged). Net dL = (dust-pend) - bal*(rps-rd)
-          ;; = dust - raw = -payout, exactly what left the pool.
-          (with-read state STATE-KEY { "sum-pending" := sp, "sum-debt" := sd }
-            (update state STATE-KEY
-              { "sum-pending": (+ (- sp pend) dust)
-              , "sum-debt": (+ sd (* bal (- rps rd))) }))
+        (let ((payout (if (excluded? account) 0.0 (+ pend (* bal (- rps rd)))))
+              (recipient (create-principal g)))
+          (enforce (> payout 0.0) "nothing to claim")
+          (update accounts account { "reward-debt": rps, "pending-dividends": 0.0 })
           (with-capability (POOL-GUARD)
             (install-capability (coin.TRANSFER POOL-ACCOUNT recipient payout))
             (coin.transfer-create POOL-ACCOUNT recipient g payout))
@@ -1192,6 +969,4 @@
     (create-table prop-count)       ; active-proposal-index counter
     (create-table final-reports)    ; post-close per-(proposal,chain) frozen reports (hub)
     (create-table final-aggs)       ; post-close aggregated final result (hub)
-    (create-table dividend-rounds)  ; declared dividend rounds (global rps source)
-    (create-table round-count)      ; dividend-round counter
   ])

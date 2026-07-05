@@ -1,0 +1,590 @@
+;; ===========================================================================
+;; smartpacts-shares DIVIDEND-FAIRNESS suite (— globally-correct accrual).
+;;
+;; This suite proves the fairness properties of the DECLARED-ROUND global rps.
+;; The event surfaced a real bug: with a PER-CHAIN rps bumped by fund-dividends,
+;; a share moving between chains during a round was double-paid or under-paid,
+;; because it re-based to the LOCAL chain's rps. makes the rps a single
+;; deterministic value (Σ rate over declared rounds effective-at <= now), so a
+;; balance change on ANY account/chain checkpoints against the SAME baseline.
+;;
+;; Cross-chain SPV is DEVNET-only and cannot run in the bare REPL. But the FIX is
+;; chain-agnostic: the failure was "a moving balance re-bases to a different rps."
+;; In-REPL we reproduce exactly that — move a balance between accounts across the
+;; round boundary and assert the payout equals rate * balance-held-at-round-time,
+;; regardless of when/where the balance moved. Whether two accounts are on one
+;; chain or twenty is irrelevant to the arithmetic once the rps is global; the
+;; devnet suite (test/harness) then confirms the same holds across real chains.
+;; ===========================================================================
+(load "setup.repl")
+
+;; ---------------------------------------------------------------------------
+;; Seed float via the IPO: alice 3000, bob 2000  (circulating 5000).
+;; ---------------------------------------------------------------------------
+(begin-tx "activate IPO + seed alice 3000 / bob 2000")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+          , "bob":   { "keys": ["bob-key"],   "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1500.0) (coin.TRANSFER "sender00" "bob" 1000.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1500.0)
+(coin.transfer-create "sender00" "bob"   (read-keyset 'bob)   1000.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "alice" (read-keyset 'alice) 3000.0)
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "bob" (read-keyset 'bob) 2000.0)
+(expect "circulating 5000" 5000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
+(expect "rps starts at 0" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps))
+(commit-tx)
+
+;; ===========================================================================
+;; DF-1 — DOUBLE-PAY case is CLOSED.
+;; Old bug: fund source chain (rps 0->2); Bob moves 10 A->B (B.rps still 0):
+;;   debit A pending += 10*(2-0)=20; credit B reward-debt = LOCAL B.rps = 0;
+;;   then fund B (rps 0->2): B accrues another 10*(2-0)=20 -> claim 40, fair 20.
+;; New model: rps is GLOBAL = 2 the instant the round is effective. Bob moving
+;; A->B crystallizes 20 on the source and arrives at reward-debt = global 2, so
+;; the destination accrues 10*(2-2)=0. Total = 20 = fair. We model A and B as
+;; two accounts (bob-a, bob-b) that the SAME owner controls; the invariant is on
+;; the OWNER's total across both.
+;; ===========================================================================
+(begin-tx "DF-1 setup: give bob-a 1000 (from alice), declare a round, make it effective")
+;; move 1000 from alice -> bob-a BEFORE any round (rps 0, no accrual to inherit)
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "bob-a" 1000.0)] }])
+(env-data { "bob-a": { "keys": ["bob-key"], "pred": "keys-all" }
+          , "bob-b": { "keys": ["bob-key"], "pred": "keys-all" } })
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "bob-a" (read-keyset 'bob-a) 1000.0)
+(expect "bob-a holds 1000" 1000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "bob-a"))
+;; declare round R1 rate 0.02 effective now -> global rps 0.02
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R1" 0.02 (time "2026-06-01T00:00:00Z"))
+(expect "global rps 0.02 (round effective everywhere at once)" 0.02 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps))
+;; fund enough to cover circulating*rps = 5000*0.02 = 100
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT 100.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" 100.0)
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 100.0)
+(expect "bob-a accrued 1000*0.02 = 20 pending" 20.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "bob-a"))
+(commit-tx)
+
+(begin-tx "DF-1: bob moves his 1000 A->B AFTER the round is effective (the double-pay trigger)")
+;; This is the exact old-bug move: transfer during/after a funded round. Under the
+;; OLD per-chain rps this re-based bob-b to a fresh 0 and double-paid on the next fund.
+(env-sigs [{ "key": "bob-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "bob-a" "bob-b" 1000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "bob-a" "bob-b" (read-keyset 'bob-b) 1000.0)
+;; debit A crystallized the 20; credit B arrives at the GLOBAL rps 0.02, delta 0.
+(expect "bob-a pending crystallized = 20 (kept on source)" 20.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "bob-a"))
+(expect "bob-b pending = 0 (arrived at global rps; no phantom re-accrual)" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "bob-b"))
+;; THE FAIRNESS ASSERTION: owner's total across both accounts = 20 = rate*balance = fair.
+;; (Under the old bug this would read 40 after a second fund. It cannot here.)
+(expect "owner total = 20 (paid exactly once — double-pay CLOSED)"
+  20.0
+  (+ (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "bob-a")
+     (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "bob-b")))
+(commit-tx)
+
+;; ===========================================================================
+;; DF-1b — EXACT SOLVENCY liability counter tracks TRUE owed, incl. crystallized
+;; pending on shares whose balance dropped. dividend-liability == Σ pending-of all
+;; float accounts, always. This is what fund-dividends must cover (not circ*rps).
+;; ===========================================================================
+(begin-tx "DF-1b exact liability == Σ pending across all float accounts")
+;; float accounts so far: alice(2000), bob(2000), bob-a(0,+20 pending), bob-b(1000)
+(let ((liability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+      (sum-pend (fold (+) 0.0
+                  (map (lambda (a:string) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of a))
+                       ["alice" "bob" "bob-a" "bob-b"]))))
+  (print (format "DF-1b: dividend-liability={} Σpending={}" [liability sum-pend]))
+  (expect "dividend-liability == Σ pending-of (exact O(1) == O(n) truth)" sum-pend liability))
+;; circulating*rps = 5000*0.02 = 100, but bob-a holds 20 crystallized while contributing
+;; 0 to circulating (balance 0) -> liability (100) still == circ*rps here because bob-a's
+;; 20 is offset by bob-b arriving at rps (owed 0). The GAP appears when a departed share's
+;; crystallized pending is NOT regenerated by circulating -> proven on devnet (cross-chain).
+(expect "circulating unchanged at 5000 (holder->holder)" 5000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
+(commit-tx)
+
+(begin-tx "DF-1: a SECOND fund on the destination does NOT re-pay the moved share")
+;; The old double-pay needed a later fund on the target to bump its local rps again.
+;; Here rps is global and already 0.02 for this round; funding more cash cannot raise
+;; what is OWED (only declare-round can), so bob-b stays at 0 for this round.
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT 100.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" 100.0)
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 100.0)  ; pool top-up, rps unchanged
+(expect "global rps STILL 0.02 (funding never moves owed)" 0.02 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps))
+(expect "bob-b STILL 0 (no double-pay from a later fund)" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "bob-b"))
+(expect "owner total STILL 20" 20.0
+  (+ (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "bob-a")
+     (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "bob-b")))
+(commit-tx)
+
+;; ===========================================================================
+;; DF-2 — UNDERPAY case is CLOSED.
+;; Old bug: destination chain already had rps 2; a share moving in re-based to
+;; reward-debt = 2, then the source got funded while the share was gone -> claim 0.
+;; New model: there is no per-chain head start; the rps is one value. A share that
+;; is present when a NEW round becomes effective earns that round in full wherever
+;; it sits. We prove: carol receives shares (before round 2), round 2 is declared,
+;; carol earns round 2 fully even though she was never on the "source".
+;; ===========================================================================
+(begin-tx "DF-2 setup: carol buys in AFTER round 1, before round 2")
+(env-data { "carol": { "keys": ["carol-key"], "pred": "keys-all" } })
+;; alice sends carol 500 (alice currently holds 3000-1000 = 2000). rps is 0.02 now,
+;; so carol arrives at reward-debt 0.02 -> she earns NOTHING from round 1 (correct:
+;; she wasn't a holder when round 1 was declared-and-effective at time she held 0).
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "carol" 500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "carol" (read-keyset 'carol) 500.0)
+(expect "carol pending 0 after round 1 (joined late — no retroactive round-1 pay)" 0.0
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "carol"))
+(commit-tx)
+
+(begin-tx "DF-2: declare round 2 -> carol earns round 2 in full (no underpay)")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R2" 0.02 (time "2026-06-01T00:00:00Z"))
+(expect "global rps now 0.04 (two rounds)" 0.04 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps))
+(expect "carol earns 500*0.02 = 10 for round 2 (full, not underpaid)" 10.0
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "carol"))
+(commit-tx)
+
+;; ===========================================================================
+;; DF-3 — MOVE-BEFORE-ROUND: a holder that moves before a round is effective earns
+;; the round at the DESTINATION (weight follows the shares, not the origin).
+;; ===========================================================================
+(begin-tx "DF-3: dave gets shares before round 3, holds through it")
+(env-data { "dave": { "keys": ["dave-key"], "pred": "keys-all" } })
+;; bob (holder, 2000) sends dave 1000 while rps is 0.04 (no new round yet declared).
+(env-sigs [{ "key": "bob-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "bob" "dave" 1000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "bob" "dave" (read-keyset 'dave) 1000.0)
+(expect "dave pending 0 on arrival" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "dave"))
+;; declare round 3 -> dave, present now, earns it fully at the destination.
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R3" 0.01 (time "2026-06-01T00:00:00Z"))
+(expect "dave earns 1000*0.01 = 10 (round follows the shares)" 10.0
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "dave"))
+(commit-tx)
+
+;; ===========================================================================
+;; DF-4 — EFFECTIVE-AT gating: a FUTURE-dated round does not accrue until its
+;; timestamp passes. get-rps must not include it early; time-advance flips it on.
+;; ===========================================================================
+(begin-tx "DF-4: declare a FUTURE round; rps must not move yet")
+(env-keys ["admin-key"])
+(expect "rps 0.05 before future round (0.02+0.02+0.01)" 0.05 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps))
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R4" 0.03 (time "2026-09-01T00:00:00Z"))
+(expect "rps UNCHANGED at 0.05 (future round not yet effective)" 0.05 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps))
+(expect "dave pending unchanged (future round not accruing)" 10.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "dave"))
+(commit-tx)
+
+(begin-tx "DF-4: advance block-time past the future round -> it becomes effective")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-09-02T00:00:00Z") })
+(expect "rps now 0.08 (future round R4 became effective)" 0.08 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps))
+(expect "dave now earns R3+R4 = 1000*(0.01+0.03) = 40" 40.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "dave"))
+(commit-tx)
+
+;; ===========================================================================
+;; DF-5 — apply-round MATERIALIZES the rps: get-rps identical before/after, and
+;; apply-round is idempotent (second call is a no-op / rejects "nothing to apply").
+;; ===========================================================================
+(begin-tx "DF-5: apply-round folds effective rounds into stored rps; value unchanged")
+(env-keys ["admin-key"])
+(let ((before (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps)))
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.apply-round "R4")
+  (expect "get-rps identical after apply-round (materialization is transparent)"
+    before (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps)))
+(expect "dave pending unchanged by apply-round" 40.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "dave"))
+;; idempotent: nothing new is effective-and-unapplied now, so a re-apply must reject.
+(expect-failure "apply-round idempotent (no newly-effective rounds)"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.apply-round "R4"))
+(commit-tx)
+
+;; ===========================================================================
+;; DF-6 — CONSERVATION / general invariant: Σ claims == Σ (rate * float held)
+;; and Σ claims <= Σ funded. Reset to a clean time and run one clean round with
+;; churn, then claim everyone and check the pool math.
+;; ===========================================================================
+(begin-tx "DF-6: sum of all pendings equals rate-weighted float (post all rounds)")
+;; Effective rounds so far: R1 0.02, R2 0.02, R3 0.01, R4 0.03  (all effective at 2026-09-02).
+;; Holders and the rounds each was present-and-holding for determine owed amounts.
+;; We assert the GLOBAL conservation identity instead of re-deriving each holder:
+;; total owed (pending + claimable) across every float account == Σ over holders of
+;; balance*(global_rps - reward_debt) + pending. We compute it directly from the API.
+(let* ((rps (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps))
+       (accts ["alice" "bob" "carol" "dave" "bob-a" "bob-b"])
+       (owed (fold (+) 0.0
+               (map (lambda (a:string) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of a))
+                    accts))))
+  (print (format "DF-6: global rps={} total owed across float holders={}" [rps owed]))
+  ;; CONSERVATION: total owed must equal Σ over holders of (balance * global_rps that the
+  ;; holder was present for). With circulating 5000 and every current float unit having
+  ;; accrued the full rps 0.08 (either as pending crystallized on a debit or as live
+  ;; balance*(rps-debt)), the rate-weighted float is 5000 * 0.08 = 400 — no more (no
+  ;; double-pay), no less (no strand). Exact, not "positive".
+  (expect "total owed == circulating * rps == 5000 * 0.08 == 400 (conservation, exact)"
+    400.0 owed))
+(commit-tx)
+
+;; ===========================================================================
+;; DF-7 — SOLVENCY is decoupled from FAIRNESS: an under-funded chain still OWES
+;; the correct amount; funding only governs whether the cash is present. A holder
+;; can still see the right pending even if the pool can't pay yet; a top-up pays.
+;; ===========================================================================
+(begin-tx "DF-7: declare a round but UNDER-fund; owed is correct, claim waits on cash")
+(env-keys ["admin-key"])
+;; a fresh clean holder for an isolated solvency check
+(env-data { "erin": { "keys": ["erin-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "erin" 100.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "erin" (read-keyset 'erin) 100.0)
+;; declare round R5 rate 0.10; erin (100) is owed 10 for it. (reset signer set to admin)
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R5" 0.10 (time "2026-09-02T00:00:00Z"))
+;; owed is correct REGARDLESS of funding (no fund-dividends has run for R5 yet):
+(expect "erin owed 100*0.10 = 10 (owed set by the round, not by cash)"
+  10.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "erin"))
+(commit-tx)
+
+(begin-tx "DF-7: under-funding is REJECTED by the solvency guard (protects late claimers)")
+(env-keys ["admin-key"])
+;; pool must cover the chain's TRUE liability now. A tiny deposit is rejected.
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT 1.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" 1.0)
+(env-keys ["admin-key"])
+(expect-failure "under-fund rejected (pool must cover this chain's dividend liability)"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 1.0))
+(commit-tx)
+
+(begin-tx "DF-7: a sufficient top-up satisfies solvency; erin can then claim")
+(env-keys ["admin-key"])
+;; fund to the EXACT liability (not circ*rps) — this is the number the ops tool computes.
+(let* ((liability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+       (poolbal (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT))
+       (need (- liability poolbal))
+       (topup (+ need 1.0)))
+  (print (format "DF-7 solvency: liability={} pool={} need={} topup={}" [liability poolbal need topup]))
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT topup)] }])
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" topup)
+  (env-keys ["admin-key"])
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends topup))
+;; erin claims her exact owed amount now that the pool is solvent.
+(let ((owed (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "erin")))
+  (expect "erin claim pays exactly her owed amount" owed
+    (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "erin"))
+  (expect "erin pending 0 after claim" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "erin")))
+(commit-tx)
+
+;; ===========================================================================
+;; DF-8 — SINGLE-CHAIN LIABILITY GAP made concrete (the exact case circ*rps missed).
+;; A holder that has ACCRUED pending then sends its shares to an EXCLUDED account
+;; (treasury) drops circulating while its crystallized pending stays claimable. Now
+;; circ*rps UNDER-counts the true liability by exactly that stranded pending, and the
+;; OLD guard would have let the operator fund too little. The tightened guard rejects it.
+;; ===========================================================================
+(begin-tx "DF-8 set up a holder with accrued pending, then dump shares to treasury")
+;; give a fresh holder frank 1000 from alice (alice holds 1500 now: 2000-500 to carol).
+(env-data { "frank": { "keys": ["frank-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "frank" 1000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "frank" (read-keyset 'frank) 1000.0)
+;; frank arrived at the current global rps 0.18 -> 0 pending. Declare a fresh round so
+;; frank accrues real pending on his 1000 shares.
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R6" 0.05 (time "2026-09-02T00:00:00Z"))
+(expect "frank owed 1000*0.05 = 50" 50.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "frank"))
+(commit-tx)
+
+(begin-tx "DF-8 frank dumps all 1000 shares to treasury (excluded) -> circulating drops, pending stays")
+;; the O(n) truth: Σ pending-dividends-of over every float account touched in this suite
+(env-data { "float-accts": ["alice" "bob" "carol" "dave" "eve" "bob-a" "bob-b" "erin" "frank"] })
+(let ((circ-before (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
+      (liab-before (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+      (sum-pending-before (fold (+) 0.0
+        (map (lambda (a:string) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of a))
+             (read-msg 'float-accts)))))
+  ;; the O(1) counter matches the O(n) truth BEFORE the dump
+  (expect "dividend-liability == Σ pending-of (before dump)" sum-pending-before liab-before)
+  (env-sigs [{ "key": "frank-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "frank" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT 1000.0)] }])
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "frank" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT 1000.0)
+  ;; frank keeps his 50 crystallized; treasury (excluded) accrues nothing.
+  (expect "frank still owed 50 after dumping shares" 50.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "frank"))
+  (let* ((circ-after (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
+         (liab-after (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+         (rps (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps))
+         (circ-rps (* circ-after rps)))
+    (print (format "DF-8 GAP: circ {}->{} liability {}->{} ; circ*rps={} true-liability={}"
+      [circ-before circ-after liab-before liab-after circ-rps liab-after]))
+    (expect "circulating dropped by 1000 (frank's shares left the float)" (- circ-before 1000.0) circ-after)
+    ;; liability is INVARIANT across a holder->excluded move: the earned 50 is preserved, not lost
+    (expect "liability unchanged by the dump (earned dividend preserved)" liab-before liab-after)
+    ;; the O(1) counter STILL matches the O(n) truth AFTER the dump
+    (expect "dividend-liability == Σ pending-of (after dump)"
+      (fold (+) 0.0
+        (map (lambda (a:string) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of a))
+             (read-msg 'float-accts)))
+      liab-after)
+    ;; THE BLIND SPOT: true liability now strictly EXCEEDS circ*rps -> the old guard would under-fund
+    (expect "liability strictly exceeds circ*rps (the old guard's blind spot)" true (> liab-after circ-rps))))
+(commit-tx)
+
+(begin-tx "DF-8 the OLD guard's amount (circ*rps) is now REJECTED; funding to liability succeeds")
+(env-keys ["admin-key"])
+(let* ((circ (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
+       (rps (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps))
+       (liability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+       (poolbal (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT))
+       (old-amt (- (* circ rps) poolbal))   ; what the OLD circ*rps guard would have accepted
+       (true-amt (+ (- liability poolbal) 0.01)))
+  ;; fund the revenue account enough for the true amount
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT true-amt)] }])
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" true-amt)
+  (env-keys ["admin-key"])
+  ;; the OLD amount (circ*rps - pool) leaves frank's 50 stranded -> REJECTED by the tightened guard
+  (expect-failure "circ*rps funding rejected (would strand the departed share's dividend)"
+    (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends old-amt))
+  ;; funding to the TRUE liability succeeds
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends true-amt))
+;; and frank can now claim his full 50
+(expect "frank claims his stranded 50 in full" 50.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "frank"))
+(commit-tx)
+
+;; ===========================================================================
+;; DF-9 — REGRESSION (a review CRITICAL): out-of-order round declaration.
+;; The bug: apply-round folded Σ of ALL effective-but-unapplied rates but advanced
+;; rounds-applied only to the last CONSECUTIVE effective index. If a FUTURE round sat
+;; at a lower index than an EFFECTIVE round, the effective round's rate was folded into
+;; rps yet never advanced past -> re-counted on every later apply-round (permanent rps
+;; inflation, permissionless). Fix: (a) declare-round enforces non-decreasing effective-at
+;; (so index order == time order == no gaps); (b) apply-round folds+advances the SAME
+;; consecutive-effective prefix, never folding a rate it does not advance past.
+;; ===========================================================================
+(begin-tx "DF-9a: declare-round REJECTS an out-of-order (earlier) effective-at")
+(env-keys ["admin-key"])
+;; all prior rounds are effective at 2026-09-02 or earlier; declaring one at 2026-06-01
+;; (earlier than the latest) must be rejected — this is what made the double-count possible.
+(expect-failure "out-of-order effective-at rejected (specific guard)"
+  "effective-at must be >= the previous round's"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "OOO" 0.01 (time "2020-01-01T00:00:00Z")))
+(commit-tx)
+
+(begin-tx "DF-9b: future round declared LAST is fine; apply-round folds only the effective prefix")
+(env-keys ["admin-key"])
+;; declare a FUTURE round (>= latest effective-at, so allowed): it must NOT accrue yet,
+;; and apply-round must fold only the already-effective prefix, leaving the future one alone.
+;; rps here = R1 .02 + R2 .02 + R3 .01 + R4 .03 + R5 .10 + R6 .05 = 0.23 (pinned as a literal
+;; so the DF-9c "+0.07 exactly once" delta is a real assertion, not a same-time tautology).
+(let ((rps-before (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps)))
+  (expect "pre-FUT rps is exactly 0.23 (six effective rounds)" 0.23 rps-before)
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "FUT" 0.07 (time "2027-01-01T00:00:00Z"))
+  (expect "future round does NOT change rps yet (effective-at > now)" rps-before
+    (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps))
+  ;; apply-round materializes the effective prefix; rps is unchanged in VALUE (materialization
+  ;; is transparent) and the future round is still excluded.
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.apply-round "prefix")
+  (expect "get-rps unchanged after apply-round (future round still excluded)" rps-before
+    (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps))
+  ;; DOUBLE-COUNT REGRESSION: a SECOND apply-round must be a no-op (all effective rounds
+  ;; already folded AND advanced past — the fold and the advance covered the same set).
+  (expect-failure "second apply-round is a no-op (no rate re-counted)"
+    (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.apply-round "again"))
+  (expect "get-rps STILL unchanged after the repeat (no permanent inflation)" rps-before
+    (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps)))
+(commit-tx)
+
+(begin-tx "DF-9c: when the future round becomes effective, it folds ONCE (not on top of a doubled base)")
+;; advance time past the future round; rps rises by exactly 0.07 — from the pinned 0.23 to
+;; exactly 0.30, once, never double (a doubled fold would read 0.37+).
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-06-01T00:00:00Z") })
+(expect "FUT now effective: rps == 0.23 + 0.07 == 0.30 exactly (added once)"
+  0.30 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps))
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.apply-round "fut-now")
+(expect "rps materialized once, still exactly 0.30" 0.30
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps))
+(expect-failure "no further rounds to apply (idempotent)"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.apply-round "z"))
+(expect "rps still exactly 0.30 after the rejected re-apply (no inflation, hard number)" 0.30
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps))
+(commit-tx)
+
+;; ===========================================================================
+;; DF-10 — PRECISION REGRESSION (cold double-check HIGH): a payout finer than 12
+;; decimals used to BRICK claim-dividends forever (coin refuses sub-12dp transfers;
+;; the raw accrual product bal*(rps-rd) carries up to 24dp). Fix: pay the 12dp
+;; FLOOR, carry the dust (<1e-12) as pending. Assert: the claim PAYS, the dust is
+;; preserved, liability == Σ pending stays EXACT, and the next round sweeps dust.
+;; ===========================================================================
+(begin-tx "DF-10 fractional holder + fine-grained rate -> 13-decimal owed")
+(env-data { "grace": { "keys": ["grace-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "grace" 123.456789)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "grace" (read-keyset 'grace) 123.456789)
+(env-keys ["admin-key"])
+;; rate 1e-7 (7dp) x balance 123.456789 (6dp) = 13dp owed — both inputs pass enforce-unit
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R7" 0.0000001 (time "2027-06-01T00:00:00Z"))
+(expect "grace owed 13-decimal value (correct, pre-fix unpayable)"
+  0.0000123456789 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "grace"))
+(commit-tx)
+
+(begin-tx "DF-10 invariant holds with sub-precision values; fund to floored liability")
+(env-data { "all-accts": ["alice" "bob" "carol" "dave" "eve" "bob-a" "bob-b" "erin" "frank" "grace"] })
+(let ((liab (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+      (sum-pend (fold (+) 0.0
+                  (map (lambda (a:string) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of a))
+                       (read-msg 'all-accts)))))
+  (expect "liability == Σ pending EXACT even with 13-decimal terms" sum-pend liab))
+(env-keys ["admin-key"])
+(let* ((liab (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+       (poolbal (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT))
+       (topup (- (+ (floor liab 12) 0.000000000001) poolbal)))  ; fund to exactly floor12(L)+1e-12
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT topup)] }])
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" topup)
+  (env-keys ["admin-key"])
+  ;; the guard now compares against floor12(L) — fundable with a clean 12dp amount
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends topup))
+(commit-tx)
+
+(begin-tx "DF-10 the claim PAYS the floored amount and carries the dust (brick closed)")
+(expect "grace claim pays floor12(owed) = 0.000012345678"
+  0.000012345678 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "grace"))
+(expect "dust 9e-13 carried as pending (nothing lost)"
+  0.0000000000009 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "grace"))
+;; invariant still EXACT after a dust-carrying claim
+(env-data { "all-accts": ["alice" "bob" "carol" "dave" "eve" "bob-a" "bob-b" "erin" "frank" "grace"] })
+(let ((liab (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+      (sum-pend (fold (+) 0.0
+                  (map (lambda (a:string) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of a))
+                       (read-msg 'all-accts)))))
+  (expect "liability == Σ pending EXACT after dust-carrying claim" sum-pend liab))
+;; a dust-only claim (payout floors to 0) is REJECTED, state untouched
+(expect-failure "dust-only claim rejected (nothing payable yet)" "nothing to claim"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "grace"))
+(commit-tx)
+
+(begin-tx "DF-10 next round SWEEPS the dust into a payable claim")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R8" 0.1 (time "2027-06-01T00:00:00Z"))
+;; grace raw = dust 9e-13 + 123.456789*0.1 = 12.3456789000009 -> pays 12.345678900000, dust 9e-13 again
+(env-keys ["admin-key"])
+(let* ((liab (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+       (poolbal (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT))
+       (topup (- (+ (floor liab 12) 0.000000000001) poolbal)))
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT topup)] }])
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" topup)
+  (env-keys ["admin-key"])
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends topup))
+(expect "grace claim pays 12.345678900000 (old dust included in raw, re-floored)"
+  12.345678900000 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "grace"))
+(expect "dust again 9e-13 (carried, never lost)"
+  0.0000000000009 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "grace"))
+(commit-tx)
+
+;; ===========================================================================
+;; DF-11 — FIFTH-PASS REGRESSION (MED-1): fundability at circ = 0.
+;; Amendment 1 exists to keep the crystallized pending of DEPARTED shares payable;
+;; but the old (> circ 0.0) gate refused the module's own funding path at the exact
+;; boundary it was built for: every holder exits (a dump to the excluded treasury
+;; is the same counter path as a cross-chain exit's step-0 debit) -> circ = 0 with
+;; pending stranded and UNfundable through fund-dividends. Amendment 4: fundable
+;; iff circ > 0 OR floor12(L) > 0. Only a DEAD chain (circ = 0 AND nothing payable)
+;; is refused, so cash can never be parked in the no-exit pool for no one.
+;; ===========================================================================
+(begin-tx "DF-11 every remaining holder exits to the excluded treasury -> circ = 0")
+;; each holder dumps their FULL balance (scoped sigs — managed TRANSFER caps need
+;; exact amounts; the suite is deterministic so the literals are the live balances).
+;; bob-a and frank are already at 0 (drained/dumped earlier in the suite).
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT 276.543211)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "alice" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT 276.543211)
+(env-sigs [{ "key": "bob-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "bob" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT 1000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "bob" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT 1000.0)
+(env-sigs [{ "key": "bob-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "bob-b" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT 1000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "bob-b" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT 1000.0)
+(env-sigs [{ "key": "carol-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "carol" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT 500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "carol" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT 500.0)
+(env-sigs [{ "key": "dave-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "dave" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT 1000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "dave" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT 1000.0)
+(env-sigs [{ "key": "erin-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "erin" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT 100.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "erin" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT 100.0)
+(env-sigs [{ "key": "grace-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "grace" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT 123.456789)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "grace" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT 123.456789)
+(expect "circulating is now ZERO" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
+(env-data { "all-accts": ["alice" "bob" "carol" "dave" "bob-a" "bob-b" "erin" "frank" "grace"] })
+(let ((l (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+      (sum-pend (fold (+) 0.0
+                  (map (lambda (a:string) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of a))
+                       (read-msg 'all-accts)))))
+  (expect "liability == Σ pending EXACT at circ=0 (stranded pending)" sum-pend l)
+  (expect "a payable liability is stranded here" true (> (floor l 12) 0.0)))
+(commit-tx)
+
+(begin-tx "DF-11 fund-dividends WORKS at circ=0 (the fifth-pass MED-1 regression)")
+(let* ((l (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+       (poolbal (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT))
+       (short (- (+ (floor l 12) 0.000000000001) poolbal))
+       (dep (if (> short 1.0) short 1.0)))   ; top up any shortfall; at least 1 KDA to exercise the path
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT dep)] }])
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" dep)
+  (env-keys ["admin-key"])
+  ;; pre-fix this aborted with "no circulating float" — the designed funding path
+  ;; refused the exact boundary Amendment 1 was built for
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends dep))
+(let ((l (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+      (poolbal (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT)))
+  (expect "pool covers the full stranded liability" true (>= poolbal (floor l 12))))
+(commit-tx)
+
+;; each claim in its OWN tx (as on-chain): bob/bob-a/bob-b share one guard, so their
+;; recipient principal and payout collide as a managed coin.TRANSFER install if
+;; claimed inside a single tx — a REPL-session artifact, not a contract property.
+(begin-tx "DF-11 claim alice")
+(let ((p (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "alice")))
+  (if (> (floor p 12) 0.0) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "alice") 0.0))
+(commit-tx)
+(begin-tx "DF-11 claim bob")
+(let ((p (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "bob")))
+  (if (> (floor p 12) 0.0) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "bob") 0.0))
+(commit-tx)
+(begin-tx "DF-11 claim carol")
+(let ((p (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "carol")))
+  (if (> (floor p 12) 0.0) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "carol") 0.0))
+(commit-tx)
+(begin-tx "DF-11 claim dave")
+(let ((p (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "dave")))
+  (if (> (floor p 12) 0.0) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "dave") 0.0))
+(commit-tx)
+(begin-tx "DF-11 claim bob-a")
+(let ((p (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "bob-a")))
+  (if (> (floor p 12) 0.0) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "bob-a") 0.0))
+(commit-tx)
+(begin-tx "DF-11 claim bob-b")
+(let ((p (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "bob-b")))
+  (if (> (floor p 12) 0.0) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "bob-b") 0.0))
+(commit-tx)
+(begin-tx "DF-11 claim erin")
+(let ((p (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "erin")))
+  (if (> (floor p 12) 0.0) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "erin") 0.0))
+(commit-tx)
+(begin-tx "DF-11 claim frank")
+(let ((p (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "frank")))
+  (if (> (floor p 12) 0.0) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "frank") 0.0))
+(commit-tx)
+(begin-tx "DF-11 claim grace")
+(let ((p (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "grace")))
+  (if (> (floor p 12) 0.0) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "grace") 0.0))
+(commit-tx)
+
+(begin-tx "DF-11 after the stranded drain: identity exact, only dust owed")
+(env-data { "all-accts": ["alice" "bob" "carol" "dave" "bob-a" "bob-b" "erin" "frank" "grace"] })
+(let ((l (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+      (sum-pend (fold (+) 0.0
+                  (map (lambda (a:string) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of a))
+                       (read-msg 'all-accts)))))
+  (expect "liability == Σ pending EXACT after the stranded drain" sum-pend l)
+  ;; COMPOSITION property (5th pass): per-account dust is each < 1e-12 (unclaimable),
+  ;; but Σ dust across the 9 accounts crossed the 12-dp threshold — the AGGREGATE
+  ;; stays counted in L (conservation: nothing silently vanishes), so floor12(L) is
+  ;; one dust quantum, not 0, and the chain is deliberately still "fundable".
+  (expect "aggregate dust crossed 1e-12 and stays counted in L" 0.000000000001 (floor l 12))
+  (expect "pool still covers the aggregate-dust liability" true
+    (>= (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT) (floor l 12))))
+(commit-tx)
+;; (the TRUE dead-chain rejection — circ = 0 AND L exactly 0 — is proven in
+;;  smartpacts-upgrade.repl, where a migrated empty chain provides that state)
+
+(print "smartpacts-shares DIVIDEND-FAIRNESS suite PASSED")

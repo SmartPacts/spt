@@ -110,4 +110,4 @@
 (expect "released treasury shares voted (55000 yes)" 55000.0 (at 'yes (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "TP")))
 (commit-tx)
 
-(print "smartpacts-tranches TIME-LOCK suite PASSED")
+(print "smartpacts-tranches suite PASSED")

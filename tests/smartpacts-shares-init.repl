@@ -1,7 +1,7 @@
 ;; ===========================================================================
 ;; smartpacts-shares INIT-PATH guards (clean, uninitialized state via setup-noinit).
 ;; Covers TOK-R03 (init-supply off chain 0), TOK-R04 (non-admin init-supply),
-;; init-on-chain-0 forbidden, double-init rejection, and the tranche mint + time-locks.
+;; init-on-chain-0 forbidden, double-init rejection, and the tranche mint.
 ;; ===========================================================================
 (load "setup-noinit.repl")
 
@@ -42,7 +42,7 @@
 (expect-failure "Use init-supply on chain 0" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.init "ipo-x"))
 (commit-tx)
 
-;; --- happy path: init-supply on chain 0 succeeds; mint + tranche locks ---
+;; --- happy path: init-supply on chain 0 succeeds; mint + locks ---
 (begin-tx "init-supply chain 0 ok")
 (env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
 (env-keys ["admin-key"])
@@ -72,7 +72,7 @@
 
 ;; ---------------------------------------------------------------------------
 ;; TOK-R24 — fund-dividends with circulating-supply = 0 is rejected.
-;; fund-dividends enforces `circulating-supply > 0`.
+;; The original design required `circulating-supply > 0` to fund.
 ;; The guard rejects funding at zero float, which would otherwise bump rps and
 ;; strand the funded KDA in the pool (a future holder's reward-debt would init to
 ;; the bumped rps, so it could never be claimed).
@@ -83,7 +83,7 @@
 (env-keys ["admin-key"])
 (expect "circulating is 0" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
 (expect-failure "no circulating float"
-  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 100.0 0.02))
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 100.0))
 (expect "rps unchanged at zero float" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps))
 (commit-tx)
 
