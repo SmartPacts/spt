@@ -1,7 +1,7 @@
 # SPT — Architecture
 
 This document describes the system as deployed. Each section states the design and *why* it is
-built that way. The sources in [`contracts/`](../contracts/) are the deployed modules, verbatim.
+built that way. The sources in [`contracts/testnet06/`](../contracts/testnet06/) are the deployed modules, verbatim (the mainnet release candidate lives in [`contracts/mainnet/`](../contracts/mainnet/) — see [TESTNET-VS-MAINNET.md](TESTNET-VS-MAINNET.md)).
 For the long-form plain-language tour, see [HOW-IT-WORKS.md](HOW-IT-WORKS.md).
 
 ## 1. Token

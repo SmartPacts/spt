@@ -24,7 +24,7 @@ not by policy, and not by anyone's goodwill.
 
 ## Verify, don't trust
 
-The contracts in [`contracts/`](contracts/) are the deployed modules **verbatim** — the network
+The contracts in [`contracts/testnet06/`](contracts/testnet06/) are the deployed modules **verbatim** — the network
 stores the module source, and one command compares this repository against all 20 chains:
 
 ```bash
@@ -43,7 +43,8 @@ supply, reserves, time-locks, the live vote — are in [docs/VERIFICATION.md](do
 | [`docs/HOW-IT-WORKS.md`](docs/HOW-IT-WORKS.md) | The whole system in plain language — every module, account, and mechanism, with the business reasoning |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | The terse engineering summary of the same design |
 | [`docs/SECURITY-MODEL.md`](docs/SECURITY-MODEL.md) | Invariants, threats designed against, operator powers and limits, and the honest review status |
-| [`contracts/`](contracts/) | The three deployed Pact modules |
+| [`contracts/testnet06/`](contracts/testnet06/) | The three deployed Pact modules (live on testnet06, byte-verifiable) |
+| [`contracts/mainnet/`](contracts/mainnet/) | The mainnet **release candidate** — not deployed, published for review; see [Testnet vs. mainnet](docs/TESTNET-VS-MAINNET.md) |
 | [`tests/`](tests/) | The full regression suite — 11 REPL suites including two red-team suites, runnable offline ([how](tests/README.md)) |
 | [`docs/VERIFICATION.md`](docs/VERIFICATION.md) | Every on-chain fact, and how to check it yourself |
 | [`docs/DEPLOYMENTS.md`](docs/DEPLOYMENTS.md) | Dated record of every deployment and upgrade (including the deprecated prior namespace) |

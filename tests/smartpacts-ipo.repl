@@ -86,7 +86,7 @@
   , "spt-admin-name": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.spt-admin"
   , "spt-admin": { "keys": ["admin-key"], "pred": "keys-all" } })
 (env-keys ["admin-key"])
-(load "../contracts/smartpacts-ipo.pact")
+(load "../contracts/testnet06/smartpacts-ipo.pact")
 ;; init did NOT re-run and the pre-redeploy price config survived
 (expect "price config survived the redeploy" 1.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.get-price))
 (commit-tx)
