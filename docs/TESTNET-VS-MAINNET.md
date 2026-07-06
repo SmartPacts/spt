@@ -51,10 +51,17 @@ lineages ever drift beyond it.
 3. **The gas station's sponsored-call allowlist.** Same change, same reason: the two allowlisted
    call prefixes derive their namespace from the deploy transaction instead of hardcoding it.
 
-4. **A review banner** at the top of each candidate file, so the file itself says what it is even
+4. **Token identity constants (candidate only).** `NAME` ("Smart Pacts Token") and `SYMBOL`
+   ("SPT") as constants in `smartpacts-shares` — self-documentation readable via
+   `describe-module`. No wallet or explorer consumes such constants today; they are added to the
+   candidate (not retrofitted to testnet) because constants are compiled code — the module hash
+   changes — and the only free moment to add them is before a hash-anchored deployment exists.
+
+5. **A review banner** at the top of each candidate file, so the file itself says what it is even
    when read in isolation.
 
-Nothing else differs — not a function, not a check, not a constant.
+Nothing else differs — not a function and not a check; the only constants that differ are the
+identity pair above and the namespace-derived values in (2) and (3).
 
 ## What the tests say
 
