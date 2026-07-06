@@ -150,6 +150,13 @@
   ;; ========================================================================
   ;; CONSTANTS
   ;; ========================================================================
+  ;; Token identity — self-documentation readable via describe-module. No wallet
+  ;; or explorer consumes these today; they exist so the deployed module names
+  ;; itself forever, and as the natural hook if the ecosystem adopts a metadata
+  ;; standard. Decimals are already discoverable via the fungible-v2 (precision)
+  ;; function / MINIMUM-PRECISION (12).
+  (defconst NAME:string "Smart Pacts Token")
+  (defconst SYMBOL:string "SPT")
   (defconst TOTAL-SUPPLY 100000.0)
   ;; ---- Tranche allocation + release calendar ----
   ;; THE CALENDAR IS SOURCE, NOT DATA: init-supply stamps T = its block-time once; every

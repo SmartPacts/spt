@@ -49,6 +49,10 @@
 (expect "shares ADMIN-KS derived from the deploy ns"
   "n_candidate0000000000000000000000000000000000.spt-admin"
   n_candidate0000000000000000000000000000000000.smartpacts-shares.ADMIN-KS)
+;; token identity constants (candidate-only; see docs/TESTNET-VS-MAINNET.md #4)
+(expect "NAME constant" "Smart Pacts Token" n_candidate0000000000000000000000000000000000.smartpacts-shares.NAME)
+(expect "SYMBOL constant" "SPT" n_candidate0000000000000000000000000000000000.smartpacts-shares.SYMBOL)
+(expect "decimals via fungible-v2 precision" 12 (n_candidate0000000000000000000000000000000000.smartpacts-shares.precision))
 (expect "station allowlist derived: a real sponsored call matches" true
   (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.allowlisted?
     "(n_candidate0000000000000000000000000000000000.smartpacts-shares.claim-dividends \"k:alice\")"))

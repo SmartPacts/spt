@@ -55,6 +55,13 @@ const DIFFS = [
     },
   },
   {
+    name: 'token identity constants (mainnet only): NAME/SYMBOL defconsts — self-documentation via describe-module; added to the candidate pre-freeze because constants are compiled code (hash-relevant), so they can never be added after deploy',
+    apply(side, src) {
+      if (side !== 'mainnet') return src;
+      return src.replace(/^\s*;; Token identity — self-documentation[\s\S]*?\(defconst SYMBOL:string "SPT"\)\n/m, '');
+    },
+  },
+  {
     name: 'migrate-adr015 (testnet only): the one-shot data migration that healed the in-place dividend-accrual upgrade of 2026-07-05 — test-event lifecycle; a fresh mainnet deployment writes the full schema at init and never migrates',
     apply(side, src) {
       if (side !== 'testnet06') return src;
