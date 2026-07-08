@@ -59,6 +59,16 @@
 (expect "station allowlist derived: an unsponsored call does not match" false
   (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.allowlisted?
     "(n_candidate0000000000000000000000000000000000.smartpacts-shares.transfer \"a\" \"b\" 1.0)"))
+;; gas-ceiling positivity guard (candidate-only; red-team O1; see TESTNET-VS-MAINNET.md #6)
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z"), "gas-price": 0.0, "gas-limit": 1500 })
+(expect-failure "gas price of 0 is rejected by the positivity guard" "Gas price must be positive"
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.enforce-below-or-at-gas-price 0.000001))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z"), "gas-price": 0.000001, "gas-limit": 0 })
+(expect-failure "gas limit of 0 is rejected by the positivity guard" "Gas limit must be positive"
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.enforce-below-or-at-gas-limit 1500))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z"), "gas-price": 0.000001, "gas-limit": 1500 })
+(expect "positive within-ceiling values still pass" true
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.enforce-below-or-at-gas-limit 1500))
 (commit-tx)
 
 ;; --- fresh-deploy init + the dividend core on the candidate ---

@@ -62,6 +62,12 @@
   ;; Key = (hash [chain account proposal]). Adjusted live: cast-vote sets it to current balance;
   ;; a debit releases min(debited, voted) from it (and the tally). Chain-bound so cross-chain
   ;; votes from the same account on different chains are distinct rows.
+  ;; INVARIANT SCOPE: weight <= current balance holds only while the proposal is ACTIVE (release
+  ;; fires on debit only for active proposals). After close-at a later debit does NOT touch this
+  ;; row, so a closed proposal's row may carry weight > balance. That is INERT: the canonical
+  ;; result is the frozen tally + post-close hub aggregation — nothing reads account-votes after
+  ;; close — so no double-count is reachable. The row is a live working record, not post-close
+  ;; state; it is deliberately not swept (a cleanup path would add surface for data nothing reads).
   (defschema account-vote weight:decimal direction:bool)
   (deftable account-votes:{account-vote})
 
