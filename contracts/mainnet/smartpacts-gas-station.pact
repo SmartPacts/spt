@@ -134,11 +134,17 @@
   ;; ========================================================================
   ;; GAS CEILINGS (inlined — no external dependency)
   ;; ========================================================================
+  ;; Both bounds enforced: positive (a non-positive gas price/limit is rejected by
+  ;; Chainweb before it reaches here, so this is defense-in-depth — the contract no
+  ;; longer relies on that external invariant) AND at-or-below the ceiling. Reads are
+  ;; (at 'k (chain-data)), not table reads, so they are safe inside enforce on-node.
   (defun enforce-below-or-at-gas-price:bool (gas-price:decimal)
+    (enforce (> (at 'gas-price (chain-data)) 0.0) "Gas price must be positive")
     (enforce (<= (at 'gas-price (chain-data)) gas-price)
       (format "Gas price must be <= {}" [gas-price])))
 
   (defun enforce-below-or-at-gas-limit:bool (gas-limit:integer)
+    (enforce (> (at 'gas-limit (chain-data)) 0) "Gas limit must be positive")
     (enforce (<= (at 'gas-limit (chain-data)) gas-limit)
       (format "Gas limit must be <= {}" [gas-limit])))
 

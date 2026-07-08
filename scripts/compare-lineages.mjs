@@ -55,6 +55,24 @@ const DIFFS = [
     },
   },
   {
+    name: 'gas-ceiling positivity guard (mainnet only, TEMPORARY): the candidate additionally enforces gas price/limit > 0 (defense in depth; Chainweb already rejects non-positive values before the contract). A hardening from the community red-team, added to the RC pre-freeze — it will also land on testnet when that lineage is next re-frozen; not a permanent testnet-vs-mainnet split',
+    apply(side, src) {
+      if (side !== 'mainnet') return src;
+      // strip the two added positivity lines + the explanatory comment block, back to the testnet shape
+      src = src.replace(/^\s*;; Both bounds enforced: positive[\s\S]*?on-node\.\n/m, '');
+      src = src.replace(/^\s*\(enforce \(> \(at 'gas-price \(chain-data\)\) 0\.0\) "Gas price must be positive"\)\n/m, '');
+      src = src.replace(/^\s*\(enforce \(> \(at 'gas-limit \(chain-data\)\) 0\) "Gas limit must be positive"\)\n/m, '');
+      return src;
+    },
+  },
+  {
+    name: 'account-votes post-close invariant note (mainnet only, TEMPORARY): a schema-doc note recording that weight<=balance holds only while a proposal is active (inert post-close residue — the red-team O2 observation, accepted as-is). Documentation only; same temporary status as the positivity guard',
+    apply(side, src) {
+      if (side !== 'mainnet') return src;
+      return src.replace(/^\s*;; INVARIANT SCOPE: weight <= current balance[\s\S]*?not swept \(a cleanup path would add surface for data nothing reads\)\.\n/m, '');
+    },
+  },
+  {
     name: 'token identity constants (mainnet only): NAME/SYMBOL defconsts — self-documentation via describe-module; added to the candidate pre-freeze because constants are compiled code (hash-relevant), so they can never be added after deploy',
     apply(side, src) {
       if (side !== 'mainnet') return src;

@@ -57,7 +57,19 @@ lineages ever drift beyond it.
    candidate (not retrofitted to testnet) because constants are compiled code — the module hash
    changes — and the only free moment to add them is before a hash-anchored deployment exists.
 
-5. **A review banner** at the top of each candidate file, so the file itself says what it is even
+6. **Gas-ceiling positivity guard (candidate only, temporary).** The candidate's gas station
+   additionally rejects a non-positive gas price/limit (`> 0`), on top of the existing
+   at-or-below-ceiling checks — defense in depth, so the contract no longer relies on Chainweb
+   rejecting such values upstream. A hardening surfaced by an external community red-team; it is in
+   the candidate now (pre-freeze is the free moment) and will also land on the testnet lineage when
+   that is next re-frozen. Not a permanent architectural split — a pending improvement.
+
+7. **`account-votes` post-close note (candidate only, temporary).** A schema-doc note recording
+   that the `weight <= balance` invariant holds only while a proposal is active; after close the
+   row is inert history that nothing reads (documentation, not behavior). Same red-team origin and
+   same temporary status as #6.
+
+8. **A review banner** at the top of each candidate file, so the file itself says what it is even
    when read in isolation.
 
 Nothing else differs — not a function and not a check; the only constants that differ are the
