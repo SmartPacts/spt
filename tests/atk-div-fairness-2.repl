@@ -1,0 +1,52 @@
+(load "setup.repl")
+
+;; ATK-2: mover shares ANTES de que una ronda FUTURA sea efectiva, cobrar en
+;; origen el pending crystallizado, y luego avanzar tiempo. Hipotesis: si el debit
+;; crystalliza contra get-rps que YA incluye la ronda futura (bug de gating), el
+;; emisor cobraria la ronda futura Y el receptor tambien -> doble.
+(begin-tx "seed alice 3000 / bob 2000")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+          , "bob":   { "keys": ["bob-key"],   "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1500.0) (coin.TRANSFER "sender00" "bob" 1000.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1500.0)
+(coin.transfer-create "sender00" "bob"   (read-keyset 'bob)   1000.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "alice" (read-keyset 'alice) 3000.0)
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "bob" (read-keyset 'bob) 2000.0)
+(commit-tx)
+
+;; declarar ronda FUTURA (efectiva 2026-09-01, hoy es 2026-06-01)
+(begin-tx "declare FUTURE round R1 rate 0.05 eff 2026-09-01")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R1" 0.05 (time "2026-09-01T00:00:00Z"))
+(print (format "rps AHORA (jun) = {} (debe ser 0.0)" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps)]))
+(commit-tx)
+
+;; alice (3000) manda 3000 a carol JUSTO antes de que la ronda sea efectiva.
+(begin-tx "alice->carol 3000 (antes de efectiva)")
+(env-data { "carol": { "keys": ["carol-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "carol" 3000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "carol" (read-keyset 'carol) 3000.0)
+(print (format "alice pending tras enviar (rps aun 0) = {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "alice")]))
+(print (format "carol pending tras recibir = {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "carol")]))
+(commit-tx)
+
+;; avanzar tiempo: la ronda se vuelve efectiva
+(begin-tx "avanzar a sept, ronda efectiva")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-09-02T00:00:00Z") })
+(let* ((pa (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "alice"))
+       (pc (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "carol"))
+       (total (+ pa pc)))
+  (print (format "rps sept = {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps)]))
+  (print (format "alice pending={} carol pending={} total={}" [pa pc total]))
+  (print "FAIR: las 3000 estaban en carol cuando la ronda se hizo efectiva -> carol=150, alice=0, total=150")
+  (print "Si alice cobra algo de R1 => DOBLE (ella ya no tenia las shares) => ROTO")
+  (expect "alice no cobra R1 (envio antes de efectiva)" 0.0 pa)
+  (expect "carol cobra 3000*0.05=150" 150.0 pc)
+  (expect "total=150 fair" 150.0 total))
+(commit-tx)
+(print "ATK-2 done")

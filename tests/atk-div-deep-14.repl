@@ -1,0 +1,36 @@
+;; V14 — TRANSFERENCIAS FRACCIONARIAS alrededor de la fecha efectiva.
+;; alice mueve trozos a bob justo antes/después de que R1 sea efectiva. La suma total
+;; devengada del par no puede exceder circ*rps. Oráculo O1==On tras cada movimiento.
+(load "setup.repl")
+(load "seed-div.repl")
+(env-data { "accts": ["alice" "bob"] })
+;; R1 efectiva AHORA (2026-06-01). alice=3000 bob=2000.
+(begin-tx "V14 declara R1 0.02 efectiva ahora")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R1" 0.02 (time "2026-06-01T00:00:00Z"))
+(commit-tx)
+;; alice devenga 60, bob 40. Ahora alice mueve 333.333333 a bob (fraccionario) DESPUES de efectiva.
+(begin-tx "V14 alice->bob 333.333333 tras efectiva")
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "bob" 333.333333)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "alice" "bob" 333.333333)
+(let ((o1 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+      (on (fold (+) 0.0 (map (lambda (a:string) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of a)) (read-msg 'accts))))
+      (circ (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
+      (rps (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps)))
+  (print (format "V14 ORACULO: O1={} On={} circ*rps={}" [o1 on (* circ rps)]))
+  (expect "V14 O1==On tras transferencia fraccionaria" on o1)
+  ;; el devengado del par no puede superar circ*rps: alice movio DESPUES de devengar,
+  ;; su 60 se cristaliza, bob recibe a rps global -> el par sigue 100.
+  (expect "V14 devengado total == circ*rps == 100 (ni doble-pago ni pérdida)" 100.0 o1))
+(commit-tx)
+;; segundo movimiento fraccionario de vuelta bob->alice, mismo dia
+(begin-tx "V14b bob->alice 111.111111 vuelta")
+(env-sigs [{ "key": "bob-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "bob" "alice" 111.111111)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "bob" "alice" 111.111111)
+(let ((o1 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+      (on (fold (+) 0.0 (map (lambda (a:string) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of a)) (read-msg 'accts)))))
+  (print (format "V14b ORACULO: O1={} On={}" [o1 on]))
+  (expect "V14b O1==On tras churn fraccionario" on o1)
+  (expect "V14b devengado total sigue exacto 100" 100.0 o1))
+(commit-tx)
+(print "V14 FIN")

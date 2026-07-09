@@ -1,0 +1,95 @@
+;; ATK div-solvency-6: OFF-BY-ONE en el guard de fund-dividends (>= floor(L)).
+;; Angulo nuevo: financiar EXACTAMENTE floor(L) (limite del guard, sin margen) y comprobar
+;; que TODOS los holders pueden cobrar su floor12 sin que el pool quede negativo,
+;; y que financiar floor(L)-1quantum es RECHAZADO. Tambien: cuenta nueva via credit
+;; nunca queda con balance negativo pese al sentinel -1.0.
+(load "setup.repl")
+
+(begin-tx "seed alice 3000 / bob 2000")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+          , "bob":   { "keys": ["bob-key"],   "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1500.0) (coin.TRANSFER "sender00" "bob" 1000.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1500.0)
+(coin.transfer-create "sender00" "bob"   (read-keyset 'bob)   1000.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "alice" (read-keyset 'alice) 3000.0)
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "bob" (read-keyset 'bob) 2000.0)
+(commit-tx)
+
+;; ronda con rate que da liability con parte fraccionaria sub-12dp:
+;; rate 0.0333333333333 (12dp) * 3000 = 99.9999999999 ; *2000 = 66.6666666666
+;; total L = 166.6666666665 (12dp exacto aqui). Elijo balances 6dp + rate 12dp para dust.
+(begin-tx "alice manda 100.000001 a carol para forzar dust")
+(env-data { "carol": { "keys": ["carol-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "carol" 100.000001)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "carol" (read-keyset 'carol) 100.000001)
+(commit-tx)
+
+(begin-tx "declara ronda 12dp -> owed con dust")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "RD" 0.000000000007 (time "2026-06-01T00:00:00Z"))
+(let* ((liab (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+       (fl (floor liab 12)))
+  (print (format "A8: liability={} floor12={} dust-agregado={}" [liab fl (- liab fl)])))
+(commit-tx)
+
+;; A8a: financiar UN QUANTUM POR DEBAJO de floor(L) -> RECHAZADO
+(begin-tx "A8a fund a floor(L) - 1e-12 -> RECHAZADO")
+(env-keys ["admin-key"])
+(let* ((liab (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+       (fl (floor liab 12))
+       (poolbal (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT))
+       (short (- (- fl 0.000000000001) poolbal)))
+  (print (format "A8a: floor(L)={} intento depositar={} (un quantum por debajo)" [fl short]))
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT (+ short 10.0))] }])
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" (+ short 10.0))
+  (env-keys ["admin-key"])
+  (if (> short 0.0)
+    (expect-failure "A8a: financiar floor(L)-1quantum RECHAZADO" "pool underfunded"
+      (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends short))
+    (print "A8a: short<=0, pool ya cubre; salto")))
+(commit-tx)
+
+;; A8b: financiar EXACTAMENTE floor(L) (limite del guard) y reclamar todos sin sobregiro
+(begin-tx "A8b fund a EXACTAMENTE floor(L) y claims")
+(env-keys ["admin-key"])
+(let* ((liab (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+       (fl (floor liab 12))
+       (poolbal (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT))
+       (dep (- fl poolbal)))
+  (print (format "A8b: fund exacto a floor(L): dep={} pool sera={}" [dep fl]))
+  (if (> dep 0.0)
+    (let ((x 0))
+      (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT dep)] }])
+      (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" dep)
+      (env-keys ["admin-key"])
+      (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends dep))
+    (print "A8b: ya cubierto")))
+(commit-tx)
+
+;; claims en tx separadas (guards distintos: alice/bob/carol)
+(begin-tx "A8b claim alice")
+(let ((p (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "alice")))
+  (if (> (floor p 12) 0.0) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "alice") 0.0))
+(expect "A8b: pool nunca negativo tras claim alice" true
+  (>= (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT) 0.0))
+(commit-tx)
+(begin-tx "A8b claim bob")
+(let ((p (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "bob")))
+  (if (> (floor p 12) 0.0) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "bob") 0.0))
+(expect "A8b: pool nunca negativo tras claim bob" true
+  (>= (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT) 0.0))
+(commit-tx)
+(begin-tx "A8b claim carol")
+(let ((p (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "carol")))
+  (if (> (floor p 12) 0.0) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "carol") 0.0))
+(let ((pool (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT)))
+  (print (format "A8b: pool final tras todos los claims = {}" [pool]))
+  (expect "A8b: pool nunca negativo tras claim carol (todos cobrados con solo floor(L))" true (>= pool 0.0)))
+(commit-tx)
+
+(print "atk-div-solvency-6 FIN")

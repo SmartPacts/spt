@@ -1,0 +1,93 @@
+(load "setup.repl")
+;; ===========================================================================
+;; ATK-VOTEKEY-6 — RECUPERACION DE COMPROMISO (thief vote survives rotate?)
+;; Escenario: un ladron roba la hot key, VOTA YES 3000. El dueno detecta el robo
+;; y ROTA su main guard (esto revoca la vote-key). Preguntas:
+;;  (a) ?El voto YES ya emitido por el ladron sigue en el tally tras rotate? (si;
+;;      rotate solo revoca capacidad futura, no borra el voto historico)
+;;  (b) ?Puede el LADRON re-votar tras rotate? -> debe FALLAR (delegado revocado)
+;;  (c) ?Puede el DUENO con su NUEVA main key corregir el voto a NO? -> debe PODER
+;;      (main guard nunca bloqueado). Esto demuestra que la recuperacion funciona.
+;;  (d) ANGULO EXTRA: tras rotate, el dueno RE-REGISTRA una vote-key NUEVA con la
+;;      nueva main; el LADRON con la hot vieja no debe poder votar. Confirmar que
+;;      set-vote-key sobrescribe el guard (no queda la hot vieja tambien valida).
+;; ===========================================================================
+(begin-tx "activate IPO")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(commit-tx)
+(begin-tx "seed alice 3000")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1500.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1500.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "alice" (read-keyset 'alice) 3000.0)
+(commit-tx)
+(begin-tx "announce proposal")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-proposal "P6" "t" "d" (time "2026-06-01T00:00:00Z") 259200)
+(commit-tx)
+
+;; owner registers hot (later stolen)
+(begin-tx "register hot (later stolen)")
+(env-data { "hot": { "keys": ["stolen-hot"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.VOTE-KEY-ADMIN "alice")] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.set-vote-key "alice" (read-keyset 'hot))
+(commit-tx)
+
+;; thief votes YES 3000
+(begin-tx "THIEF votes YES 3000")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(env-sigs [])
+(env-keys ["stolen-hot"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "P6" true)
+(print (format "yes tras voto del ladron: {}" [(at 'yes (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P6"))]))
+(commit-tx)
+
+;; owner rotates main guard -> revokes vote-key
+(begin-tx "owner rotates main guard (recovery)")
+(env-data { "a2": { "keys": ["alice-new"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.ROTATE "alice")] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.rotate "alice" (read-keyset 'a2))
+(print (format "(a) yes tras rotate (voto historico sobrevive): {}" [(at 'yes (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P6"))]))
+(expect "delegate revoked" false (at 'active (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-vote-key "alice")))
+(commit-tx)
+
+;; (b) thief cannot re-vote
+(begin-tx "(b) thief tries to re-vote after rotate")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(env-sigs [])
+(env-keys ["stolen-hot"])
+(print "== (b) ladron re-vota tras rotate ==")
+(expect-failure "revoked thief cannot re-vote"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "P6" true))
+(commit-tx)
+
+;; (c) owner with NEW key corrects the vote to NO
+(begin-tx "(c) owner corrects vote with NEW main key")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(env-sigs [])
+(env-keys ["alice-new"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "P6" false)
+(print (format "(c) yes tras correccion del dueno: {} / no: {}"
+  [(at 'yes (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P6"))
+   (at 'no (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P6"))]))
+(expect "owner recovered: yes=0" 0.0 (at 'yes (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P6")))
+(expect "owner recovered: no=3000" 3000.0 (at 'no (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P6")))
+(commit-tx)
+
+;; (d) owner re-registers a NEW hot with NEW main; old stolen-hot must NOT vote
+(begin-tx "(d) re-register new hot; old stolen-hot invalid")
+(env-data { "nh": { "keys": ["new-hot"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-new", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.VOTE-KEY-ADMIN "alice")] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.set-vote-key "alice" (read-keyset 'nh))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(env-sigs [])
+(env-keys ["stolen-hot"])
+(print "== (d) hot vieja robada tras re-registro de hot nueva ==")
+(expect-failure "old stolen-hot cannot vote after re-register overwrites guard"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "P6" true))
+(commit-tx)
+
+(print "ATK-VOTEKEY-6 done")

@@ -1,0 +1,50 @@
+(load "setup.repl")
+
+;; ATK-3: SALTAR EL PER-EPOCH CAP.
+;; charge-epoch hace rollover cuando (>= (diff-time now es) (dec EPOCH-LEN)).
+;; Vector 3a: avanzar block-time >24h entre ráfagas -> resetea el cap.
+;;   ¿Es esto un salto? El reset es time-only; en un chain real el atacante NO
+;;   controla block-time (lo fija el consenso). Pero probamos: si con saltos de
+;;   tiempo se puede drenar > EPOCH-CAP en la "misma sesión", cuantificamos.
+;; Vector 3b: off-by-one en el umbral de rollover (diff == EPOCH-LEN-1 exacto).
+;; Vector 3c: block-time HACIA ATRÁS (now < epoch-start) -> ¿spent negativo o bypass?
+
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-01-01T00:00:00Z")
+                , "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "cont" })
+
+;; --- 3a: llenar el cap en la época E0 ---
+(begin-tx "ATK-3a: llenar cap epoca E0 (100 txs)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-01-01T00:00:00Z")
+                , "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "cont" })
+(map (lambda (i:integer)
+       (test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER (format "k:e0-{}" [i]) 1500 0.000001)))
+  (enumerate 1 100))
+(print (format "spent E0 tras 100 txs = {} (cap {})"
+  [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.get-epoch-spent)
+   n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.EPOCH-CAP]))
+(commit-tx)
+
+;; --- la 101 en la misma época debe fallar ---
+(begin-tx "ATK-3a: 101 en E0 rechazada")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-01-01T06:00:00Z")
+                , "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "cont" })
+(expect-failure "cap alcanzado en E0" "epoch cap reached"
+  (test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:e0-over" 1500 0.000001)))
+(commit-tx)
+
+;; --- 3b: OFF-BY-ONE en el umbral. rollover = (>= (diff-time now es) (dec EPOCH-LEN))
+;;     es = 2027-01-01T00:00:00. EPOCH-LEN=86400, dec-1 = 86399s. 
+;;     now a 86399s exactos = 2027-01-01T23:59:59 -> diff=86399 >= 86399 -> ROLLOVER!
+;;     Es decir, a 1s ANTES de las 24h ya resetea. ¿Bug? El comentario dice 24h.
+(begin-tx "ATK-3b: off-by-one, rollover a 23:59:59 (86399s, no 86400)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-01-01T23:59:59Z")
+                , "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "cont" })
+;; si resetea aquí, esta tx pasa y spent vuelve a MAX-TX-COST
+(test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:ob1" 1500 0.000001))
+(print (format "spent tras tx a 86399s = {} (si == MAX-TX-COST hubo rollover 1s antes de 24h)"
+  [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.get-epoch-spent)]))
+(commit-tx)

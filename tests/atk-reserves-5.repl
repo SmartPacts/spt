@@ -1,0 +1,69 @@
+;; ATK-RESERVES-5: drenar la IPO reserve (SPT) y sales-income (KDA) fuera de buy-shares/withdraw-proceeds.
+(load "setup.repl")
+
+(begin-tx "activar IPO")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(commit-tx)
+
+;; (1) Adquirir IPO-RESERVE-CAP externamente => bloqueado
+(begin-tx "R5a: IPO-RESERVE-CAP externamente")
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(env-keys ["atk-key"])
+(expect-failure "IPO-RESERVE-CAP unacquirable"  (with-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-CAP) "x"))
+(expect-failure "SALES-INCOME-CAP unacquirable" (with-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-CAP) "x"))
+(commit-tx)
+
+;; (2) install smartpacts-shares.TRANSFER desde la IPO reserve en tx code y transferir SPT gratis => bloqueado
+(begin-tx "R5b: install TRANSFER desde IPO reserve en tx code")
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(env-keys ["atk-key"])
+(expect-failure "no puedo instalar+transferir SPT de la IPO reserve"
+  (let ((_ 0))
+    (install-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT "atk" 5000.0))
+    (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT "atk" (read-keyset 'atk) 5000.0)))
+(commit-tx)
+
+;; (3) buy-shares pagando MENOS (precio 0.5): intentar comprar con cost redondeado a 0 => rechazado.
+(begin-tx "R5c: comprar cantidad cuyo coste redondea a 0")
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(env-keys ["atk-key"])
+;; amount tal que amount*0.5 < 1e-12 => cost floor 0 => enforce cost>0 falla. amount=1e-12 => cost=floor(5e-13,12)=0
+(env-sigs [{ "key": "atk-key", "caps": [] }])
+(expect-failure "compra con coste 0 rechazada"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "atk" (read-keyset 'atk) 0.000000000001))
+(commit-tx)
+
+;; (4) drenar sales-income KDA: withdraw-proceeds no-admin + install coin.TRANSFER externo
+(begin-tx "R5d: drenar sales-income KDA")
+(env-keys ["atk-key"])
+(expect-failure "withdraw-proceeds no-admin bloqueado"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.withdraw-proceeds "atk" 1.0))
+(expect-failure "install+transfer sales-income KDA externo bloqueado"
+  (let ((_ 0))
+    (install-capability (coin.TRANSFER n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT "atk" 1.0))
+    (coin.transfer n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT "atk" 1.0)))
+(commit-tx)
+
+;; (5) ANGULO NUEVO: la IPO reserve esta EXCLUIDA (state.ipo-reserve-account). 
+;;     Intentar hacerla votar o cobrar dividendo (exfiltrar valor de una reserva via governance/dividendos).
+(begin-tx "R5e: IPO reserve excluida no vota ni cobra dividendo")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-proposal "PX" "t" "d" (time "2026-06-02T00:00:00Z") 259200)
+(commit-tx)
+(begin-tx "R5e2: IPO reserve no puede votar ni reclamar")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })
+;; la IPO reserve SPT account esta guardada por cap; ni con admin se puede firmar su guard para VOTE
+(env-keys ["admin-key"])
+(expect-failure "IPO reserve excluida no vota"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT "PX" true))
+(expect "IPO reserve pending dividends = 0 (excluida)" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT))
+(commit-tx)
+
+(begin-tx "R5: IPO reserve intacta")
+(print (format "IPO reserve SPT: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT)]))
+(expect "IPO reserve sigue 20000" 20000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT))
+(commit-tx)
+(print "ATK-RESERVES-5 done")

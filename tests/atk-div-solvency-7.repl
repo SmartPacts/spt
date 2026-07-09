@@ -1,0 +1,71 @@
+;; ATK div-solvency-7: desincronizar reward-debt vs rps con apply-round intercalado
+;; entre claims para cobrar de mas (residuos a favor del atacante).
+;; Angulo: apply-round es PERMISSIONLESS. Un atacante puede llamarlo cuando quiera.
+;; Hipotesis: intercalar apply-round entre transfer y claim para que el checkpoint
+;; del holder use un rps distinto al de la liability y cobre 2 veces el mismo devengo.
+(load "setup.repl")
+
+(begin-tx "seed alice 4000")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 2000.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 2000.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 2000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "alice" (read-keyset 'alice) 4000.0)
+(commit-tx)
+
+;; mallory recibe 1000
+(begin-tx "mallory recibe 1000")
+(env-data { "mallory": { "keys": ["mal-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "mallory" 1000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "mallory" (read-keyset 'mallory) 1000.0)
+(commit-tx)
+
+;; declara 3 rondas efectivas ya
+(begin-tx "declara R1 R2 R3 (0.01 c/u) efectivas y funde")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R1" 0.01 (time "2026-06-01T00:00:00Z"))
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R2" 0.01 (time "2026-06-01T00:00:00Z"))
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R3" 0.01 (time "2026-06-01T00:00:00Z"))
+(let* ((liab (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+       (topup (+ (floor liab 12) 1.0)))
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT topup)] }])
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" topup)
+  (env-keys ["admin-key"])
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends topup))
+(expect "mallory owed 1000*0.03=30" 30.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "mallory"))
+(commit-tx)
+
+;; ATAQUE: mallory intercala apply-round (permissionless) ANTES y DESPUES de su claim,
+;; intentando que el rps materializado le devengue el mismo 30 dos veces.
+(begin-tx "A9 mallory: apply-round + claim + apply-round + intenta re-claim")
+(env-keys ["mal-key"])
+;; 1) apply-round materializa el rps (no cambia el valor, solo lo persiste)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.apply-round "atk1")
+(let ((p1 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "mallory")))
+  (print (format "A9: primer claim mallory = {} (esperado 30)" [p1]))
+  (expect "A9: primer claim paga 30 exacto" 30.0 p1))
+;; 2) mallory intenta re-materializar y re-reclamar el mismo devengo
+(expect-failure "A9: apply-round tras claim no crea nuevo devengo (idempotente)"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.apply-round "atk2"))
+(expect-failure "A9: re-claim inmediato rechazado (reward-debt ya al dia)" "nothing to claim"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "mallory"))
+(commit-tx)
+
+;; A9b: mallory transfiere a si-mismo-2 y de vuelta intentando resetear reward-debt para re-devengar
+(begin-tx "A9b mallory ping-pong de shares para intentar re-devengar (sin nueva ronda)")
+(env-data { "mallory2": { "keys": ["mal-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "mal-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "mallory" "mallory2" 1000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "mallory" "mallory2" (read-keyset 'mallory2) 1000.0)
+(let ((pm (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "mallory"))
+      (pm2 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "mallory2")))
+  (print (format "A9b: tras ping-pong mallory pending={} mallory2 pending={} (ambos deben ser 0, ya cobrado)" [pm pm2]))
+  (expect "A9b: mallory pending 0 (ya cobro, sin nueva ronda)" 0.0 pm)
+  (expect "A9b: mallory2 pending 0 (llega al rps global, sin devengo nuevo)" 0.0 pm2))
+(expect-failure "A9b: mallory2 no puede reclamar (0 devengado)" "nothing to claim"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "mallory2"))
+(commit-tx)
+
+(print "atk-div-solvency-7 FIN")

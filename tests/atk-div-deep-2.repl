@@ -1,0 +1,14 @@
+;; V2 — RATE = 0 (rechazo esperado; el oráculo no debe moverse).
+(load "setup.repl")
+(load "seed-div.repl")
+(env-data { "accts": ["alice" "bob"] })
+(begin-tx "V2 rate 0")
+(env-keys ["admin-key"])
+(expect-failure "V2 rate 0 rechazado" "rate must be positive"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R0" 0.0 (time "2026-06-01T00:00:00Z")))
+(let ((o1 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+      (on (fold (+) 0.0 (map (lambda (a:string) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of a)) (read-msg 'accts)))))
+  (print (format "V2 ORACULO: O1={} On={}" [o1 on]))
+  (expect "V2 O1==On (sin cambios, ambos 0)" on o1))
+(commit-tx)
+(print "V2 FIN")

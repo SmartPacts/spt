@@ -1,0 +1,63 @@
+;; ATK-SUPPLY-MINT-6: sobre-venta de la IPO como mint encubierto.
+;; buy-shares entrega `amount` SPT desde IPO-RESERVE-ACCOUNT via transfer-create (=> debit con enforce <= bal).
+;; ANGULO: pedir MAS de lo que la reserva IPO tiene (20000). Si entregara mas => mint de la nada.
+;; Mutaciones: comprar exactamente 20000 (agota), luego 0.000000000001 mas (debe fallar por insufficient);
+;;             y comprar un pico > 20000 de golpe (debe fallar sin tocar reserva).
+(load "setup.repl")
+
+;; init IPO + activar venta (admin). price=1.0 KDA/share.
+(begin-tx "M6: init IPO y activar")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 1.0)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(print (format "IPO reserva antes = {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT)]))
+(commit-tx)
+
+;; Fondear KDA al comprador
+(begin-tx "M6: fondear comprador")
+(env-data { "buyer": { "keys": ["buyer-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "buyer" 100000.0)] }])
+(coin.transfer-create "sender00" "buyer" (read-keyset 'buyer) 100000.0)
+(commit-tx)
+
+;; (1) comprar 20001 de golpe (> 20000 en reserva) => debit insufficient funds, sin tocar reserva
+(begin-tx "M6a: comprar 20001 (> stock)")
+(env-data { "buyer": { "keys": ["buyer-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "buyer-key", "caps": [(coin.TRANSFER "buyer" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT 20001.0)] }])
+(expect-failure "no se puede comprar mas SPT del que hay en reserva (insufficient funds)"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "buyer" (read-keyset 'buyer) 20001.0))
+(expect "reserva IPO intacta 20000" 20000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT))
+(commit-tx)
+
+;; (2) comprar exactamente 20000 (agota la reserva legitimamente, mueve no mintea)
+(begin-tx "M6b: comprar 20000 exacto")
+(env-data { "buyer": { "keys": ["buyer-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "buyer-key", "caps": [(coin.TRANSFER "buyer" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT 20000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "buyer" (read-keyset 'buyer) 20000.0)
+(print (format "buyer SPT = {}  reserva IPO = {}"
+  [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "buyer")
+   (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT)]))
+(expect "buyer recibio 20000" 20000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "buyer"))
+(expect "reserva IPO a 0" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT))
+(commit-tx)
+
+;; (3) comprar 1 mas cuando la reserva esta a 0 => insufficient
+(begin-tx "M6c: comprar tras agotar reserva")
+(env-data { "buyer": { "keys": ["buyer-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "buyer-key", "caps": [(coin.TRANSFER "buyer" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT 1.0)] }])
+(expect-failure "reserva IPO vacia: no se puede comprar mas (mint imposible)"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "buyer" (read-keyset 'buyer) 1.0))
+(commit-tx)
+
+;; INVARIANTE global: buyer(20000)+treasury(55000)+founder(10000)+liquidity(15000)+ipo(0) = 100000
+(begin-tx "M6: supply total conservado")
+(let* ((t (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT))
+       (f (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.FUNDERS-ACCOUNT))
+       (l (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.LIQUIDITY-ACCOUNT))
+       (i (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT))
+       (bu (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "buyer"))
+       (tot (+ t (+ f (+ l (+ i bu))))))
+  (print (format "TOTAL SPT = {}" [tot]))
+  (expect "supply total conservado 100000" 100000.0 tot))
+(commit-tx)
+(print "ATK-SUPPLY-MINT-6 done")

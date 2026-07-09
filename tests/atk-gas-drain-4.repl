@@ -1,0 +1,39 @@
+(load "setup.repl")
+
+;; ATK-4: CONTINUATIONS PATROCINADAS + precios límite.
+;; 4a: cont de un defpact ARBITRARIO (no vote). El contrato lo admite (residual
+;;     documentado) pero acotado por el cap. Confirmamos que NO drena > cap y que
+;;     el cont no puede ejecutar transfer de la estación.
+;; 4b: gas-price NEGATIVO -> ¿pasa el ceiling (<=) y cobra MAX-TX-COST? ¿o rompe?
+;; 4c: gas-limit 0 / negativo -> ¿pasa y patrocina "gratis" sin tocar el cap?
+;; 4d: exec-code con la MISMA llamada allowlistada repetida (length=1) pero
+;;     valores absurdos -> el cap cobra igual; no hay drenaje diferencial.
+
+;; --- 4a: cont arbitrario, medir que el cap lo acota ---
+(begin-tx "ATK-4a: cont arbitrario acotado por cap")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-03-01T00:00:00Z")
+                , "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "cont" })
+(test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:atk" 1500 0.000001))
+(print (format "cont arbitrario patrocinado, spent = {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.get-epoch-spent)]))
+(commit-tx)
+
+;; --- 4b: gas-price negativo ---
+(begin-tx "ATK-4b: gas-price negativo")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-03-01T01:00:00Z")
+                , "gas-price": -1.0, "gas-limit": 1500 })
+(env-data { "tx-type": "cont" })
+(print "-- gas-price=-1.0 --")
+(test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:atk" 1500 -1.0))
+(print (format "gas-price negativo ACEPTADO, spent = {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.get-epoch-spent)]))
+(commit-tx)
+
+;; --- 4c: gas-limit 0 ---
+(begin-tx "ATK-4c: gas-limit 0")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-03-01T02:00:00Z")
+                , "gas-price": 0.000001, "gas-limit": 0 })
+(env-data { "tx-type": "cont" })
+(print "-- gas-limit=0 --")
+(test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:atk" 0 0.000001))
+(print (format "gas-limit 0 ACEPTADO, spent = {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.get-epoch-spent)]))
+(commit-tx)

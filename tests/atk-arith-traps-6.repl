@@ -1,0 +1,82 @@
+(load "setup.repl")
+;; ATK-ARITH-6 (angulo nuevo): DESBORDES / SIGNOS / DOUBLE-FOLD en rps.
+;;  (S1) declare-round rate NEGATIVO -> debe fallar (rate > 0). Un rate<0 bajaria rps => dividendo negativo / robo inverso.
+;;  (S2) declare-round rate con 13 decimales -> enforce-unit rechaza.
+;;  (S3) apply-round DOS veces seguidas la misma ronda efectiva -> la 2a debe ser no-op
+;;       (no double-count del rate => rps NO se infla al doble).
+;;  (S4) apply-round intercalado con declare-round: fold no debe saltarse ni repetir rates.
+;;  (S5) rate ENORME (1e6/share) + claim: el pending es gigante pero fund-dividends debe
+;;       exigir cubrirlo; sin fondear, claim revierte (no paga de un pool vacio).
+;;  (S6) transfer con amount NEGATIVO -> (> amount 0.0) corta (+ no-binario no ayuda al atacante).
+;; ROTO = rps inflado por double-fold, o dividendo pagado sin fondos, o rate negativo aceptado.
+
+;; S1: rate negativo
+(begin-tx "S1 rate negativo")
+(env-keys ["admin-key"])
+(expect-failure "S1: rate negativo rechazado" "rate must be positive"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "RN" -0.05 (time "2026-06-01T00:00:00Z")))
+(commit-tx)
+
+;; S2: rate 13 decimales
+(begin-tx "S2 rate 13-dec")
+(env-keys ["admin-key"])
+(expect-failure "S2: rate 13-dec viola precision" "precision"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "RP" 0.0000000000001 (time "2026-06-01T00:00:00Z")))
+(commit-tx)
+
+;; seed float para medir rps
+(begin-tx "seed alice 3000")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(env-data { "alice": { "keys": ["ak"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1500.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1500.0)
+(env-sigs [{ "key": "ak", "caps": [(coin.TRANSFER "alice" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "alice" (read-keyset 'alice) 3000.0)
+(commit-tx)
+
+;; S3: declarar R1, aplicar dos veces
+(begin-tx "S3 declare R1 + apply x2")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R1" 0.05 (time "2026-06-01T00:00:00Z"))
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.apply-round "R1")
+(print (format "rps tras apply#1 = {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps)]))
+(expect-failure "S3: segundo apply de la misma ronda es no-op" "no newly-effective rounds"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.apply-round "R1"))
+(let ((rps (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps)))
+  (print (format "rps tras intentar apply#2 = {} (debe seguir 0.05, NO 0.10)" [rps]))
+  (enforce (= rps 0.05) "ROTO: rps inflado por double-fold"))
+(commit-tx)
+
+;; S4: intercalar declare + apply. Declaro R2 (efectiva), apply; luego R3 futura, apply no la coge.
+(begin-tx "S4 R2 efectiva + R3 futura")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R2" 0.03 (time "2026-06-01T00:00:00Z"))
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R3" 0.10 (time "2027-01-01T00:00:00Z"))
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.apply-round "R2")
+(let ((rps (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps)))
+  (print (format "rps tras R2 (R3 futura no cuenta) = {} (debe 0.08)" [rps]))
+  (enforce (= rps 0.08) "ROTO: fold cogio la ronda futura R3 o repitio R1/R2"))
+(commit-tx)
+
+;; S5: rate enorme, claim sin fondos suficientes -> revierte
+(begin-tx "S5 rate enorme + claim sin pool")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "RH" 1000000.0 (time "2027-01-01T00:00:00Z"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-02-01T00:00:00Z") })
+(let ((pend (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "alice"))
+      (pool (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT)))
+  (print (format "alice pending gigante = {} ; pool = {}" [pend pool]))
+  (print "claim debe REVERTIR: el pool no tiene fondos (coin.transfer-create falla)")
+  (expect-failure "S5: claim sin pool suficiente revierte"
+    (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "alice")))
+(commit-tx)
+
+;; S6: transfer amount negativo
+(begin-tx "S6 transfer negativo")
+(env-sigs [{ "key": "ak", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "sink" 100.0)] }])
+(expect-failure "S6: transfer negativo rechazado" "positive"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "sink2" (read-keyset 'alice) -100.0))
+(commit-tx)
+(print "ATK-ARITH-6 done")

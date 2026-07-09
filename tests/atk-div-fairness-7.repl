@@ -1,0 +1,71 @@
+(load "setup.repl")
+
+;; ATK-7: RESERVA EXCLUIDA -> FLOAT tras rondas. Treasury (excluida) tiene 55000
+;; shares que NO accruan. Tras varias rondas (rps alto), un release-tranche credita
+;; al beneficiario founder. Hipotesis: si el credit desde/hacia zona excluida no
+;; re-basa reward-debt, el beneficiario cobraria rondas pasadas (sobre-cobro) o la
+;; conservacion (owed == circ*rps) se rompe. Ademas: liberar tranche NO debe crear
+;; dividendos de la nada ni descuadrar sum-debt/sum-pending.
+(begin-tx "seed alice 3000 / bob 2000")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+          , "bob":   { "keys": ["bob-key"],   "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1500.0) (coin.TRANSFER "sender00" "bob" 1000.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1500.0)
+(coin.transfer-create "sender00" "bob"   (read-keyset 'bob)   1000.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "alice" (read-keyset 'alice) 3000.0)
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "bob" (read-keyset 'bob) 2000.0)
+(commit-tx)
+
+;; varias rondas -> rps alto
+(begin-tx "declarar 2 rondas -> rps 0.10")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R1" 0.05 (time "2026-06-01T00:00:00Z"))
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R2" 0.05 (time "2026-06-01T00:00:00Z"))
+(print (format "rps = {} circ = {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating)]))
+(commit-tx)
+
+;; conservacion ANTES del release
+(begin-tx "conservacion antes")
+(let* ((rps (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps))
+       (circ (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
+       (owed (fold (+) 0.0 (map (lambda (a:string) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of a)) ["alice" "bob"]))))
+  (print (format "ANTES: circ*rps={} owed={}" [(* circ rps) owed]))
+  (expect "conservacion antes" (* circ rps) owed))
+(commit-tx)
+
+;; avanzar tiempo para pasar el cliff del liquidity tranche (cliff 90 dias desde 2026-06-01)
+(begin-tx "avanzar 100 dias y liberar tranche liquidity")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-09-15T00:00:00Z") })
+;; declarar otra ronda para que rps sea aun mayor cuando el tranche entra
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R3" 0.03 (time "2026-09-01T00:00:00Z"))
+(print (format "rps antes del release = {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps)]))
+(let ((releasable (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.tranche-releasable "liquidity")))
+  (print (format "liquidity releasable = {}" [releasable]))
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity"))
+(commit-tx)
+
+;; el beneficiario liquidity NO debe tener pending por rondas pasadas
+(begin-tx "check beneficiario y conservacion tras release")
+(let* ((ben "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2")
+       (pb (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of ben))
+       (balb (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance ben)))
+  (print (format "beneficiario liquidity bal={} pending={}" [balb pb]))
+  (print "FAIR: shares recien liberadas llegan a rps actual -> pending 0 (no cobra rondas pasadas)")
+  (expect "beneficiario NO cobra rondas anteriores a su entrada al float" 0.0 pb))
+;; conservacion global tras el release (el nuevo float no debe descuadrar owed==circ*rps)
+(let* ((rps (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps))
+       (circ (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
+       (ben "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2")
+       (owed (fold (+) 0.0 (map (lambda (a:string) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of a)) ["alice" "bob" ben])))
+       (liab (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability)))
+  (print (format "TRAS release: circ*rps={} owed={} liability(O1)={}" [(* circ rps) owed liab]))
+  (expect "conservacion tras release: owed == circ*rps" (* circ rps) owed)
+  (expect "liability O(1) == Sigma pending O(n)" owed liab))
+(commit-tx)
+(print "ATK-7 done")

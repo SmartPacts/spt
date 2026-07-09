@@ -1,0 +1,23 @@
+;; ATK-TRANCHES-5: investigar release-tranche en chain != 0 (posible aceleracion/duplicacion cross-chain)
+(load "setup.repl")
+
+;; Estado inicial del reserve en chain 0
+(begin-tx "estado inicial chain 0")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+(print (format "chain actual: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.this-chain)]))
+(print (format "reserve liquidez: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.LIQUIDITY-ACCOUNT)]))
+(print (format "released inicial: {}" [(at 'released (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-tranche "liquidity"))]))
+(commit-tx)
+
+;; Simular estar en chain 5 y liberar (el contrato NO comprueba chain en release-tranche)
+(begin-tx "release en chain 5")
+(env-chain-data { "chain-id": "5", "block-time": (time "2030-06-01T00:00:00Z") })
+(print (format "chain actual: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.this-chain)]))
+(print (format "releasable en chain 5: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.tranche-releasable "liquidity")]))
+(print (format "release en chain 5 PAGA: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity")]))
+(print (format "reserve tras release chain5: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.LIQUIDITY-ACCOUNT)]))
+(print (format "beneficiario tras chain5: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2")]))
+(print (format "released tras chain5: {}" [(at 'released (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-tranche "liquidity"))]))
+(commit-tx)
+
+(print "ATK-TRANCHES-5 done")

@@ -1,0 +1,81 @@
+(load "setup.repl")
+;; ===========================================================================
+;; ATK-VOTEKEY-4 — COLISION DE CLAVE (misma hot key en dos cuentas)
+;; Invariante: cast-vote resuelve el guard del VOTER declarado; una hot compartida
+;; solo mueve el peso de la cuenta cuyo voter se declara. No debe inflar ni contar
+;; shares ajenas. Re-voto idempotente.
+;; ===========================================================================
+(begin-tx "activate IPO")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(commit-tx)
+(begin-tx "seed alice 3000")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1500.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1500.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "alice" (read-keyset 'alice) 3000.0)
+(commit-tx)
+(begin-tx "seed bob 1000")
+(env-data { "bob": { "keys": ["bob-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "bob" 500.0)] }])
+(coin.transfer-create "sender00" "bob" (read-keyset 'bob) 500.0)
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "bob" (read-keyset 'bob) 1000.0)
+(commit-tx)
+(begin-tx "announce proposal")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-proposal "P4" "t" "d" (time "2026-06-01T00:00:00Z") 259200)
+(commit-tx)
+
+;; register the SAME hot key on BOTH alice and bob
+(begin-tx "register shared-hot on alice")
+(env-data { "sh": { "keys": ["shared-hot"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.VOTE-KEY-ADMIN "alice")] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.set-vote-key "alice" (read-keyset 'sh))
+(commit-tx)
+(begin-tx "register shared-hot on bob")
+(env-data { "sh": { "keys": ["shared-hot"], "pred": "keys-all" } })
+(env-sigs [{ "key": "bob-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.VOTE-KEY-ADMIN "bob")] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.set-vote-key "bob" (read-keyset 'sh))
+(commit-tx)
+
+;; --- (a) shared-hot votes for alice, then for bob: totals must be 3000 + 1000 ---
+(begin-tx "shared-hot votes as alice and bob")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(env-sigs [])
+(env-keys ["shared-hot"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "P4" true)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "bob" "P4" true)
+(print (format "yes tras alice+bob (esperado 4000): {}" [(at 'yes (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P4"))]))
+(expect "no inflation: yes=4000 (3000+1000)" 4000.0 (at 'yes (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P4")))
+(commit-tx)
+
+;; --- (b) re-vote idempotence: shared-hot re-votes alice twice ---
+(begin-tx "shared-hot re-votes alice -> must stay 4000 not 7000+")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(env-sigs [])
+(env-keys ["shared-hot"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "P4" true)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "P4" true)
+(print (format "yes tras re-votos alice (esperado 4000): {}" [(at 'yes (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P4"))]))
+(expect "re-vote idempotent: yes stays 4000" 4000.0 (at 'yes (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P4")))
+(commit-tx)
+
+;; --- (c) alice clears shared-hot; delegation on bob independent ---
+(begin-tx "alice clears shared-hot; bob delegation independent")
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.VOTE-KEY-ADMIN "alice")] }])
+(env-keys ["alice-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.clear-vote-key "alice")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(env-sigs [])
+(env-keys ["shared-hot"])
+(print "== (c) tras clear en alice: hot ya no vota alice, si vota bob ==")
+(expect-failure "shared-hot no longer votes alice after alice clears"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "P4" false))
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "bob" "P4" false)
+(print (format "resultados finales: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P4")]))
+(commit-tx)
+
+(print "ATK-VOTEKEY-4 done")

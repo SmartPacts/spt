@@ -1,0 +1,43 @@
+;; V15 — FRACCIONAR UN HOLDER EN 5 SUB-CUENTAS y cobrar por separado (sub-aditividad del floor).
+;; Si Σfloor(owed_i) > floor(Σowed_i), fraccionar GANA -> ROTO. Usamos un rate que produzca
+;; residuos sub-12dp por cuenta. alice reparte 1000 en 5 cuentas de 200 con rate fino.
+(load "setup.repl")
+(load "seed-div.repl")
+(env-data { "a1": {"keys":["k1"],"pred":"keys-all"}, "a2":{"keys":["k2"],"pred":"keys-all"}
+          , "a3": {"keys":["k3"],"pred":"keys-all"}, "a4":{"keys":["k4"],"pred":"keys-all"}
+          , "a5": {"keys":["k5"],"pred":"keys-all"} })
+;; alice manda 200 a cada una ANTES de declarar la ronda (para que devenguen la ronda completa)
+(begin-tx "V15 alice reparte 200x5")
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "a1" 200.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "a1" (read-keyset 'a1) 200.0)
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "a2" 200.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "a2" (read-keyset 'a2) 200.0)
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "a3" 200.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "a3" (read-keyset 'a3) 200.0)
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "a4" 200.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "a4" (read-keyset 'a4) 200.0)
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "a5" 200.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "a5" (read-keyset 'a5) 200.0)
+(commit-tx)
+;; rate fino 0.0000001: cada sub-cuenta (200) devenga 200*1e-7 = 2e-5 (limpio a 12dp).
+;; Probamos un rate que SÍ genere residuo por cuenta: 0.000000000007 (7e-12). 200*7e-12=1.4e-9.
+(begin-tx "V15 declara rate fino con residuo")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "Rfine" 0.000000000007 (time "2026-06-01T00:00:00Z"))
+(commit-tx)
+;; oráculo global antes de cobrar
+(env-data { "accts": ["alice" "bob" "a1" "a2" "a3" "a4" "a5"] })
+(begin-tx "V15 oraculo + sub-aditividad")
+(let* ((o1 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+       (subs ["a1" "a2" "a3" "a4" "a5"])
+       (owed-each (map (lambda (a:string) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of a)) subs))
+       (sum-floor-each (fold (+) 0.0 (map (lambda (x:decimal) (floor x 12)) owed-each)))
+       (floor-sum (floor (fold (+) 0.0 owed-each) 12))
+       (on (fold (+) 0.0 (map (lambda (a:string) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of a)) (read-msg 'accts)))))
+  (print (format "V15 ORACULO: O1={} On={}" [o1 on]))
+  (print (format "V15 SUB-ADITIVIDAD: Σfloor(owed_i)={} floor(Σowed_i)={}" [sum-floor-each floor-sum]))
+  (expect "V15 O1==On" on o1)
+  ;; sub-aditividad: fraccionar NO puede pagar mas que junto
+  (expect "V15 Σfloor(owed_i) <= floor(Σowed_i) (fraccionar no gana)" true (<= sum-floor-each floor-sum)))
+(commit-tx)
+(print "V15 FIN")

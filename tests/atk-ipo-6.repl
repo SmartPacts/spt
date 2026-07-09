@@ -1,0 +1,55 @@
+;; ATK-IPO-6: angulo nuevo. Drenar directamente reserva SPT y KDA SALES-INCOME + validacion precio.
+(load "setup.repl")
+
+(begin-tx "init+activate a precio MINIMO 1e-12 (valido >0)")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.000000000001)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(commit-tx)
+
+;; (a) DRENAR reserva SPT directa firmando SPT TRANSFER => cap-guard interno debe bloquear.
+(begin-tx "IPO-6a: drenar reserva SPT directa")
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(env-keys ["atk-key"])
+(env-sigs [{ "key": "atk-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT "atk" 20000.0)] }])
+(expect-failure "reserva SPT no drenable (cap-guard interno)"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT "atk" (read-keyset 'atk) 20000.0))
+(expect "reserva intacta 20000" 20000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT))
+(commit-tx)
+
+;; (b1) sembrar KDA comprando barato (precio 1e-12 lo fija el admin; NO es rotura).
+(begin-tx "IPO-6b1: comprar 1000 SPT a 1e-12")
+(env-data { "sender00": { "keys": ["admin-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT 1.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "sender00" (read-keyset 'sender00) 1000.0)
+(print (format "income tras compra barata: {}" [(coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT)]))
+(commit-tx)
+
+;; (b2) drenar SALES-INCOME KDA directo con coin.transfer firmado => cap-guard bloquea.
+(begin-tx "IPO-6b2: drenar SALES-INCOME KDA directo")
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(env-keys ["atk-key"])
+(coin.create-account "atk" (read-keyset 'atk))
+(env-sigs [{ "key": "atk-key", "caps": [(coin.TRANSFER n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT "atk" 0.000000001)] }])
+(expect-failure "SALES-INCOME KDA no drenable directo (cap-guard)"
+  (coin.transfer n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT "atk" 0.000000001))
+(commit-tx)
+
+;; (c) install-capability desde tx code sobre SALES-INCOME => fuera de SALES-INCOME-CAP debe fallar.
+(begin-tx "IPO-6c: install+coin.transfer desde SALES-INCOME en tx code")
+(env-keys ["atk-key"])
+(expect-failure "install+transfer desde SALES-INCOME bloqueado"
+  (let ((_ 0))
+    (install-capability (coin.TRANSFER n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT "atk" 0.000000001))
+    (coin.transfer n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT "atk" 0.000000001)))
+(commit-tx)
+
+;; (d) validacion precio: reinit / set-price invalidos rechazados.
+(begin-tx "IPO-6d: precio invalido rechazado")
+(env-keys ["admin-key"])
+(expect-failure "ya inicializado" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.0))
+(expect-failure "set-price 0 rechazado" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.set-price 0.0))
+(expect-failure "set-price negativo rechazado" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.set-price -5.0))
+(commit-tx)
+
+(print "ATK-IPO-6 done")

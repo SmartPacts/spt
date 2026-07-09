@@ -1,0 +1,53 @@
+;; ATK-IPO-5: carrera precio + cap sobredimensionado + contabilidad de reserva/circulante.
+(load "setup.repl")
+
+(begin-tx "init+activate 0.5")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(commit-tx)
+
+;; (a) cap SOBREDIMENSIONADO: firmo coin.TRANSFER por 9999 pero compro 100 SPT (coste 50).
+;; transfer-create debe enviar EXACTAMENTE 50, no drenar mas. income debe ser 50, no 9999.
+(begin-tx "IPO-5a: cap 9999, coste real 50")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT 9999.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "sender00" (read-keyset 'sender00) 100.0)
+(print (format "income (debe 50): {}" [(coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT)]))
+(expect "income exactamente 50 (no drena el cap)" 50.0 (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT))
+(commit-tx)
+
+;; (b) CARRERA: subo precio a 100.0. Un cap viejo firmado para el precio 0.5 (coste 50 por 100 SPT)
+;; ya NO alcanza: al nuevo precio 100 SPT cuesta 10000. El cap de 50 debe hacer fallar el pago.
+;; Esto prueba que no se puede "congelar" un precio viejo con un cap pre-firmado.
+(begin-tx "IPO-5b: sube precio; cap viejo insuficiente")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.set-price 100.0)
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT 50.0)] }])
+(expect-failure "cap viejo (50) no cubre coste nuevo (10000)"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "sender00" (read-keyset 'sender00) 100.0))
+(print (format "income sin cambios (debe seguir 50): {}" [(coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT)]))
+(expect "income intacto 50" 50.0 (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT))
+(commit-tx)
+
+;; (c) CARRERA pause dentro de misma tx logica: pause + intento de compra en la MISMA tx tras pausar.
+;; No hay reentrada real en Pact, pero comprobamos que tras pause() en una tx, buy en la siguiente falla,
+;; y que un buy y un pause NO pueden coexistir para robar. Ademas: resume tras pause reactiva limpio.
+(begin-tx "IPO-5c: pause bloquea; reserva/circulante consistentes")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.pause)
+(commit-tx)
+(begin-tx "IPO-5c2: buy tras pause")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT 5000.0)] }])
+(expect-failure "pausado: no compra" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "sender00" (read-keyset 'sender00) 10.0))
+(commit-tx)
+
+;; (d) contabilidad reserva vs circulante: reserva 19900, comprador 100, circulante = 100 (reserva excluida).
+(begin-tx "IPO-5d: contabilidad")
+(print (format "reserve={} buyer={} circ={}"
+  [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT)
+   (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "sender00")
+   (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating)]))
+(expect "reserve 19900" 19900.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT))
+(commit-tx)
+
+(print "ATK-IPO-5 done")

@@ -1,0 +1,39 @@
+(load "setup.repl")
+
+;; ATK-3c: block-time HACIA ATRÁS y rollover exacto.
+;; Llenar E0 a T0=2027-01-01. Luego:
+;;  - probar now < epoch-start (tiempo atrás): diff negativo -> NO rollover, cap sigue.
+;;  - probar rollover exacto a T0+86400 (24h) -> resetea.
+;; Además cuantificar el "drenaje real por saltos de tiempo": con control de
+;; block-time un atacante NO tiene (consenso lo fija), pero medimos el máximo/época.
+
+(begin-tx "llenar E0")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-01-01T00:00:00Z")
+                , "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "cont" })
+(map (lambda (i:integer)
+       (test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER (format "k:e0-{}" [i]) 1500 0.000001)))
+  (enumerate 1 100))
+(print (format "spent E0 = {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.get-epoch-spent)]))
+(commit-tx)
+
+;; tiempo hacia atrás: 2026-01-01 (un año antes de epoch-start). diff negativo.
+(begin-tx "ATK-3c: block-time hacia atras -> ¿bypass del cap?")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z")
+                , "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "cont" })
+(expect-failure "tiempo atras NO resetea el cap (diff negativo < EPOCH-LEN)" "epoch cap reached"
+  (test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:back" 1500 0.000001))) 
+(print (format "spent tras intento atras = {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.get-epoch-spent)]))
+(commit-tx)
+
+;; rollover a 24h EXACTAS: 2027-01-02T00:00:00 -> diff = 86400 >= 86400 -> reset
+(begin-tx "ATK-3c: rollover exacto a 24h")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-01-02T00:00:00Z")
+                , "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "cont" })
+(test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:new" 1500 0.000001))
+(print (format "spent tras rollover 24h = {} (debe ser MAX-TX-COST={})"
+  [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.get-epoch-spent)
+   n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.MAX-TX-COST]))
+(commit-tx)

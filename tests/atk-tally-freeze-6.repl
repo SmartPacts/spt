@@ -1,0 +1,69 @@
+(load "setup.repl")
+;; ATAQUE 6 (angulo nuevo tally-freeze): intentar dejar el tally INFLADO tras
+;; una secuencia de re-votos + transfers cerca del cierre, y reportar ese tally
+;; inflado. Objetivo: participacion > shares reales o double-count residual.
+;; Mutaciones: re-voto que CAMBIA de direccion, transfer del voto justo antes de
+;; close, y transfer en el instante EXACTO de close-at (boundary off-by-one).
+(begin-tx "activate IPO + seed")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(commit-tx)
+(begin-tx "seed alice 3000, bob 2000")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+          , "bob":   { "keys": ["bob-key"],   "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1500.0) (coin.TRANSFER "sender00" "bob" 1000.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1500.0)
+(coin.transfer-create "sender00" "bob"   (read-keyset 'bob)   1000.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "alice" (read-keyset 'alice) 3000.0)
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "bob" (read-keyset 'bob) 2000.0)
+(commit-tx)
+(begin-tx "open P close-at 2026-06-05T00:00:00Z")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-proposal "P" "t" "d" (time "2026-06-02T00:00:00Z") 259200)
+(commit-tx)
+
+;; alice vota YES 3000
+(begin-tx "alice YES 3000")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })
+(env-keys ["alice-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "P" true)
+;; re-voto: cambia a NO -> yes debe bajar a 0, no subir a 3000
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "P" false)
+(let ((r (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P")))
+  (print (format "after re-vote flip: yes={} no={} (expect yes=0 no=3000)" [(at 'yes r) (at 'no r)]))
+  (expect "re-vote flip: yes=0" 0.0 (at 'yes r))
+  (expect "re-vote flip: no=3000" 3000.0 (at 'no r)))
+(commit-tx)
+
+;; transfer EN EL INSTANTE EXACTO de close-at: proposal-active? usa (< now cl).
+;; A las 06-05T00:00:00 exacto, now == cl => NO activo => transfer NO libera.
+;; Verificamos que el tally NO se descongela ni se sobre-libera.
+(begin-tx "boundary: transfer AT exact close-at instant")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-05T00:00:00Z") })
+(let ((before (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P")))
+  (print (format "at close instant, before transfer: no={}" [(at 'no before)]))
+  (env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "bob" 1000.0)] }])
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "alice" "bob" 1000.0)
+  (let ((after (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P")))
+    (print (format "at close instant, after transfer: no={}" [(at 'no after)]))
+    ;; FROZEN at close-at inclusive: tally must NOT change
+    (expect "at exact close-at, tally frozen (no release)" (at 'no before) (at 'no after))))
+(commit-tx)
+
+;; report tras close y comprobar invariante participacion <= circulating al reportar
+(begin-tx "report P at 06-06 and check aggregate sanity")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-06T00:00:00Z") })
+(env-keys ["atk-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.report-tally-hub "P")
+(let ((f (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-final-results "P"))
+      (circ (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating)))
+  (print (format "aggregate: yes={} no={} participation={} circulating={}"
+    [(at 'yes f) (at 'no f) (at 'participation f) circ]))
+  (expect "reported tally participation <= circulating (no phantom votes)"
+    true (<= (at 'participation f) circ)))
+(commit-tx)
+(print "ATK6 done")

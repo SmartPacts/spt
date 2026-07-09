@@ -1,0 +1,70 @@
+;; ATK-RESERVES-4: exfiltrar KDA del POOL por encima de lo debido (solvencia dividendos).
+;; Angulo: claim mas de lo acumulado, o hacer que el pool pague a un principal atacante.
+(load "setup.repl")
+
+;; Activar IPO + sembrar float (alice 3000, bob 2000) como en la suite de Alex
+(begin-tx "activar IPO")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(commit-tx)
+(begin-tx "seed alice/bob")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+          , "bob": { "keys": ["bob-key"], "pred": "keys-all" }
+          , "sender00": { "keys": ["admin-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 2500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "sender00" (read-keyset 'sender00) 5000.0)
+(env-sigs [{ "key": "admin-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "sender00" "alice" 3000.0) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "sender00" "bob" 2000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "sender00" "alice" (read-keyset 'alice) 3000.0)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "sender00" "bob" (read-keyset 'bob) 2000.0)
+(commit-tx)
+
+;; Declarar + fondear una ronda: circ 5000, rate 0.02 => alice 60, bob 40, total 100
+(begin-tx "declarar + fondear ronda")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT 100.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" 100.0)
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R1" 0.02 (time "2026-06-01T00:00:00Z"))
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 100.0)
+(print (format "pool tras fund: {}" [(coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT)]))
+(commit-tx)
+
+;; (1) claim de una cuenta con balance 0 / inexistente => nada que reclamar
+(begin-tx "R4a: claim de cuenta sin shares")
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-account "atk" (read-keyset 'atk))
+(expect-failure "atk sin shares no reclama" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "atk"))
+(commit-tx)
+
+;; (2) claim normal alice 60; luego intentar re-claim; luego intentar drenar pool restante.
+(begin-tx "R4b: alice claim 60, doble-claim bloqueado")
+(expect "alice claim 60" 60.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "alice"))
+(expect-failure "no doble-claim" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "alice"))
+(print (format "pool tras alice: {}" [(coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT)]))
+(commit-tx)
+
+;; (3) ANGULO CLAVE: comprar shares BARATAS despues de la ronda y reclamar dividendo retroactivo.
+;;     credit pone reward-debt = rps actual => shares nuevas NO acumulan retroactivo. Verificar.
+(begin-tx "R4c: comprar shares post-ronda y intentar dividendo retroactivo")
+(env-data { "eve": { "keys": ["eve-key"], "pred": "keys-all" }
+          , "sender00": { "keys": ["admin-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "sender00" "eve" 1000.0)] }])
+;; sender00 aun tiene shares del buy (5000-3000-2000=0)... usar bob para transferir a eve
+(commit-tx)
+(begin-tx "R4c2: bob transfiere 1000 a eve (nuevo holder tras ronda)")
+(env-data { "eve": { "keys": ["eve-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "bob-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "bob" "eve" 1000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "bob" "eve" (read-keyset 'eve) 1000.0)
+(print (format "eve pending tras recibir 1000 (debe ser 0, sin retroactivo): {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "eve")]))
+(expect "eve NO tiene dividendo retroactivo" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "eve"))
+(expect-failure "eve no puede reclamar (nada acumulado)" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "eve"))
+(commit-tx)
+
+;; (4) Verificar conservacion del pool: total pagado <= fondeado
+(begin-tx "R4d: pool solvente")
+(let ((pool (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT)))
+  (print (format "pool final: {} (bob aun no reclamo sus 40)" [pool]))
+  (expect "pool >= 40 (deuda pendiente de bob)" true (>= pool 40.0)))
+(commit-tx)
+
+(print "ATK-RESERVES-4 done")

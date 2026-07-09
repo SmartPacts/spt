@@ -1,0 +1,68 @@
+;; ATK div-solvency-4: "primero llega primero cobra" + claim NO cobra mas de lo devengado
+;; aunque el pool tenga cash de sobra. Angulo: financiar de MAS (pool con exceso) y ver si
+;; un holder puede reclamar por encima de su devengado exacto (bal*(rps-rd)+pending).
+;; Hipotesis A6: si claim leyera un rps mayor que el fondeado, robaria. Verificamos que
+;; el payout esta EXACTAMENTE acotado por el devengado del holder, no por el saldo del pool.
+(load "setup.repl")
+
+(begin-tx "seed alice 3000 / bob 2000")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+          , "bob":   { "keys": ["bob-key"],   "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1500.0) (coin.TRANSFER "sender00" "bob" 1000.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1500.0)
+(coin.transfer-create "sender00" "bob"   (read-keyset 'bob)   1000.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "alice" (read-keyset 'alice) 3000.0)
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "bob" (read-keyset 'bob) 2000.0)
+(commit-tx)
+
+;; R1 rate 0.02: alice=60 bob=40, liability=100. Financiar de MAS: 500 KDA en el pool.
+(begin-tx "R1 + SOBREFINANCIAR el pool con 500")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT 500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" 500.0)
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R1" 0.02 (time "2026-06-01T00:00:00Z"))
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 500.0)
+(print (format "pool sobrefinanciado={} liability={}"
+  [(coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT)
+   (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability)]))
+(commit-tx)
+
+;; A6: alice reclama. Aunque el pool tiene 500, alice solo puede sacar SUS 60 devengados.
+(begin-tx "A6 alice reclama - acotado por devengado, no por saldo pool")
+(let ((pend (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "alice"))
+      (paid (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "alice")))
+  (print (format "A6: alice devengado={} cobro={} (pool tenia 500, no puede sacar mas de 60)" [pend paid]))
+  (expect "A6: alice cobra EXACTAMENTE 60 (su devengado), no el pool" 60.0 paid)
+  (expect "A6: alice pending 0 tras claim" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "alice"))
+  (expect "A6: doble-claim inmediato rechazado" true
+    (try true (let ((x (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "alice"))) false))))
+(commit-tx)
+
+;; A6b: intentar reclamar mas via re-vote de rps: NO hay superficie publica para subir rps
+;;   salvo declare-round (admin). Un no-admin no puede. Confirmamos.
+(begin-tx "A6b no-admin no puede subir rps para inflar su claim")
+(env-keys ["bob-key"])
+(expect-failure "A6b: no-admin declare-round rechazado (no puede inflar rps)"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "HACK" 999.0 (time "2026-06-01T00:00:00Z")))
+;; bob reclama sus 40 legitimos, ni un centimo mas
+(let ((paid (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "bob")))
+  (print (format "A6b: bob cobro={} (esperado 40)" [paid]))
+  (expect "A6b: bob cobra exactamente 40" 40.0 paid))
+(commit-tx)
+
+;; A6c: el exceso del pool (500-100=400) queda ahi; nadie puede reclamarlo sin devengo.
+(begin-tx "A6c el exceso del pool NO es reclamable por nadie sin devengo")
+(env-data { "leech": { "keys": ["leech-key"], "pred": "keys-all" } })
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-account "leech" (read-keyset 'leech))
+(expect-failure "A6c: cuenta sin balance no puede reclamar el exceso del pool" "nothing to claim"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "leech"))
+(print (format "A6c: pool aun tiene={} (exceso atrapado, no drenable)"
+  [(coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT)]))
+(commit-tx)
+
+(print "atk-div-solvency-4 FIN")

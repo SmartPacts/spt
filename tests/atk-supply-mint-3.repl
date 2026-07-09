@@ -1,0 +1,39 @@
+;; ATK-SUPPLY-MINT-3: migrate-adr015 tras init para re-abrir mint / manipular estado.
+;; migrate-adr015 es ADMIN, one-shot, idempotente sobre AUSENCIA de round-count row.
+;; Tras init-supply, round-count YA existe (n=0) => debe devolver "already migrated" sin tocar nada.
+;; Mutacion: llamarlo como admin y como no-admin; verificar que no crea supply ni resetea contadores.
+(load "setup.repl")
+
+(begin-tx "M3: estado antes de migrate")
+(print (format "circulating={} rounds-count-existe(via get-rps ok)={}"
+  [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating)
+   (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps)]))
+(commit-tx)
+
+;; (1) migrate-adr015 como NO-admin => ADMIN cap rechaza
+(begin-tx "M3a: migrate no-admin")
+(env-keys ["atk-key"])
+(expect-failure "migrate no-admin rechazado"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.migrate-adr015))
+(commit-tx)
+
+;; (2) migrate-adr015 como admin sobre estado YA inicializado => "already migrated", sin efecto
+(begin-tx "M3b: migrate admin sobre estado ya migrado")
+(env-keys ["admin-key"])
+(expect "already migrated (round-count ya existe)" "already migrated"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.migrate-adr015))
+(commit-tx)
+
+;; (3) doble migrate consecutivo (idempotencia)
+(begin-tx "M3c: doble migrate")
+(env-keys ["admin-key"])
+(expect "sigue already migrated" "already migrated"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.migrate-adr015))
+(commit-tx)
+
+;; supply/estado sin cambios
+(begin-tx "M3: invariante")
+(expect "treasury 55000" 55000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT))
+(expect "circulating 0" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
+(commit-tx)
+(print "ATK-SUPPLY-MINT-3 done")

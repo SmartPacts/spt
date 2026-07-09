@@ -1,0 +1,73 @@
+;; ATK div-solvency-3: INSOLVENCIA CRUZADA / drenar el pool de otros holders.
+;; Angulo nuevo: fund-dividends solo comprueba solvencia EN EL MOMENTO de fondear.
+;; Pero claim-dividends NO revisa solvencia: paga con coin.transfer del POOL.
+;; Hipotesis A4: declarar una ronda y NO fondearla; un holder reclama igualmente
+;;   drenando KDA que fue fondeado para CUBRIR a OTROS holders/otra ronda.
+;;   Si claim paga mas que lo fondeado para ESE holder -> roba cobertura ajena.
+;; Variables: dos holders (alice, bob); financiar solo R1; declarar R2 SIN fondear;
+;;   ver si alguien puede vaciar el pool por debajo de la liability restante.
+(load "setup.repl")
+
+(begin-tx "seed alice 3000 / bob 2000")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+          , "bob":   { "keys": ["bob-key"],   "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1500.0) (coin.TRANSFER "sender00" "bob" 1000.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1500.0)
+(coin.transfer-create "sender00" "bob"   (read-keyset 'bob)   1000.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "alice" (read-keyset 'alice) 3000.0)
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "bob" (read-keyset 'bob) 2000.0)
+(commit-tx)
+
+;; R1 rate 0.02: alice=60 bob=40 ; liability=100 ; FINANCIAR exacto 100
+(begin-tx "R1 + fund exacto 100")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT 100.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" 100.0)
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R1" 0.02 (time "2026-06-01T00:00:00Z"))
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 100.0)
+(print (format "tras R1 fund: pool={} liability={}"
+  [(coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT)
+   (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability)]))
+(commit-tx)
+
+;; === A4a: declarar R2 (rate 0.02) SIN fondear. Ahora liability=200 pero pool=100. ===
+(begin-tx "A4a declara R2 SIN fondear -> pool insuficiente para la liability total")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R2" 0.02 (time "2026-06-01T00:00:00Z"))
+(let ((pool (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT))
+      (liab (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability)))
+  (print (format "A4a: pool={} liability={} (pool < liability: infrafondeado a proposito)" [pool liab]))
+  (expect "A4a: liability (200) > pool (100) tras R2 sin fondear" true (> liab pool)))
+(commit-tx)
+
+;; alice devenga 120 (R1+R2), bob 80. Pool solo tiene 100.
+;; A4b: alice reclama 120 -> vacia 120 de un pool de 100 => coin.transfer deberia
+;; ABORTAR por saldo insuficiente del POOL (coin protege), o pagar y dejar a bob sin fondos.
+(begin-tx "A4b alice reclama 120 de un pool con solo 100")
+(print (format "A4b pre: alice pending={} pool={}"
+  [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "alice")
+   (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT)]))
+;; si el pool no cubre, coin.transfer-create aborta -> claim falla (holder no puede cobrar sin cash).
+;; probamos si alice puede llevarse 120:
+(let ((paid (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "alice")))
+  (print (format "A4b: alice cobro {} ; pool restante={}"
+    [paid (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT)])))
+(commit-tx)
+
+;; A4c: si alice cobro 120, el pool tiene 100-120<0? -> imposible en coin, habria abortado.
+;; Si alice cobro 120 dejando pool en <80, bob (80) ya NO puede cobrar -> insolvencia inducida.
+(begin-tx "A4c ahora bob intenta cobrar sus 80")
+(print (format "A4c pre: bob pending={} pool={}"
+  [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "bob")
+   (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT)]))
+(let ((paid (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "bob")))
+  (print (format "A4c: bob cobro {} ; pool restante={}"
+    [paid (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT)])))
+(commit-tx)
+
+(print "atk-div-solvency-3 FIN")

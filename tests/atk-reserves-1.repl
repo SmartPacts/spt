@@ -1,0 +1,54 @@
+;; ATK-RESERVES-1: satisfacer el capability-guard del principal de una reserva desde codigo externo.
+;; Mutaciones del A-INT de Alex, ampliadas: probar TODAS las reservas y varias rutas de debito.
+(load "setup.repl")
+
+(begin-tx "R1: intentar adquirir cada cap-guard de reserva externamente")
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(env-keys ["atk-key"])
+;; (1) with-capability directo sobre cada GUARD interno => debe fallar (weak body pero no invocable externamente)
+(expect-failure "TREASURY-GUARD unacquirable"  (with-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-GUARD) "x"))
+(expect-failure "FUNDERS-GUARD unacquirable"   (with-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.FUNDERS-GUARD) "x"))
+(expect-failure "LIQUIDITY-GUARD unacquirable" (with-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.LIQUIDITY-GUARD) "x"))
+(expect-failure "POOL-GUARD unacquirable"      (with-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-GUARD) "x"))
+(commit-tx)
+
+;; (2) enforce-guard directo del cap-guard constante (create-capability-guard) desde tx code
+(begin-tx "R1b: enforce-guard del cap-guard constante desde fuera")
+(env-keys ["atk-key"])
+(expect-failure "no puedo satisfacer TREASURY-G cap-guard fuera de su cap"
+  (enforce-guard n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-G))
+(expect-failure "no puedo satisfacer POOL-G cap-guard fuera de su cap"
+  (enforce-guard n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-G))
+(commit-tx)
+
+;; (3) DEBIT sobre cada reserva firmando TRANSFER, via transfer-create => enforce-guard(account-guard reserve)
+;;     El guard de la reserva ES el cap-guard; nadie lo tiene fuera del contrato.
+(begin-tx "R1c: transfer-create desde cada reserva a atacante")
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(env-keys ["atk-key"])
+(env-sigs [{ "key": "atk-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.FUNDERS-ACCOUNT "atk" 100.0)] }])
+(expect-failure "founder reserve no drenable"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.FUNDERS-ACCOUNT "atk" (read-keyset 'atk) 100.0))
+(env-sigs [{ "key": "atk-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.LIQUIDITY-ACCOUNT "atk" 100.0)] }])
+(expect-failure "liquidity reserve no drenable"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.LIQUIDITY-ACCOUNT "atk" (read-keyset 'atk) 100.0))
+(commit-tx)
+
+;; (4) xchain step-0 debit sobre una reserva (otra ruta a DEBIT). Firmamos TRANSFER_XCHAIN.
+(begin-tx "R1d: transfer-crosschain step0 desde treasury")
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(env-keys ["atk-key"])
+(env-sigs [{ "key": "atk-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER_XCHAIN n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT "atk" 100.0 "1")] }])
+(expect-failure "treasury xchain step0 debit bloqueado (DEBIT enforce-guard cap-guard)"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-crosschain n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT "atk" (read-keyset 'atk) "1" 100.0))
+(commit-tx)
+
+;; verificar reservas intactas
+(begin-tx "R1: reservas intactas")
+(print (format "treasury={} founder={} liquidity={}"
+  [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT)
+   (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.FUNDERS-ACCOUNT)
+   (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.LIQUIDITY-ACCOUNT)]))
+(expect "treasury sigue 55000" 55000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT))
+(commit-tx)
+(print "ATK-RESERVES-1 done")

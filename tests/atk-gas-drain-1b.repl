@@ -1,0 +1,31 @@
+(load "setup.repl")
+
+(begin-tx "fund station")
+(env-keys ["admin-key"])
+(env-sigs [{ "key": "admin-key"
+           , "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION 5.0)] }])
+(coin.transfer "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION 5.0)
+(commit-tx)
+
+(begin-tx "crear destino atacante")
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(env-keys ["atk-key"])
+(coin.create-account "attacker-acct" (read-keyset 'atk))
+(commit-tx)
+
+;; ¿Se satisface el guard de la estación con GAS+ALLOW_GAS en scope? (aislado)
+(begin-tx "ATK-1b: ¿satisface el station-guard-pred?")
+(env-chain-data { "gas-price": 0.000001, "gas-limit": 1500
+                , "chain-id": "0", "block-time": (time "2026-09-01T00:00:00Z") })
+(env-keys ["atk-key"])
+(print "-- probando station-guard-pred con GAS+ALLOW_GAS --")
+(test-capability (coin.GAS)
+  (test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.ALLOW_GAS)
+    (print (format "station-guard-pred = {}"
+      [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.station-guard-pred)]))))
+;; Y ahora la transfer directa capturando el error
+(print "-- probando transfer directa --")
+(test-capability (coin.GAS)
+  (test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.ALLOW_GAS)
+    (coin.transfer n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION "attacker-acct" 5.0)))
+(commit-tx)

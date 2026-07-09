@@ -1,0 +1,2 @@
+(load "setup.repl")
+(print "PLANTILLA-SPT-OK: sistema cargado e inicializado")

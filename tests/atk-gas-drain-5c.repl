@@ -1,0 +1,22 @@
+(load "setup.repl")
+
+(begin-tx "fund station 5")
+(env-keys ["admin-key"])
+(env-sigs [{ "key": "admin-key"
+           , "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION 5.0)] }])
+(coin.transfer "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION 5.0)
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(coin.create-account "attacker-acct" (read-keyset 'atk))
+(commit-tx)
+
+;; ¿satisface el station-guard-pred con GAS+ALLOW_GAS instaladas a nivel tx?
+(begin-tx "ATK-5c: probar guard aislado")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-05-01T00:00:00Z")
+                , "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "exec"
+          , "exec-code": ["(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends \"k:alice\")"] })
+(test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:alice" 1500 0.000001))
+(test-capability (coin.GAS))
+(print "-- station-guard-pred directo --")
+(print (format "guard-pred = {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.station-guard-pred)]))
+(commit-tx)

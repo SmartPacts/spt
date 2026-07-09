@@ -1,0 +1,47 @@
+(load "setup.repl")
+
+;; ATK-6 (ángulo nuevo): intentar INSTALAR el cap managed coin.TRANSFER de la
+;; estación firmando con la clave del atacante, con GAS+ALLOW_GAS en scope.
+;; Si el user-guard de la estación se aceptara como "firmante", drenaría.
+
+(begin-tx "fund station 5 + destino")
+(env-keys ["admin-key"])
+(env-sigs [{ "key": "admin-key"
+           , "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION 5.0)] }])
+(coin.transfer "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION 5.0)
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(coin.create-account "attacker-acct" (read-keyset 'atk))
+(print (format "STATION antes = {}" [(at 'balance (coin.details n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION))]))
+(commit-tx)
+
+;; 6a: firmar TRANSFER de la estación con atk-key + GAS/ALLOW_GAS en scope
+(begin-tx "ATK-6a: firmar coin.TRANSFER de la estacion con clave atacante")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-06-01T00:00:00Z")
+                , "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "exec"
+          , "exec-code": ["(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends \"k:alice\")"] })
+(env-sigs [{ "key": "atk-key"
+           , "caps": [(coin.TRANSFER n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION "attacker-acct" 5.0)] }])
+(test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:alice" 1500 0.000001))
+(test-capability (coin.GAS))
+(print "-- transfer con TRANSFER firmado por atk-key (clave ajena a la estacion) --")
+(expect-failure "firma de clave ajena NO satisface el guard DEBIT de la estación"
+  (coin.transfer n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION "attacker-acct" 5.0))
+(print (format "STATION tras 6a = {}" [(at 'balance (coin.details n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION))]))
+(commit-tx)
+
+;; 6b: transfer-crosschain (defpact) de la estación — otro camino a DEBIT
+(begin-tx "ATK-6b: transfer-crosschain de la estacion")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-06-01T01:00:00Z")
+                , "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "exec"
+          , "exec-code": ["(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends \"k:alice\")"] })
+(env-sigs [{ "key": "atk-key"
+           , "caps": [(coin.TRANSFER_XCHAIN n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION "attacker-acct" 5.0 "1")] }])
+(test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:alice" 1500 0.000001))
+(test-capability (coin.GAS))
+(print "-- transfer-crosschain estacion->atacante --")
+(expect-failure "xchain transfer de la estación también bloqueada"
+  (coin.transfer-crosschain n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION "attacker-acct" (read-keyset 'atk) "1" 5.0))
+(print (format "STATION tras 6b = {}" [(at 'balance (coin.details n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION))]))
+(commit-tx)

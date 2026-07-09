@@ -1,0 +1,76 @@
+(load "setup.repl")
+;; ATK-ARITH-4: SOLVENCIA BAJO REDONDEO ADVERSARIAL.
+;; fund-dividends garantiza pool+deposit >= floor12(liability). Cada claim paga floor12(owed_i)
+;; y guarda dust. Ataque: crear un enjambre de holders con owed fraccionario (colas 24-dec),
+;; fundear al MINIMO exacto (floor liability), y reclamar TODOS. 
+;; ROTO si: (a) algun claim de un holder legitimo REVIERTE por pool insuficiente, o
+;;          (b) el pool queda NEGATIVO, o
+;;          (c) la suma pagada > lo fundeado (crear KDA de la nada).
+;; Angulo fino: balances con decimales * rps con decimales => owed con 24 dec; el floor
+;; de la liability agregada vs suma de floors. Fuerzo residuos que casi-suman a 1e-12.
+
+(begin-tx "seed whale y reparto fraccionario a 5 holders")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(env-data { "whale": { "keys": ["wk"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "whale" 100000.0)] }])
+(coin.transfer-create "sender00" "whale" (read-keyset 'whale) 100000.0)
+(env-sigs [{ "key": "wk", "caps": [(coin.TRANSFER "whale" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 100000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "whale" (read-keyset 'whale) 20000.0)
+(commit-tx)
+
+;; repartir balances fraccionarios "feos" a 5 holders (colas que al * rps dan 24 dec)
+(begin-tx "reparto fraccionario")
+(env-data { "h1": {"keys":["p1"],"pred":"keys-all"}, "h2": {"keys":["p2"],"pred":"keys-all"},
+            "h3": {"keys":["p3"],"pred":"keys-all"}, "h4": {"keys":["p4"],"pred":"keys-all"},
+            "h5": {"keys":["p5"],"pred":"keys-all"} })
+(env-sigs [{ "key": "wk", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "whale" "h1" 333.333333333333)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "whale" "h1" (read-keyset 'h1) 333.333333333333)
+(env-sigs [{ "key": "wk", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "whale" "h2" 666.666666666667)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "whale" "h2" (read-keyset 'h2) 666.666666666667)
+(env-sigs [{ "key": "wk", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "whale" "h3" 142.857142857143)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "whale" "h3" (read-keyset 'h3) 142.857142857143)
+(env-sigs [{ "key": "wk", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "whale" "h4" 271.828182845905)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "whale" "h4" (read-keyset 'h4) 271.828182845905)
+(env-sigs [{ "key": "wk", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "whale" "h5" 314.159265358979)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "whale" "h5" (read-keyset 'h5) 314.159265358979)
+(commit-tx)
+
+;; rps con muchos decimales
+(begin-tx "round rate 0.142857142857 + fund AL MINIMO exacto")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT 100000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" 100000.0)
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R1" 0.142857142857 (time "2026-06-01T00:00:00Z"))
+(let* ((liab (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+       (fl (floor liab 12)))
+  (print (format "liability={} floor12(fundeo minimo)={}" [liab fl]))
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends fl)
+  (print (format "pool tras fund = {}" [(coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT)])))
+(commit-tx)
+
+;; medir Sigma floor(owed) vs pool
+(begin-tx "comparar Sigma floor vs pool")
+(let* ((os (map (lambda (a:string) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of a)) ["h1" "h2" "h3" "h4" "h5" "whale"]))
+       (floors (map (lambda (o:decimal) (floor o 12)) os))
+       (sumfloor (fold (+) 0.0 floors))
+       (pool (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT)))
+  (print (format "owed por holder = {}" [os]))
+  (print (format "Sigma floor(owed_i) = {}" [sumfloor]))
+  (print (format "pool = {}" [pool]))
+  (enforce (<= sumfloor pool) "ROTO: Sigma floor pagos > pool (insolvencia por redondeo)")
+  (print "OK: Sigma floor <= pool (nadie se queda sin cobrar)"))
+(commit-tx)
+
+;; reclamar todos, en orden adversarial, ver que ninguno revierte y pool>=0
+(begin-tx "claim todos")
+(let ((paid (map (lambda (a:string) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends a)) ["h1" "h2" "h3" "h4" "h5" "whale"])))
+  (print (format "pagos = {}" [paid]))
+  (print (format "SUMA pagada = {}" [(fold (+) 0.0 paid)]))
+  (let ((pool (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT)))
+    (print (format "pool final = {}" [pool]))
+    (enforce (>= pool 0.0) "ROTO: pool NEGATIVO")
+    (print "DEFENDIDO: todos cobraron, pool >= 0, sin insolvencia")))
+(commit-tx)
+(print "ATK-ARITH-4 done")

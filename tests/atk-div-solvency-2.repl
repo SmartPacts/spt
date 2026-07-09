@@ -1,0 +1,73 @@
+;; ATK div-solvency-2 (v3): OVERPAY por redondeo agregado. Guards DISTINTOS por cuenta,
+;; claims en tx separadas. Objetivo: probar que el FLOOR nunca paga de mas y que
+;; Sigma(payout) == KDA que sale del pool == floor12(devengado) por cuenta.
+(load "setup.repl")
+
+(begin-tx "seed alice como fuente de float")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 5000.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 5000.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 5000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "alice" (read-keyset 'alice) 10000.0)
+(commit-tx)
+
+(begin-tx "atacante reparte float a 5 cuentas fraccionarias, guards distintos")
+(env-data { "m1": { "keys": ["m1-key"], "pred": "keys-all" }
+          , "m2": { "keys": ["m2-key"], "pred": "keys-all" }
+          , "m3": { "keys": ["m3-key"], "pred": "keys-all" }
+          , "m4": { "keys": ["m4-key"], "pred": "keys-all" }
+          , "m5": { "keys": ["m5-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "m1" 111.111111)
+                                          (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "m2" 111.111111)
+                                          (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "m3" 111.111111)
+                                          (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "m4" 111.111111)
+                                          (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "m5" 111.111111)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "m1" (read-keyset 'm1) 111.111111)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "m2" (read-keyset 'm2) 111.111111)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "m3" (read-keyset 'm3) 111.111111)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "m4" (read-keyset 'm4) 111.111111)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "m5" (read-keyset 'm5) 111.111111)
+(commit-tx)
+
+(begin-tx "declara ronda fina + funde a liability floor12")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "RF" 0.0000007 (time "2026-06-01T00:00:00Z"))
+(let* ((liab (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+       (fl (floor liab 12))
+       (topup (+ fl 0.000000000001)))
+  (print (format "A2: liability={} floor12={}" [liab fl]))
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT topup)] }])
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" topup)
+  (env-keys ["admin-key"])
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends topup))
+(commit-tx)
+
+;; devengado por cuenta = 111.111111 * 0.0000007 = 0.0000777777777 (13dp) -> floor12 = 0.000077777777 ; dust = 7e-13
+(begin-tx "A2 claim m1 (verificacion NO overpay)")
+(let* ((pb (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT))
+       (p (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "m1"))
+       (pa (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT)))
+  (print (format "A2 m1: paga={} pool salida={}" [p (- pb pa)]))
+  (expect "A2 m1: payout == KDA salido del pool (nada de la nada)" (- pb pa) p)
+  (expect "A2 m1: payout == floor12(devengado), redondeo A LA BAJA" 0.000077777777 p)
+  (expect "A2 m1: dust 7e-13 queda pending" 0.0000000000007 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "m1")))
+(commit-tx)
+(begin-tx "A2 claim m2") (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "m2") (commit-tx)
+(begin-tx "A2 claim m3") (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "m3") (commit-tx)
+(begin-tx "A2 claim m4") (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "m4") (commit-tx)
+(begin-tx "A2 claim m5") (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "m5") (commit-tx)
+
+(begin-tx "A2 identidad global (TODAS las float incl alice) + pool no sobregirado")
+(env-data { "accts": ["alice" "m1" "m2" "m3" "m4" "m5"] })
+(let ((l (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+      (sump (fold (+) 0.0 (map (lambda (a:string) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of a)) (read-msg 'accts))))
+      (pool (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT)))
+  (print (format "A2 final: liability={} sum-pending(incl alice)={} pool={}" [l sump pool]))
+  (expect "A2: liability == sum pending global (identidad exacta con dust)" sump l)
+  (expect "A2: pool >= 0 (nunca sobregirado por overpay)" true (>= pool 0.0)))
+(commit-tx)
+
+(print "atk-div-solvency-2 FIN")
