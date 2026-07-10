@@ -1,0 +1,38 @@
+;; =====================================================================
+;; ATK-DIV-DEEP-1  (V1) -- CASO NORMAL / validaci?n del OR?CULO DIFERENCIAL.
+;; Or?culo: L_O1 = dividend-liability()  vs  L_On = S pending-dividends-of(a)
+;; sobre TODAS las cuentas float. Deben ser iguales tras cada mutaci?n.
+;; Invariantes extra: Spayouts <= floor(L) ; pool>=0 ; nadie cobra dos veces.
+;; =====================================================================
+(load "setup.repl")
+(begin-tx "seed alice 3000 / bob 2000 via IPO")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+          , "bob":   { "keys": ["bob-key"],   "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1500.0) (coin.TRANSFER "sender00" "bob" 1000.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1500.0)
+(coin.transfer-create "sender00" "bob"   (read-keyset 'bob)   1000.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "alice" (read-keyset 'alice) 3000.0)
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "bob" (read-keyset 'bob) 2000.0)
+(expect "circ 5000" 5000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
+(commit-tx)
+
+;; ---- OR?CULO: comparar O(1) vs O(n) ----
+(env-data { "accts": ["alice" "bob"] })
+(begin-tx "V1 declare R1 0.02 + fund exacto, or?culo diferencial")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT 100.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" 100.0)
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R1" 0.02 (time "2026-06-01T00:00:00Z"))
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 100.0)
+(let ((o1 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+      (on (fold (+) 0.0 (map (lambda (a:string) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of a)) (read-msg 'accts)))))
+  (print (format "V1 ORACULO: O1={} On={}" [o1 on]))
+  (expect "V1 O1==On (liability O(1) == suma O(n))" on o1)
+  (expect "V1 pool>=floor(L) (solvencia)" true (>= (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT) (floor o1 12))))
+(commit-tx)
+(print "ATK-DIV-DEEP-1 (V1) FIN")

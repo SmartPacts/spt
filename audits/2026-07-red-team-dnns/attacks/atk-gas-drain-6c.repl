@@ -1,0 +1,49 @@
+(load "setup.repl")
+
+;; ATK-6c: ?REALISMO? Repetir el drenaje de 6a pero SIN test-capability de GAS/ALLOW_GAS.
+;; Un atacante en un tx NO puede ejecutar test-capability; solo puede firmar caps y
+;; llamar funciones p?blicas. Probamos la transfer de la estaci?n:
+;;   (i)  sin nada en scope (solo firma TRANSFER atk-key)
+;;   (ii) tras GAS_PAYER real pero sin instalar GAS manualmente
+;; Si alguna drena, es ROTURA real. Si s?lo drena con test-capability(GAS), es
+;; artefacto del harness (GAS lo pone el runtime, no el atacante).
+
+(begin-tx "fund station 5 + destino")
+(env-keys ["admin-key"])
+(env-sigs [{ "key": "admin-key"
+           , "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION 5.0)] }])
+(coin.transfer "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION 5.0)
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(coin.create-account "attacker-acct" (read-keyset 'atk))
+(print (format "STATION antes = {}" [(at 'balance (coin.details n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION))]))
+(commit-tx)
+
+;; (i) SOLO firma TRANSFER, NADA de GAS/ALLOW_GAS en scope
+(begin-tx "ATK-6c-i: transfer estacion solo con firma atk-key (sin GAS/ALLOW_GAS)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-06-01T00:00:00Z")
+                , "gas-price": 0.000001, "gas-limit": 1500 })
+(env-sigs [{ "key": "atk-key"
+           , "caps": [(coin.TRANSFER n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION "attacker-acct" 5.0)] }])
+(print "-- transfer sin GAS/ALLOW_GAS (escenario realista del atacante) --")
+(expect-failure "sin GAS+ALLOW_GAS el guard de la estaci?n NO se satisface"
+  (coin.transfer n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION "attacker-acct" 5.0))
+(print (format "STATION tras (i) = {}" [(at 'balance (coin.details n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION))]))
+(commit-tx)
+
+;; (ii) tras GAS_PAYER real (compone ALLOW_GAS) pero SIN GAS manual.
+;; La transfer NO se hace dentro de buy-gas, as? que GAS no est? en scope.
+;; gas-payer-pred exige (require (GAS)) Y (require (ALLOW_GAS)) -> debe fallar.
+(begin-tx "ATK-6c-ii: transfer tras GAS_PAYER real pero sin GAS en scope")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-06-01T01:00:00Z")
+                , "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "exec"
+          , "exec-code": ["(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends \"k:alice\")"] })
+(env-sigs [{ "key": "atk-key"
+           , "caps": [(coin.TRANSFER n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION "attacker-acct" 5.0)] }])
+(test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:alice" 1500 0.000001))
+;; NO instalamos coin.GAS aqu?. ALLOW_GAS s? est? compuesta por GAS_PAYER.
+(print "-- transfer con ALLOW_GAS pero SIN GAS --")
+(expect-failure "ALLOW_GAS sin GAS no satisface gas-payer-pred (require GAS falla)"
+  (coin.transfer n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION "attacker-acct" 5.0))
+(print (format "STATION tras (ii) = {}" [(at 'balance (coin.details n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION))]))
+(commit-tx)

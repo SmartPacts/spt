@@ -1,0 +1,52 @@
+;; ATK-TRANCHES-6: precision/redondeo en la curva + conservacion de supply total
+;; Angulo nuevo: buscar un t donde vested-released tenga >12 decimales (romperia credit/enforce-unit)
+;; o donde floors sucesivos permitan micro-sobre-liberacion. Ademas conservacion global.
+(load "setup.repl")
+
+;; Founder: total 10000, cliff 2027-06-01, vest 2030-05-31 (1095 dias span).
+;; Elegir instantes "feos" (segundos primos) para forzar divisiones no exactas.
+(begin-tx "founder micro-releases en tiempos feos")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-06-01T00:00:07Z") })
+(print (format "vested 7s tras cliff (releasable): {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.tranche-releasable "founder")]))
+(print (format "release1: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "founder")]))
+(commit-tx)
+(begin-tx "founder +13s")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-06-01T00:00:20Z") })
+(print (format "release2: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "founder")]))
+(commit-tx)
+(begin-tx "founder +1 tick raro")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-06-01T00:00:21Z") })
+;; puede que 1s no acumule 1e-12 => releasable < precision => release falla. lo comprobamos.
+(print (format "releasable +1s: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.tranche-releasable "founder")]))
+(commit-tx)
+
+;; Verificar que released nunca supera vested y balance del reserve nunca negativo
+(begin-tx "invariante released <= total y reserve >= 0")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-06-01T00:00:21Z") })
+(let* ((rel (at 'released (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-tranche "founder")))
+       (resv (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.FUNDERS-ACCOUNT))
+       (ben (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0")))
+  (print (format "released={} reserve={} beneficiario={} suma={}" [rel resv ben (+ resv ben)]))
+  (expect "released == beneficiario recibido" rel ben)
+  (expect "reserve + beneficiario == 10000 (conservacion)" 10000.0 (+ resv ben))
+  (expect "released <= total" true (<= rel 10000.0)))
+(commit-tx)
+
+;; --- Conservacion GLOBAL: liberar TODO (los 3 tranches) tras sus vest-ends y sumar supply ---
+(begin-tx "liberar todo tras vest-ends")
+(env-chain-data { "chain-id": "0", "block-time": (time "2032-01-01T00:00:00Z") })
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "founder")
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "treasury")
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity")
+(let* ((f (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"))
+       (tr (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "k:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"))
+       (l (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"))
+       (ipo (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT))
+       (rf (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.FUNDERS-ACCOUNT))
+       (rtr (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT))
+       (rl (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.LIQUIDITY-ACCOUNT)))
+  (print (format "benefs f={} tr={} l={} ipo={} | reserves rf={} rtr={} rl={}" [f tr l ipo rf rtr rl]))
+  (expect "SUPPLY total conservado == 100000" 100000.0 (+ f (+ tr (+ l (+ ipo (+ rf (+ rtr rl))))))))
+(commit-tx)
+
+(print "ATK-TRANCHES-6 done")

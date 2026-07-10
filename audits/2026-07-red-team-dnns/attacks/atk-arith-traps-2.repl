@@ -1,0 +1,70 @@
+(load "setup.repl")
+;; ATK-ARITH-2: DUST FARMING via balances fraccionarios + re-checkpoint repetido.
+;; En debit/credit, new-pend = pend + bal*(rps-rd) se guarda SIN floor (hasta 24 dec).
+;; Solo claim floorea. Hipotesis: si un atacante fracciona su balance y hace muchos
+;; micro-movimientos que crystallizan repetidamente, ?puede su pending TOTAL superar
+;; bal_total*rps (cobrar mas que su cuota justa)? Invariante: Sigma pending == circ*rps - (efecto sum-debt),
+;; y la liability O(1) debe seguir == Sigma pending real.
+;; Tambien: balance con 12 decimales * rps 12 dec => 24 dec en pending; comprobar que
+;; el redondeo NUNCA suma a favor del holder.
+
+(begin-tx "seed atacante con balance fraccionario")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(env-data { "whale": { "keys": ["wk"], "pred": "keys-all" }
+          , "sink":  { "keys": ["sk"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "whale" 100000.0)] }])
+(coin.transfer-create "sender00" "whale" (read-keyset 'whale) 100000.0)
+(env-sigs [{ "key": "wk", "caps": [(coin.TRANSFER "whale" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 100000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "whale" (read-keyset 'whale) 10000.0)
+;; fracciono: whale se manda a si mismo NO (sender!=receiver). Creo sink y muevo fracciones.
+(commit-tx)
+
+;; declarar rps con muchos decimales
+(begin-tx "round rate 0.000000000007 (7e-12)")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R1" 0.000000000007 (time "2026-06-01T00:00:00Z"))
+(print (format "rps={}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps)]))
+(commit-tx)
+
+;; whale tiene 10000 shares. owed = 10000 * 7e-12 = 7e-8 = 0.00000007 (pagable, 12 dec).
+;; Ahora fracciono el balance en trozos de 0.000000000001 (1 share-unit minimo) y muevo
+;; muchas veces para forzar crystallizaciones repetidas con colas de 24 dec.
+;; Movimiento fraccionario: 0.333333333333 shares whale->sink varias veces.
+(begin-tx "chorro de micro-transfers fraccionarios whale->sink->whale")
+(env-data { "sink": { "keys": ["sk"], "pred": "keys-all" } })
+(env-sigs [{ "key": "wk", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "whale" "sink" 0.333333333333)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "whale" "sink" (read-keyset 'sink) 0.333333333333)
+(commit-tx)
+(begin-tx "mas rondas para subir rps con colas")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R2" 0.000000000003 (time "2026-06-01T00:00:00Z"))
+(commit-tx)
+;; devolver la fraccion
+(begin-tx "sink->whale devuelve")
+(env-sigs [{ "key": "sk", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "sink" "whale" 0.333333333333)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "sink" "whale" 0.333333333333)
+(commit-tx)
+
+;; VERIFICACION: la suma de pending de whale+sink NO debe superar la cuota justa.
+;; Cuota justa total del float (10000 shares) = 10000 * rps_final.
+(begin-tx "verificar conservacion exacta")
+(let* ((rps (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps))
+       (pw (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "whale"))
+       (ps (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "sink"))
+       (bw (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "whale"))
+       (bs (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "sink"))
+       (circ (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
+       (owed (+ pw ps))
+       (fair (* circ rps))
+       (liab (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability)))
+  (print (format "rps={} circ={} bal whale={} sink={}" [rps circ bw bs]))
+  (print (format "pending whale={} sink={} SUMA={}" [pw ps owed]))
+  (print (format "fair=circ*rps={} liability(O1)={}" [fair liab]))
+  (print "ROTO si owed > fair (el holder fraccionando cobra MAS que su cuota)")
+  (enforce (<= owed (+ fair 0.0000000000001)) "ROTO: owed excede la cuota justa por micro-fraccion")
+  (enforce (= (floor liab 12) (floor owed 12)) "ROTO: liability O1 != Sigma pending On")
+  (print "DEFENDIDO: owed <= fair y O1==On"))
+(commit-tx)
+(print "ATK-ARITH-2 done")

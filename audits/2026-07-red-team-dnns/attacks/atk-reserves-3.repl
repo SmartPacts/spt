@@ -1,0 +1,49 @@
+;; ATK-RESERVES-3: redireccion de release-tranche + rotate del beneficiario + release en falso destino.
+(load "setup.repl")
+
+;; (1) Rotar el guard del beneficiario ANTES de release. release-tranche lee beneficiario+guard
+;;     de la fila tranche-locks (fijo en init), NO de la tabla accounts. Rotar accounts no debe redirigir.
+(begin-tx "R3a: crear cuenta beneficiario liquidity y rotar su guard a atacante")
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" }
+          , "liqb": { "keys": ["b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"], "pred": "keys-all" } })
+;; el beneficiario k:b2.. es un principal; su cuenta SPT no existe aun (se crea al primer credit en release).
+;; Intento pre-crear la cuenta con guard atacante para secuestrar el credit del release.
+(env-keys ["atk-key"])
+(expect-failure "no puedo crear cuenta principal k:b2 con guard atacante (enforce-reserved)"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-account
+    "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" (read-keyset 'atk)))
+(commit-tx)
+
+;; (2) Pre-crear la cuenta del beneficiario con el guard CORRECTO (permitido), luego rotarla a atacante,
+;;     y ver si el credit del release respeta el guard almacenado (credit exige retg==guard de la fila).
+(begin-tx "R3b: pre-crear beneficiario correcto y rotar a atacante, luego release")
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" }
+          , "liqb": { "keys": ["b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"], "pred": "keys-all" } })
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-account
+  "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" (read-keyset 'liqb))
+;; rotar el beneficiario a guard atacante: principal account NO puede rotar a guard no-matching => debe fallar
+(env-keys ["b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"])
+(expect-failure "beneficiario principal no puede rotar a guard atacante"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.rotate
+    "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" (read-keyset 'atk)))
+(commit-tx)
+
+;; Aun asi: el credit del release usa el guard de la FILA tranche (liqb), y la cuenta ya existe con guard liqb.
+;; Si el guard almacenado != guard de la fila, credit revierte. Comprobamos que release paga al beneficiario real.
+(begin-tx "R3c: release liquidity va al beneficiario real, no al atacante")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-08-30T00:00:00Z") })
+(print (format "liqb ANTES: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2")]))
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity")
+(print (format "liqb DESPUES: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2")]))
+(expect "release pago al beneficiario real 8554.6875" 8554.6875 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"))
+(commit-tx)
+
+;; (3) release-tranche con nombre de tranche manipulado / cap-guard cruzado:
+;;     intentar liberar 'treasury' pero que el DEBIT toque otra reserva (no posible: dispatch fijo). 
+(begin-tx "R3d: tranche desconocido y variantes")
+(env-chain-data { "chain-id": "0", "block-time": (time "2032-01-01T00:00:00Z") })
+(expect-failure "tranche vacio rechazado" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche ""))
+(expect-failure "tranche Treasury (mayus) rechazado" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "Treasury"))
+(commit-tx)
+
+(print "ATK-RESERVES-3 done")

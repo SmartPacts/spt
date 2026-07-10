@@ -1,0 +1,57 @@
+;; ATK-RESERVES-2: drenar KDA de REVENUE / POOL sin la funcion prevista.
+;; Angulo nuevo: instalar coin.TRANSFER desde tx code sobre las cuentas KDA guardadas por cap.
+(load "setup.repl")
+
+;; Sembrar KDA en revenue para tener algo que robar
+(begin-tx "seed revenue con 500 KDA")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT 500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" 500.0)
+(expect "revenue tiene 500" 500.0 (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT))
+(commit-tx)
+
+;; (1) coin.transfer directo firmando coin.TRANSFER desde REVENUE-ACCOUNT.
+;;     El guard de la cuenta coin es POOL-G/REVENUE-G (cap-guard). Firmar la key NO satisface un cap-guard.
+(begin-tx "R2a: coin.transfer directo desde REVENUE a atacante")
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(env-keys ["atk-key"])
+(env-sigs [{ "key": "atk-key", "caps": [(coin.TRANSFER n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT "atk" 500.0)] }])
+(coin.create-account "atk" (read-keyset 'atk))
+(expect-failure "revenue KDA no sale con coin.transfer firmado (guard=cap-guard)"
+  (coin.transfer n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT "atk" 500.0))
+(commit-tx)
+
+;; (2) install-capability + coin.transfer desde tx code (imitando lo que hace el modulo internamente)
+(begin-tx "R2b: install-capability coin.TRANSFER desde REVENUE en tx code")
+(env-keys ["atk-key"])
+(expect-failure "install+transfer desde REVENUE bloqueado (cap-guard no satisfecho fuera de REVENUE-GUARD)"
+  (let ((_ 0))
+    (install-capability (coin.TRANSFER n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT "atk" 100.0))
+    (coin.transfer n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT "atk" 100.0)))
+(commit-tx)
+
+;; (3) Mismo contra POOL-ACCOUNT
+(begin-tx "R2c: install+transfer desde POOL")
+(env-keys ["atk-key"])
+(expect-failure "pool KDA no drenable externamente"
+  (let ((_ 0))
+    (install-capability (coin.TRANSFER n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT "atk" 100.0))
+    (coin.transfer n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT "atk" 100.0)))
+(commit-tx)
+
+;; (4) withdraw-revenue como NO-admin => bloqueado (ADMIN cap). Mutacion: destino atacante, importe grande.
+(begin-tx "R2d: withdraw-revenue no-admin")
+(env-keys ["atk-key"])
+(expect-failure "withdraw-revenue no-admin bloqueado"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.withdraw-revenue "atk" 500.0))
+(commit-tx)
+
+;; (5) withdraw-revenue como ADMIN pero pidiendo MAS que el saldo => coin.transfer debe fallar (insufficient)
+(begin-tx "R2e: admin withdraw MAS que saldo")
+(env-keys ["admin-key"])
+(env-sigs [{ "key": "admin-key", "caps": [] }])
+(expect-failure "admin no puede sacar mas KDA del que hay en revenue"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.withdraw-revenue "sender00" 999999.0))
+(expect "revenue intacto tras intento overdraw" 500.0 (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT))
+(commit-tx)
+
+(print "ATK-RESERVES-2 done")

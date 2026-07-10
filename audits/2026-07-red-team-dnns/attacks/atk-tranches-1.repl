@@ -1,0 +1,37 @@
+;; ATK-TRANCHES-1: off-by-one en cliff + retroceso de block-time para re-liberar
+(load "setup.repl")
+
+;; --- A) off-by-one: liberar EXACTAMENTE en el instante del cliff (t == cliff-end) ---
+;; liquidity cliff-end = 2026-08-30T00:00:00Z. La curva: (< t cliff-end) => 0.
+;; En t == cliff-end, tranche-vested = floor(total*0 / span) = 0 => amount 0 => debe fallar.
+(begin-tx "A: liberar justo en cliff-end (t==cliff)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-30T00:00:00Z") })
+(print (format "releasable en t==cliff-end: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.tranche-releasable "liquidity")]))
+(expect-failure "en t==cliff-end nada liberable (amount=0)" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity"))
+(commit-tx)
+
+;; --- B) 1 segundo despues del cliff: minimo liberable ---
+(begin-tx "B: 1s tras cliff")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-30T00:00:01Z") })
+(print (format "releasable 1s tras cliff: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.tranche-releasable "liquidity")]))
+(commit-tx)
+
+;; --- C) ATAQUE: liberar en el futuro, luego RETROCEDER el block-time y re-liberar ---
+;; Hipotesis: si released se guarda pero tranche-vested cae al retroceder el tiempo,
+;; amount = vested(t_atras) - released < 0 => debe fallar (enforce > 0). Verificar reserve.
+(begin-tx "C1: liberar parcial en 2027-08-30")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-08-30T00:00:00Z") })
+(print (format "reserve ANTES: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.LIQUIDITY-ACCOUNT)]))
+(print (format "released paga: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity")]))
+(print (format "reserve DESPUES: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.LIQUIDITY-ACCOUNT)]))
+(print (format "released acumulado: {}" [(at 'released (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-tranche "liquidity"))]))
+(commit-tx)
+
+(begin-tx "C2: RETROCESO temporal a justo tras cliff y re-liberar (debe fallar)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-09-01T00:00:00Z") })
+(print (format "releasable con tiempo retrocedido: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.tranche-releasable "liquidity")]))
+(expect-failure "no re-liberacion con retroceso temporal" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity"))
+(print (format "reserve tras intento retroceso: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.LIQUIDITY-ACCOUNT)]))
+(commit-tx)
+
+(print "ATK-TRANCHES-1 done")

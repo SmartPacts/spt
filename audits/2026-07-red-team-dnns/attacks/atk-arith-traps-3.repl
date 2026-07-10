@@ -1,0 +1,77 @@
+(load "setup.repl")
+;; ATK-ARITH-3: EXACTITUD DE MANAGED CAPS (TRANSFER).
+;; El cap TRANSFER es @managed amount TRANSFER-mgr: remainder = managed - requested, >=0.
+;; Mutaciones:
+;;  (M1) Firmar TRANSFER por 100 e intentar mover 150 de golpe -> debe fallar (exceeded).
+;;  (M2) Firmar TRANSFER por 100 y hacer DOS transfers de 60+60=120 bajo la MISMA firma
+;;       (mismo sender/receiver) -> el segundo debe fallar (remainder agotado). Buscamos
+;;       que el managed acumule MAL y deje pasar >100.
+;;  (M3) enforce-unit en el cap: firmar TRANSFER por 0.0000000000005 (13 dec) -> el cap
+;;       body llama enforce-unit y debe rechazar (precision).
+;;  (M4) amount negativo en el cap (>0.0) -> rechazo.
+;; Un ROTO = mover mas SPT del que autoriza la firma.
+
+(begin-tx "seed whale 5000 shares")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(env-data { "whale": { "keys": ["wk"], "pred": "keys-all" }
+          , "rcv":   { "keys": ["rk"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "whale" 5000.0)] }])
+(coin.transfer-create "sender00" "whale" (read-keyset 'whale) 5000.0)
+(env-sigs [{ "key": "wk", "caps": [(coin.TRANSFER "whale" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 5000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "whale" (read-keyset 'whale) 10000.0)
+;; crear rcv como holder (0 shares) para tener guard estable
+(env-sigs [{ "key": "wk", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "whale" "rcv" 1.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "whale" "rcv" (read-keyset 'rcv) 1.0)
+(print (format "whale bal={} rcv bal={}"
+  [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "whale")
+   (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "rcv")]))
+(commit-tx)
+
+;; M1: firmar 100, mover 150 -> exceeded
+(begin-tx "M1 firmar 100 mover 150")
+(env-sigs [{ "key": "wk", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "whale" "rcv" 100.0)] }])
+(expect-failure "M1: mover 150 con firma de 100 rechazado" "TRANSFER exceeded"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "whale" "rcv" 150.0))
+(commit-tx)
+
+;; M2: firmar 100, dos transfers 60+60 en la MISMA tx (misma firma instalada).
+(begin-tx "M2 firmar 100, 60 + 60")
+(env-sigs [{ "key": "wk", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "whale" "rcv" 100.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "whale" "rcv" 60.0)
+(print "M2: primer transfer 60 OK, remainder=40")
+(expect-failure "M2: segundo transfer 60 (total 120>100) rechazado" "TRANSFER exceeded"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "whale" "rcv" 60.0))
+(commit-tx)
+
+;; M2b: firmar 100, 60 + 40 = 100 exacto DEBE pasar (no rotura, control)
+(begin-tx "M2b firmar 100, 60 + 40 exacto")
+(env-sigs [{ "key": "wk", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "whale" "rcv" 100.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "whale" "rcv" 60.0)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "whale" "rcv" 40.0)
+(print "M2b: 60+40=100 exacto pasa (control correcto)")
+(commit-tx)
+
+;; M3: firmar TRANSFER con 13 decimales -> enforce-unit en el cap body rechaza
+(begin-tx "M3 firma con 13 decimales")
+(env-sigs [{ "key": "wk", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "whale" "rcv" 0.0000000000005)] }])
+(expect-failure "M3: transfer con 13-dec viola precision" "precision"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "whale" "rcv" 0.0000000000005))
+(commit-tx)
+
+;; M4: intentar instalar cap con amount 0 -> el cap body enforce > 0
+(begin-tx "M4 firma amount 0")
+(env-sigs [{ "key": "wk", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "whale" "rcv" 0.0)] }])
+(expect-failure "M4: transfer 0 rechazado (positive)" "positive"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "whale" "rcv" 0.0))
+(commit-tx)
+
+;; balance final: rcv debe tener 1 (seed) + 60 (M2b) + 40 (M2b) = 101 exacto. NADA de M1/M2 fallidos.
+(begin-tx "verificar rcv exacto")
+(let ((br (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "rcv")))
+  (print (format "rcv bal final = {} (esperado 161.0: 1 seed + 60 M2commit + 100 M2b)" [br]))
+  (enforce (= br 161.0) "ROTO: rcv recibio mas de lo firmado")
+  (print "DEFENDIDO: managed cap exacto, nada por encima de lo firmado"))
+(commit-tx)
+(print "ATK-ARITH-3 done")

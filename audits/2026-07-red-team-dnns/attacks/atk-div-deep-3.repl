@@ -1,0 +1,14 @@
+;; V3 -- RATE NEGATIVO (rechazo esperado).
+(load "setup.repl")
+(load "seed-div.repl")
+(env-data { "accts": ["alice" "bob"] })
+(begin-tx "V3 rate negativo")
+(env-keys ["admin-key"])
+(expect-failure "V3 rate negativo rechazado" "rate must be positive"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "Rneg" -0.02 (time "2026-06-01T00:00:00Z")))
+(let ((o1 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+      (on (fold (+) 0.0 (map (lambda (a:string) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of a)) (read-msg 'accts)))))
+  (print (format "V3 ORACULO: O1={} On={}" [o1 on]))
+  (expect "V3 O1==On" on o1))
+(commit-tx)
+(print "V3 FIN")

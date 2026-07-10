@@ -1,0 +1,78 @@
+;; ATK div-solvency-5: cobrar desde una RESERVA EXCLUIDA + gap de solvencia con IPO reserve.
+;; Angulo mutado de DF-8 (que usaba treasury): aqui usamos la reserva IPO excluida.
+;; A7a: la reserva IPO nunca devenga ni puede reclamar (excluded? la cubre).
+;; A7b: mover un holder-con-pending a la reserva IPO -> circulating baja, pending se conserva,
+;;      fund-dividends debe seguir exigiendo cubrir la liability REAL (no circ*rps).
+;; A7c: intentar financiar por debajo (circ*rps) tras el dump -> RECHAZADO.
+(load "setup.repl")
+
+(begin-tx "seed alice 3000")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 2000.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 2000.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 2000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "alice" (read-keyset 'alice) 4000.0)
+(commit-tx)
+
+;; frank recibe 1000 de alice, luego una ronda le devenga pending real
+(begin-tx "frank recibe 1000 y devenga pending")
+(env-data { "frank": { "keys": ["frank-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "frank" 1000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "frank" (read-keyset 'frank) 1000.0)
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R1" 0.05 (time "2026-06-01T00:00:00Z"))
+(expect "frank owed 50" 50.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "frank"))
+(commit-tx)
+
+;; A7a: la reserva IPO (excluida) NO devenga y NO puede reclamar
+(begin-tx "A7a la reserva IPO excluida no devenga ni reclama")
+(let ((ipo (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.reserve-account)))
+  (print (format "A7a: IPO reserve={} pending={} balance-SPT={}"
+    [ipo (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of ipo)
+     (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance ipo)]))
+  (expect "A7a: IPO reserve pending == 0 (excluida)" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of ipo))
+  (expect-failure "A7a: IPO reserve no puede reclamar dividendos" "nothing to claim"
+    (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends ipo)))
+(commit-tx)
+
+;; A7b: frank vuelca sus 1000 a la reserva IPO excluida -> circulating baja, pending 50 se queda
+(begin-tx "A7b frank vuelca 1000 a la reserva IPO excluida")
+(let ((ipo (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.reserve-account))
+      (circ-before (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
+      (liab-before (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability)))
+  (env-sigs [{ "key": "frank-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "frank" ipo 1000.0)] }])
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer "frank" ipo 1000.0)
+  (let ((circ-after (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
+        (liab-after (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+        (rps (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps)))
+    (print (format "A7b: circ {}->{} liab {}->{} circ*rps={}"
+      [circ-before circ-after liab-before liab-after (* circ-after rps)]))
+    (expect "A7b: frank conserva sus 50 pending tras volcar a IPO" 50.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "frank"))
+    (expect "A7b: liability invariante al dump (dividendo preservado)" liab-before liab-after)
+    (expect "A7b: liability real > circ*rps (blind spot del guard viejo)" true (> liab-after (* circ-after rps)))))
+(commit-tx)
+
+;; A7c: financiar por debajo (circ*rps en vez de liability) -> RECHAZADO
+(begin-tx "A7c infrafinanciacion circ*rps rechazada")
+(env-keys ["admin-key"])
+(let* ((circ (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
+       (rps (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps))
+       (liab (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+       (poolbal (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT))
+       (old-amt (- (* circ rps) poolbal))          ; lo que el guard viejo (circ*rps) aceptaria
+       (true-amt (+ (- liab poolbal) 0.01)))
+  (print (format "A7c: circ*rps={} liability={} old-amt={} true-amt={}" [(* circ rps) liab old-amt true-amt]))
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT true-amt)] }])
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" true-amt)
+  (env-keys ["admin-key"])
+  (expect-failure "A7c: financiar solo circ*rps deja a frank colgado -> RECHAZADO"
+    "pool underfunded"
+    (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends old-amt))
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends true-amt))
+(expect "A7c: frank cobra sus 50 stranded en full" 50.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "frank"))
+(commit-tx)
+
+(print "atk-div-solvency-5 FIN")

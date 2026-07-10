@@ -1,0 +1,80 @@
+(load "setup.repl")
+;; ATK-ARITH-5 (angulo nuevo): REDONDEO EN LA CURVA DE VESTING DE TRANCHES.
+;; tranche-vested = floor12(total*(t-cliff)/(vest-cliff)) entre cliff y vest; total en/ tras vest.
+;; release-tranche paga vested - released y actualiza released += amount.
+;; Ataques de precision:
+;;  (A) Multiples releases incrementales en muchos instantes: Sigma releases debe == total EXACTO
+;;      al final, NUNCA > total (over-release = crear shares de reserva de la nada).
+;;  (B) Borde cliff-end EXACTO: releasable debe ser 0 (no un epsilon por redondeo).
+;;  (C) Borde vest-end EXACTO y +1s: paga EXACTAMENTE total, el top-up cubre el dust del floor.
+;;  (D) Un release justo antes de vest-end (floor) + el final (top-up): que el top-up no
+;;      pague de mas ni deje released < total.
+;; Liquidity: cliff 90d, vest 730d desde 2026-06-01. total=15000.
+
+(begin-tx "estado inicial liquidity tranche")
+(print (format "liquidity tranche = {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-tranche "liquidity")]))
+(commit-tx)
+
+;; (B) EN el cliff exacto (2026-06-01 + 90d = 2026-08-30T00:00:00Z) -> releasable 0
+(begin-tx "B: en cliff exacto releasable 0")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-30T00:00:00Z") })
+(let ((r (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.tranche-releasable "liquidity")))
+  (print (format "releasable en cliff exacto = {} (debe 0)" [r]))
+  (enforce (= r 0.0) "ROTO: releasable != 0 en el cliff exacto (epsilon de redondeo)"))
+(expect-failure "release en cliff exacto rechazado" "nothing releasable"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity"))
+(commit-tx)
+
+;; (A/D) chorro de releases incrementales a lo largo del vesting
+(begin-tx "A: release a los 100d")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-09-09T00:00:00Z") })
+(print (format "release 100d paga {} released-total ahora {}"
+  [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity")
+   (at 'released (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-tranche "liquidity"))]))
+(commit-tx)
+(begin-tx "A: release a los 300d")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-03-28T00:00:00Z") })
+(print (format "release 300d paga {} released-total {}"
+  [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity")
+   (at 'released (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-tranche "liquidity"))]))
+(commit-tx)
+(begin-tx "A: release a los 500d")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-10-14T00:00:00Z") })
+(print (format "release 500d paga {} released-total {}"
+  [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity")
+   (at 'released (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-tranche "liquidity"))]))
+(commit-tx)
+
+;; (D) 1 segundo ANTES de vest-end (2028-05-31? 2026-06-01+730d). 730d=2028-05-31T00:00:00Z aprox.
+;; add-time con days 730 desde 2026-06-01. Uso un instante intermedio tardio y luego el vest-end exacto.
+(begin-tx "D: release casi al final (729d)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2028-05-30T00:00:00Z") })
+(print (format "release 729d paga {} released-total {}"
+  [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity")
+   (at 'released (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-tranche "liquidity"))]))
+(commit-tx)
+
+;; (C) vest-end y mas alla: top-up a EXACTAMENTE total
+(begin-tx "C: pasado vest-end, top-up a total exacto")
+(env-chain-data { "chain-id": "0", "block-time": (time "2029-01-01T00:00:00Z") })
+(let ((rel-before (at 'released (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-tranche "liquidity"))))
+  (print (format "released antes del top-up final = {}" [rel-before]))
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity")
+  (let* ((tr (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-tranche "liquidity"))
+         (rel (at 'released tr))
+         (tot (at 'total tr))
+         (benbal (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2")))
+    (print (format "released FINAL={} total={} balance-beneficiario={}" [rel tot benbal]))
+    (enforce (= rel tot) "ROTO: released != total tras vest-end")
+    (enforce (= benbal tot) "ROTO: beneficiario no recibio exactamente total (over/under-release)")
+    (enforce (<= rel tot) "ROTO: over-release, released > total (shares creadas de la nada)")))
+(commit-tx)
+
+;; ya no queda nada releasable
+(begin-tx "C: nada mas releasable tras total")
+(env-chain-data { "chain-id": "0", "block-time": (time "2030-01-01T00:00:00Z") })
+(expect-failure "nada mas que liberar tras total" "nothing releasable"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity"))
+(print "DEFENDIDO: vesting exacto, Sigma releases == total, sin over-release ni epsilon")
+(commit-tx)
+(print "ATK-ARITH-5 done")

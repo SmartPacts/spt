@@ -1,0 +1,46 @@
+(load "setup.repl")
+
+;; ATK-5 (?NGULO REAL DNNS): con GAS+ALLOW_GAS instaladas a nivel tx (como en el
+;; gas-buy real), intentar (a) transferir el saldo de la estaci?n al atacante,
+;; (b) buy-gas con total enorme para drenar. La estaci?n queda con guard
+;; satisfecho durante el gas-buy: ?se puede abusar?
+
+(begin-tx "fund station 5 KDA + destino atacante")
+(env-keys ["admin-key"])
+(env-sigs [{ "key": "admin-key"
+           , "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION 5.0)] }])
+(coin.transfer "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION 5.0)
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(coin.create-account "attacker-acct" (read-keyset 'atk))
+(print (format "STATION antes = {}" [(at 'balance (coin.details n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION))]))
+(commit-tx)
+
+;; (a) transfer del saldo con GAS+ALLOW_GAS instaladas a nivel tx
+(begin-tx "ATK-5a: transfer estacion->atacante con GAS+ALLOW_GAS reales")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-05-01T00:00:00Z")
+                , "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "exec"
+          , "exec-code": ["(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends \"k:alice\")"] })
+(test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:alice" 1500 0.000001))
+(test-capability (coin.GAS))
+(expect "ALLOW_GAS realmente en scope" true
+  (require-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.ALLOW_GAS)))
+(print "-- transfer estacion->atacante --")
+(expect-failure "transfer del saldo de la estaci?n bloqueada pese a GAS+ALLOW_GAS"
+  (coin.transfer n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION "attacker-acct" 5.0))
+(print (format "STATION tras intento transfer = {}" [(at 'balance (coin.details n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION))]))
+(commit-tx)
+
+;; (b) buy-gas con total enorme -> debita la estaci?n DE VERDAD (esto S? mueve saldo)
+(begin-tx "ATK-5b: buy-gas total=5.0 drena la estacion?")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-05-01T01:00:00Z")
+                , "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "exec"
+          , "exec-code": ["(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends \"k:alice\")"] })
+(test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:alice" 1500 0.000001))
+(test-capability (coin.GAS))
+(print "-- buy-gas total=5.0 --")
+(coin.buy-gas n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION 5.0)
+(print (format "STATION tras buy-gas 5.0 = {}" [(at 'balance (coin.details n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION))]))
+(print (format "ATACANTE balance = {}" [(at 'balance (coin.details "attacker-acct"))]))
+(commit-tx)

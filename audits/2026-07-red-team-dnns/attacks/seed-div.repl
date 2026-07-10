@@ -1,0 +1,17 @@
+;; Siembra compartida para atk-div-deep-*: alice 3000, bob 2000 (circ 5000).
+;; NO carga setup.repl (lo hace el fichero que incluye este). Requiere IPO activable.
+(begin-tx "seed alice 3000 / bob 2000 via IPO")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+          , "bob":   { "keys": ["bob-key"],   "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1500.0) (coin.TRANSFER "sender00" "bob" 1000.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1500.0)
+(coin.transfer-create "sender00" "bob"   (read-keyset 'bob)   1000.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "alice" (read-keyset 'alice) 3000.0)
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "bob" (read-keyset 'bob) 2000.0)
+(expect "seed: circ 5000" 5000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
+(commit-tx)

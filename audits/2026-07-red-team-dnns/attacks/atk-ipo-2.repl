@@ -1,0 +1,42 @@
+;; ATK-IPO-2: sobre-retirada de proceeds por encima de lo recaudado.
+;; withdraw-proceeds no lleva contador de "recaudado"; solo lo limita el saldo coin de SALES-INCOME.
+;; Mutaciones: (a) retirar mas del saldo => debe fallar. (b) doble retirada que exceda el total.
+;;             (c) retirar importe negativo/cero. (d) retirar tras inflar el saldo con donacion externa
+;;             (ver si el admin puede "recaudar" KDA que no vino de ventas -> sobre-retira lo donado).
+(load "setup.repl")
+
+(begin-tx "init+activate 0.5 y compra 1000 => income 500")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT 500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "sender00" (read-keyset 'sender00) 1000.0)
+(expect "income 500" 500.0 (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT))
+(commit-tx)
+
+;; (a) admin retira MAS que el saldo => debe fallar (insufficient funds)
+(begin-tx "IPO-2a: over-withdraw > saldo")
+(env-keys ["admin-key"])
+(expect-failure "no puede retirar 500.01 con solo 500"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.withdraw-proceeds "sender00" 500.01))
+(expect "income intacto 500" 500.0 (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT))
+(commit-tx)
+
+;; (b) importe negativo / cero
+(begin-tx "IPO-2b: withdraw negativo y cero")
+(env-keys ["admin-key"])
+(expect-failure "negativo rechazado" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.withdraw-proceeds "sender00" -100.0))
+(expect-failure "cero rechazado" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.withdraw-proceeds "sender00" 0.0))
+(commit-tx)
+
+;; (c) doble retirada: 300 + 300 = 600 > 500 => la segunda debe fallar
+(begin-tx "IPO-2c: doble withdraw excede total")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.withdraw-proceeds "sender00" 300.0)
+(print (format "income tras 1a retirada: {}" [(coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT)]))
+(expect-failure "segunda retirada 300 no cabe (quedan 200)"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.withdraw-proceeds "sender00" 300.0))
+(expect "income = 200 tras 1a retirada" 200.0 (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT))
+(commit-tx)
+
+(print "ATK-IPO-2 done")

@@ -1,0 +1,33 @@
+(load "setup.repl")
+
+;; ATK-1: EL FALLO DNNS -- drenar el saldo de la estaci?n con GAS+ALLOW_GAS en scope.
+
+(begin-tx "fund station")
+(env-keys ["admin-key"])
+(env-sigs [{ "key": "admin-key"
+           , "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION 5.0)] }])
+(coin.transfer "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION 5.0)
+(print (format "STATION balance ANTES: {}"
+  [(at 'balance (coin.details n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION))]))
+(commit-tx)
+
+;; destino atacante: cuenta plana con guard del atacante
+(begin-tx "crear destino atacante")
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(env-keys ["atk-key"])
+(coin.create-account "attacker-acct" (read-keyset 'atk))
+(commit-tx)
+
+;; --- Intento A: dentro de scope de GAS + ALLOW_GAS, transferir el saldo ---
+(begin-tx "ATK-1a: transfer del saldo con GAS+ALLOW_GAS en scope")
+(env-chain-data { "gas-price": 0.000001, "gas-limit": 1500
+                , "chain-id": "0", "block-time": (time "2026-09-01T00:00:00Z") })
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(env-keys ["atk-key"])
+(expect-failure "no se puede robar el saldo aunque GAS+ALLOW_GAS est?n en scope"
+  (test-capability (coin.GAS)
+    (test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.ALLOW_GAS)
+      (coin.transfer n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION "attacker-acct" 5.0))))
+(print (format "STATION balance DESPUES: {}"
+  [(at 'balance (coin.details n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION))]))
+(commit-tx)

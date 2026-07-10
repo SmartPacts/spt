@@ -1,0 +1,46 @@
+;; ATK-TRANCHES-2: sobre-liberacion via muchos pasos pequenos (acumulacion de floors)
+;; + verificar que la suma NUNCA excede el total y el reserve no queda negativo.
+(load "setup.repl")
+
+;; Liberar liquidity en MUCHOS pasos de 1 dia y sumar. Si floor por paso permitiera
+;; ganar mas que el total (redondeo hacia abajo NO deberia), lo detectamos.
+;; cliff = 2026-08-30, vest = 2028-05-31. Span ~ 640 dias.
+(begin-tx "liberar en pasos y acumular")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-30T00:00:00Z") })
+(commit-tx)
+
+;; Paso a paso avanzando el bloque un mes cada vez, acumular pagos
+(begin-tx "step 1 - 2026-10-01")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-10-01T00:00:00Z") })
+(print (format "p1: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity")]))
+(commit-tx)
+(begin-tx "step 2 - 2027-01-01")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-01-01T00:00:00Z") })
+(print (format "p2: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity")]))
+(commit-tx)
+(begin-tx "step 3 - 2027-06-01")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-06-01T00:00:00Z") })
+(print (format "p3: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity")]))
+(commit-tx)
+(begin-tx "step 4 - 2028-01-01")
+(env-chain-data { "chain-id": "0", "block-time": (time "2028-01-01T00:00:00Z") })
+(print (format "p4: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity")]))
+(commit-tx)
+;; PASADO vest-end: el ultimo salto debe topar EXACTAMENTE a total (rama explicita)
+(begin-tx "step 5 - PASADO vest-end 2028-06-01")
+(env-chain-data { "chain-id": "0", "block-time": (time "2028-06-01T00:00:00Z") })
+(print (format "p5 (top-up final): {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity")]))
+(commit-tx)
+
+(begin-tx "verificacion final")
+(env-chain-data { "chain-id": "0", "block-time": (time "2028-06-01T00:00:00Z") })
+(print (format "released total: {}" [(at 'released (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-tranche "liquidity"))]))
+(print (format "beneficiario balance: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2")]))
+(print (format "reserve final: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.LIQUIDITY-ACCOUNT)]))
+(expect "released == total exacto (no sobre-liberacion)" 15000.0 (at 'released (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-tranche "liquidity")))
+(expect "beneficiario tiene exactamente total" 15000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"))
+(expect "reserve vacio, NO negativo" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.LIQUIDITY-ACCOUNT))
+(expect-failure "nada mas tras topar a total" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity"))
+(commit-tx)
+
+(print "ATK-TRANCHES-2 done")

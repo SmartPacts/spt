@@ -1,0 +1,66 @@
+(load "setup.repl")
+;; ===========================================================================
+;; ATK-VOTEKEY-2 -- REGISTRO SIGILOSO REAL + OWNER LOCKOUT
+;; El atacante NO posee la clave main del dueno. Prueba:
+;;  (a) registrar una vote-key con SOLO su propia hot key (sin firma del dueno)
+;;  (b) registrar con una firma de OTRA cuenta cualquiera (bob) presente
+;;  (c) OWNER LOCKOUT: el dueno registra un vote-key con guard IMPOSIBLE
+;;      (keyset cuya clave nadie tiene) y luego intenta votar con su MAIN key.
+;;      Si el dueno queda bloqueado -> ROTO. VOTE lista main PRIMERO, no deberia.
+;; ===========================================================================
+(begin-tx "activate IPO")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(commit-tx)
+(begin-tx "seed alice 3000")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1500.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1500.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "alice" (read-keyset 'alice) 3000.0)
+(commit-tx)
+
+(begin-tx "announce proposal")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-proposal "P2" "t" "d" (time "2026-06-01T00:00:00Z") 259200)
+(commit-tx)
+
+;; --- (a) attacker ONLY has its own hot key ---
+(begin-tx "stealth (a): only attacker hot key present"
+)
+(env-data { "evil": { "keys": ["evil-hot"], "pred": "keys-all" } })
+(env-sigs [])
+(env-keys ["evil-hot"])
+(print "== (a) solo la hot del atacante ==")
+(expect-failure "attacker cannot self-register on victim account"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.set-vote-key "alice" (read-keyset 'evil)))
+(commit-tx)
+
+;; --- (b) an unrelated third party's key present ---
+(begin-tx "stealth (b): only bob key present")
+(env-data { "evil": { "keys": ["evil-hot"], "pred": "keys-all" } })
+(env-keys ["bob-key"])
+(print "== (b) firma de un tercero (bob) ==")
+(expect-failure "third-party sig cannot register on victim account"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.set-vote-key "alice" (read-keyset 'evil)))
+(print (format "getter alice (debe seguir sin vote-key activa): {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-vote-key "alice")]))
+(commit-tx)
+
+;; --- (c) OWNER LOCKOUT: register an unusable vote key, then vote with MAIN ---
+(begin-tx "owner registers a DEAD vote key (no one holds its key)")
+(env-data { "dead": { "keys": ["nobody-holds-this"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.VOTE-KEY-ADMIN "alice")] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.set-vote-key "alice" (read-keyset 'dead))
+(print (format "vote-key activa con guard muerto: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-vote-key "alice")]))
+(commit-tx)
+(begin-tx "OWNER still votes with MAIN key despite dead vote-key")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(env-sigs [])
+(env-keys ["alice-key"])
+(print "== (c) el dueno vota con su MAIN key pese a vote-key muerta ==")
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "P2" true)
+(expect "owner NOT locked out: yes=3000" 3000.0 (at 'yes (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P2")))
+(commit-tx)
+
+(print "ATK-VOTEKEY-2 done")

@@ -1,0 +1,60 @@
+;; ATK-TRANCHES-3: redirigir el beneficiario / robar el reserve time-locked
+(load "setup.repl")
+
+;; Cuenta atacante
+(begin-tx "crear cuenta atacante")
+(env-data { "atk-ks": { "keys": ["deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"], "pred": "keys-all" } })
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-account
+  "k:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef" (read-keyset 'atk-ks))
+(commit-tx)
+
+;; --- A) Intentar DEBITAR el reserve de liquidez directamente (sin la reserve-guard cap) ---
+(begin-tx "A: debit directo del reserve liquidez")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-08-30T00:00:00Z") })
+(env-sigs [{ "key": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "caps": [] }])
+(expect-failure "no debit directo del reserve"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.debit n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.LIQUIDITY-ACCOUNT 100.0))
+(commit-tx)
+
+;; --- B) Intentar TRANSFERIR desde el reserve al atacante (necesita DEBIT => account-guard del reserve) ---
+(begin-tx "B: transfer desde reserve a atacante")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-08-30T00:00:00Z") })
+(env-sigs [{ "key": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+             "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER
+                        n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.LIQUIDITY-ACCOUNT
+                        "k:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef" 100.0)] }])
+(expect-failure "no transfer desde reserve (guard es cap-guard, no keyset)"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer
+    n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.LIQUIDITY-ACCOUNT
+    "k:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef" 100.0))
+(commit-tx)
+
+;; --- C) Intentar ROTAR el guard del reserve para apropiarselo ---
+(begin-tx "C: rotate guard del reserve liquidez")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-08-30T00:00:00Z") })
+(env-sigs [{ "key": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "caps": [] }])
+(expect-failure "no rotate del reserve (cap-guard no satisfacible por keyset)"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.rotate
+    n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.LIQUIDITY-ACCOUNT (read-keyset 'atk-ks)))
+(commit-tx)
+
+;; --- D) Intentar rotar el guard del BENEFICIARIO (la k: del ops de liquidez) SIN su clave ---
+(begin-tx "D: rotate del beneficiario sin su clave")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-08-30T00:00:00Z") })
+(env-sigs [{ "key": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "caps": [] }])
+(expect-failure "no rotate del beneficiario ajeno"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.rotate
+    "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" (read-keyset 'atk-ks)))
+(commit-tx)
+
+;; --- E) release-tranche igualmente PAGA al beneficiario fijo, no al atacante que lo dispara ---
+(begin-tx "E: atacante dispara release pero cobra el beneficiario")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-08-30T00:00:00Z") })
+(env-sigs [{ "key": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "caps": [] }])
+(print (format "atacante dispara, paga: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity")]))
+(print (format "atacante balance (debe 0): {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "k:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef")]))
+(print (format "beneficiario legitimo balance: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2")]))
+(expect "atacante NO cobra" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "k:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"))
+(commit-tx)
+
+(print "ATK-TRANCHES-3 done")

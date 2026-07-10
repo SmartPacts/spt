@@ -1,0 +1,21 @@
+;; CONTROL NEGATIVO -- el or?culo diferencial NO es una tautolog?a.
+;; Verifico que dividend-liability (O1) y Spending-of (On) son C?LCULOS INDEPENDIENTES:
+;; O1 lee sum-pending/sum-debt/circ del state; On recorre cuentas y hace pend+bal*(rps-rd).
+;; Si fueran el mismo c?digo, cualquier bug se ocultaria. Demuestro que un On MAL calculado
+;; (omitiendo una cuenta) DIVERGE de O1 -> mi asercion "expect On O1" SI cazaria un fallo real.
+(load "setup.repl")
+(load "seed-div.repl")
+(begin-tx "control: R1 0.02 efectiva")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R1" 0.02 (time "2026-06-01T00:00:00Z"))
+(commit-tx)
+(begin-tx "control: On correcto == O1, On amputado != O1")
+(let ((o1 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+      (on-ok  (fold (+) 0.0 (map (lambda (a:string) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of a)) ["alice" "bob"])))
+      (on-bad (fold (+) 0.0 (map (lambda (a:string) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of a)) ["alice"]))))
+  (print (format "CONTROL: O1={} On-completo={} On-amputado(solo alice)={}" [o1 on-ok on-bad]))
+  (expect "CONTROL O1==On-completo (invariante real)" on-ok o1)
+  ;; el oraculo DISTINGUE: si On omitiera a bob, divergiria de O1 -> el test cazaria el bug
+  (expect "CONTROL O1 != On-amputado (el oraculo SI detecta divergencias)" true (!= o1 on-bad)))
+(commit-tx)
+(print "CONTROL FIN")

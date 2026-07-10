@@ -1,0 +1,45 @@
+;; ATK-SUPPLY-MINT-5: conservacion global de supply bajo movimiento de float.
+;; ANGULO NUEVO: verificar que NINGUNA secuencia de transfer/credit/debit cambia el SPT total.
+;; Liberamos liquidity tranche (float) y movemos shares; el total (suma de TODAS las cuentas)
+;; debe permanecer EXACTAMENTE 100000. Un mint oculto se veria como total > 100000.
+(load "setup.repl")
+
+;; Sembrar float: liberar liquidity tranche
+(begin-tx "M5: liberar liquidity para tener float")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-01-01T00:00:00Z") })  ; > cliff 90d liquidity
+(let ((paid (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity")))
+  (print (format "liquidity liberado a beneficiario = {}" [paid])))
+(commit-tx)
+
+(begin-tx "M5: supply total antes de mover")
+(let* ((t (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT))
+       (f (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.FUNDERS-ACCOUNT))
+       (l (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.LIQUIDITY-ACCOUNT))
+       (i (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT))
+       (b (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"))
+       (tot (+ t (+ f (+ l (+ i b))))))
+  (print (format "reservas t={} f={} l={} ipo={} benef-liq={} TOTAL={}" [t f l i b tot]))
+  (expect "supply total conservado = 100000" 100000.0 tot))
+(commit-tx)
+
+;; Mover shares del beneficiario liquidity a un atacante con importe fraccionario extremo (min precision)
+(begin-tx "M5a: transfer fraccionario")
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+           , "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" "atk" 0.000000000001)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" "atk" (read-keyset 'atk) 0.000000000001)
+(print (format "atk tras micro-transfer = {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "atk")]))
+(commit-tx)
+
+(begin-tx "M5: supply total tras mover")
+(let* ((t (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT))
+       (f (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.FUNDERS-ACCOUNT))
+       (l (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.LIQUIDITY-ACCOUNT))
+       (i (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT))
+       (b (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"))
+       (a (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "atk"))
+       (tot (+ t (+ f (+ l (+ i (+ b a)))))))
+  (print (format "TOTAL tras micro-transfer = {}" [tot]))
+  (expect "supply total sigue 100000 exacto" 100000.0 tot))
+(commit-tx)
+(print "ATK-SUPPLY-MINT-5 done")

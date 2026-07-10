@@ -1,0 +1,53 @@
+;; DEVNET-ONLY: exercises cross-chain / SPV paths the bare REPL cannot simulate
+;; (multi-chain state via env-chain-data / transfer-crosschain / report-tally-xchain).
+;; The held verdict for these fronts is also covered by same-front single-chain attacks;
+;; run these against a multi-chain devnet, not via a plain pact tests/atk-*.repl sweep.
+
+(load "../setup.repl")
+;; ===========================================================================
+;; ATK-VOTEKEY-1 -- REGISTRO SIGILOSO (stealth registration)
+;; Hipotesis: un atacante que capta una firma AMBIENTE del dueno (no scoped a
+;; VOTE-KEY-ADMIN, p.ej. de otra operacion cualquiera) podria colar un set-vote-key
+;; a su hot key. La suite de Alex solo prueba el camino SCOPED (env-sigs con cap).
+;; Aqui probamos: (a) firma ambiente pura (env-keys) del dueno, (b) firma del dueno
+;; scoped a OTRA cap distinta (TRANSFER) intentando gastar en set-vote-key.
+;; ===========================================================================
+
+;; seed alice 3000 via IPO
+(begin-tx "activate IPO")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(commit-tx)
+(begin-tx "seed alice 3000")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1500.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1500.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "alice" (read-keyset 'alice) 3000.0)
+(commit-tx)
+
+;; --- (a) STEALTH via AMBIENT owner key (env-keys, no scoping at all) ---
+(begin-tx "stealth: ambient alice-key set-vote-key to attacker hot")
+(env-data { "evil": { "keys": ["evil-hot"], "pred": "keys-all" } })
+(env-sigs [])           ;; clear scoped sigs
+(env-keys ["alice-key"])  ;; only ambient owner key present
+(print "== intento (a): firma AMBIENTE del dueno (sin scope) ==")
+(expect-failure "ambient owner sig must NOT be spendable on stealth registration"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.set-vote-key "alice" (read-keyset 'evil)))
+(commit-tx)
+
+;; --- (b) owner sig SCOPED TO A DIFFERENT CAP (TRANSFER) -> spend on set-vote-key ---
+(begin-tx "stealth: owner sig scoped to TRANSFER, spent on set-vote-key")
+(env-data { "evil": { "keys": ["evil-hot"], "pred": "keys-all" }
+          , "bob":  { "keys": ["bob-key"],  "pred": "keys-all" } })
+(env-keys [])
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "bob" 1.0)] }])
+(print "== intento (b): firma del dueno scoped a TRANSFER, gastada en set-vote-key ==")
+(expect-failure "sig scoped to TRANSFER must NOT authorize VOTE-KEY-ADMIN"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.set-vote-key "alice" (read-keyset 'evil)))
+;; prove no stealth key got written:
+(print (format "getter alice tras intentos: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-vote-key "alice")]))
+(commit-tx)
+
+(print "ATK-VOTEKEY-1 done")

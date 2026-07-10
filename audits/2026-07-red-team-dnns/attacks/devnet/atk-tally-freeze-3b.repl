@@ -1,0 +1,49 @@
+;; DEVNET-ONLY: exercises cross-chain / SPV paths the bare REPL cannot simulate
+;; (multi-chain state via env-chain-data / transfer-crosschain / report-tally-xchain).
+;; The held verdict for these fronts is also covered by same-front single-chain attacks;
+;; run these against a multi-chain devnet, not via a plain pact tests/atk-*.repl sweep.
+
+(load "../setup.repl")
+;; ATAQUE 3b: forzar el step1 del defpact xchain con un yield FALSIFICADO via
+;; env-yield para inyectar chains 1..19 en el hub y llegar a passed=true con
+;; datos parciales. Esto simula un atacante que fabrica el payload SPV.
+(begin-tx "activate IPO + seed alice 4500")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(commit-tx)
+(begin-tx "seed alice 4500")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 2250.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 2250.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 2250.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "alice" (read-keyset 'alice) 4500.0)
+(commit-tx)
+(begin-tx "open P + vote yes 4500")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-proposal "P" "t" "d" (time "2026-06-02T00:00:00Z") 259200)
+(commit-tx)
+(begin-tx "alice votes")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })
+(env-keys ["alice-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "P" true)
+(commit-tx)
+(begin-tx "report hub chain 0")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-06T00:00:00Z") })
+(env-keys ["atk-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.report-tally-hub "P")
+(commit-tx)
+
+;; ATAQUE: para chain 1, ejecuto step0 real en chain 1 (yield), luego step1 en hub.
+(begin-tx "xchain P step0 on chain 1")
+(env-chain-data { "chain-id": "1", "block-time": (time "2026-06-06T00:00:00Z") })
+(env-keys ["atk-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.report-tally-xchain "P")
+(commit-tx)
+(begin-tx "xchain P step1 resume on hub 0")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-06T00:00:00Z") })
+(continue-pact 1 false)
+(print (format "after xchain chain1: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-final-results "P")]))
+(commit-tx)
+(print "ATK3b done")

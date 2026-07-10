@@ -1,0 +1,57 @@
+(load "setup.repl")
+
+;; ATK-3: FRONTERA effective-at == curr-time exacto (<= now). Mover shares en el
+;; MISMO instante en que la ronda pasa a efectiva. Hipotesis: si el debit del emisor
+;; ve la ronda ya efectiva (crystalliza) Y el receptor tambien la ve (reward-debt),
+;; podria haber solape en el segundo frontera. Chequeo owner-total y conservacion.
+(begin-tx "seed alice 3000 / bob 2000")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+          , "bob":   { "keys": ["bob-key"],   "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1500.0) (coin.TRANSFER "sender00" "bob" 1000.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1500.0)
+(coin.transfer-create "sender00" "bob"   (read-keyset 'bob)   1000.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "alice" (read-keyset 'alice) 3000.0)
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "bob" (read-keyset 'bob) 2000.0)
+(commit-tx)
+
+;; Fijamos el reloj a un instante T. Declaramos ronda efectiva EXACTAMENTE en T.
+(begin-tx "reloj a T = 2026-07-01T12:00:00Z; declarar round efectiva en T exacto")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-07-01T12:00:00Z") })
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R1" 0.03 (time "2026-07-01T12:00:00Z"))
+(print (format "rps en T exacto (eff <= now, debe ser 0.03) = {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps)]))
+(print (format "alice pending en T = {} (debe 3000*0.03=90 latente)" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "alice")]))
+(commit-tx)
+
+;; En el MISMO instante T, alice mueve 3000 a carol.
+(begin-tx "en T exacto: alice->carol 3000")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-07-01T12:00:00Z") })
+(env-data { "carol": { "keys": ["carol-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "carol" 3000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "carol" (read-keyset 'carol) 3000.0)
+(let* ((pa (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "alice"))
+       (pc (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "carol"))
+       (total (+ pa pc)))
+  (print (format "alice pending={} carol pending={} owner+carol total={}" [pa pc total]))
+  (print "FAIR: alice tenia 3000 cuando R1 efectiva -> crystalliza 90. carol llega a rps 0.03 -> 0.")
+  (print "Total sobre estas 3000 shares debe ser 90. Si >90 => ROTO (doble en la frontera)")
+  (expect "alice crystaliza 90" 90.0 pa)
+  (expect "carol 0 (llega al rps ya efectivo)" 0.0 pc)
+  (expect "total 90 fair" 90.0 total))
+(commit-tx)
+
+;; verificacion global de conservacion: total owed == circulating * rps
+(begin-tx "conservacion global")
+(let* ((rps (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps))
+       (circ (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
+       (accts ["alice" "bob" "carol"])
+       (owed (fold (+) 0.0 (map (lambda (a:string) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of a)) accts))))
+  (print (format "rps={} circ={} circ*rps={} owed={}" [rps circ (* circ rps) owed]))
+  (expect "conservacion: owed == circ*rps (=150)" (* circ rps) owed))
+(commit-tx)
+(print "ATK-3 done")

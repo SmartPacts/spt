@@ -1,0 +1,27 @@
+;; ATK-IPO-3: comprar EXACTAMENTE la reserva y un tick por encima (off-by-one en el limite de reserva).
+;; Reserva IPO = 20000 SPT. Precio 0.5.
+(load "setup.repl")
+
+(begin-tx "init+activate 0.5")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(commit-tx)
+
+;; (a) comprar exactamente 20000 => reserva a 0, comprador con 20000
+(begin-tx "IPO-3a: comprar exactamente la reserva completa 20000")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT 10000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "sender00" (read-keyset 'sender00) 20000.0)
+(print (format "RESERVE tras comprar 20000: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT)]))
+(expect "reserva a 0" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT))
+(expect "buyer 20000" 20000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "sender00"))
+(commit-tx)
+
+;; (b) intentar comprar 1 tick mas (1e-12) con reserva ya a 0 => debe fallar (insufficient reserve)
+(begin-tx "IPO-3b: 1 tick por encima de reserva vacia")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT 1.0)] }])
+(expect-failure "reserva vacia no entrega ni 1e-12"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "sender00" (read-keyset 'sender00) 0.000000000001))
+(commit-tx)
+
+(print "----- caso off-by-one exacto en fresh setup -----")

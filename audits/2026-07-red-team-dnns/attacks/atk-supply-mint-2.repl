@@ -1,0 +1,43 @@
+;; ATK-SUPPLY-MINT-2: llamar credit externamente para acu?ar SPT de la nada.
+;; credit require-capability (CREDIT account). CREDIT es "internal credit token" weak body.
+;; Angulo: intentar adquirir CREDIT desde tx code y acu?ar; y via with-capability(CREDIT ...) directo.
+(load "setup.repl")
+
+(begin-tx "M2: supply antes")
+(print (format "ipo antes = {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT)]))
+(print (format "circulating antes = {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating)]))
+(commit-tx)
+
+;; (1) with-capability(CREDIT atk) desde tx code + credit => CREDIT weak body TRUE, pero credit exige require-capability
+;;     Si with-capability desde fuera concede CREDIT, seria mint arbitrario. Debe fallar por no ser invocable.
+(begin-tx "M2a: with-capability CREDIT externo + credit")
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(env-keys ["atk-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-account "atk-acc" (read-keyset 'atk))
+(expect-failure "no puedo adquirir CREDIT y acu?ar externamente"
+  (with-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.CREDIT "atk-acc")
+    (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.credit "atk-acc" (read-keyset 'atk) 1000000.0)))
+(commit-tx)
+
+;; (2) llamar credit directo sin cap => require-capability CREDIT debe abortar
+(begin-tx "M2b: credit directo sin cap")
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(env-keys ["atk-key"])
+(expect-failure "credit directo abortado por require-capability"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.credit "atk-acc" (read-keyset 'atk) 999.0))
+(commit-tx)
+
+;; (3) test-capability(CREDIT) (solo REPL) y credit: prueba si el modelo permitiria mint con el token concedido.
+;;     Esto NO es una via de ataque real (requiere test-capability), pero revela si credit tiene otra defensa.
+(begin-tx "M2c: test-capability CREDIT + credit (diagnostico)")
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(env-keys ["atk-key"])
+(test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.CREDIT "atk-acc"))
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.credit "atk-acc" (read-keyset 'atk) 5000.0)
+(print (format "DIAGNOSTICO: atk-acc tras test-capability credit = {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "atk-acc")]))
+(commit-tx)
+
+(begin-tx "M2: supply despues (via de ataque real: solo M2a/M2b cuentan)")
+(print (format "ipo despues = {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT)]))
+(commit-tx)
+(print "ATK-SUPPLY-MINT-2 done")

@@ -1,0 +1,74 @@
+;; ATK div-solvency-1: DOBLE CLAIM temporal + claim tras rotate de guard.
+;; Hipotesis A1: reclamar, declarar otra ronda, reclamar de nuevo => ?cobra mas de lo devengado?
+;; Hipotesis A5 (angulo nuevo): rotar el guard de un holder con pending a un guard del atacante
+;;   y reclamar => ?el KDA aterriza en el principal del ATACANTE (robo)?
+(load "setup.repl")
+
+(begin-tx "seed alice 3000 / bob 2000 via IPO")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+          , "bob":   { "keys": ["bob-key"],   "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1500.0) (coin.TRANSFER "sender00" "bob" 1000.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1500.0)
+(coin.transfer-create "sender00" "bob"   (read-keyset 'bob)   1000.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "alice" (read-keyset 'alice) 3000.0)
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "bob" (read-keyset 'bob) 2000.0)
+(commit-tx)
+
+;; ronda 1: rate 0.02 -> alice(3000)=60, bob(2000)=40
+(begin-tx "R1 + fund")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT 100.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" 100.0)
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R1" 0.02 (time "2026-06-01T00:00:00Z"))
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 100.0)
+(print (format "alice pending pre-claim = {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "alice")]))
+(commit-tx)
+
+;; === A1: claim, luego declarar R2 y volver a reclamar. Total pagado debe ser <= devengado total ===
+(begin-tx "A1 claim1 alice")
+(let ((pool-before (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT))
+      (paid (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "alice")))
+  (print (format "A1 claim1: alice cobra {} ; pool {} -> {}"
+    [paid pool-before (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT)])))
+(expect "alice pending 0 tras claim1" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "alice"))
+(commit-tx)
+
+(begin-tx "A1 claim2 inmediato (sin nueva ronda) -> debe fallar")
+(expect-failure "A1 doble-claim inmediato rechazado" "nothing to claim"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "alice"))
+(commit-tx)
+
+(begin-tx "A1 R2 y claim2 -> alice solo debe cobrar lo de R2 (3000*0.02=60), no re-cobrar R1")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT 200.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" 200.0)
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R2" 0.02 (time "2026-06-01T00:00:00Z"))
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 200.0)
+(let ((paid2 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "alice")))
+  (print (format "A1 claim2: alice cobra {} (esperado 60 solo R2)" [paid2]))
+  (expect "A1: claim2 paga solo R2 = 60, no re-cobra R1" 60.0 paid2))
+(commit-tx)
+
+;; === A5: rotar guard de bob a un guard del ATACANTE, luego reclamar. ?KDA al atacante? ===
+(begin-tx "A5 bob rota su guard al del atacante (mallory) y reclama")
+(env-data { "mallory": { "keys": ["mallory-key"], "pred": "keys-all" } })
+;; bob tiene 40 pending de R1 + 40 de R2 = 80. Rota su guard con SU clave (legitimo cambio de guard).
+(env-keys ["bob-key"])
+(env-sigs [{ "key": "bob-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.ROTATE "bob")] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.rotate "bob" (read-keyset 'mallory))
+(let ((mal-principal (create-principal (read-keyset 'mallory)))
+      (bob-pend (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "bob")))
+  (print (format "A5: bob pending={} ; el claim ira al principal {}" [bob-pend mal-principal]))
+  (let ((paid (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "bob")))
+    (print (format "A5: bob claim paga {} al principal de mallory {} -> saldo KDA ahi = {}"
+      [paid mal-principal (coin.get-balance mal-principal)]))))
+;; Nota: esto NO es robo - bob controla su propia cuenta y decide donde va su dividendo.
+;; Es el comportamiento esperado. Lo marco como referencia, no como rotura.
+(commit-tx)
+
+(print "atk-div-solvency-1 FIN")

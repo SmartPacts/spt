@@ -1,0 +1,54 @@
+;; DEVNET-ONLY: exercises cross-chain / SPV paths the bare REPL cannot simulate
+;; (multi-chain state via env-chain-data / transfer-crosschain / report-tally-xchain).
+;; The held verdict for these fronts is also covered by same-front single-chain attacks;
+;; run these against a multi-chain devnet, not via a plain pact tests/atk-*.repl sweep.
+
+;; ATK-TRANCHES-4: doble disparo mismo instante + re-lock (reescribir beneficiario) + re-init
+(load "../setup.repl")
+
+;; --- A) DOBLE DISPARO en el MISMO instante: segundo debe pagar 0 ---
+(begin-tx "A: doble release mismo bloque")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-08-30T00:00:00Z") })
+(print (format "release #1: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity")]))
+(expect-failure "release #2 mismo instante paga 0 => falla"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity"))
+(print (format "reserve tras doble intento: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.LIQUIDITY-ACCOUNT)]))
+(commit-tx)
+
+;; --- B) Re-lock: intentar reescribir el beneficiario de un tranche via lock-tranche ---
+;; lock-tranche es PRIVATE (require-capability ADMIN). Aun con admin key, require-capability
+;; solo se satisface si la cap fue adquirida en la pila (with-capability), no por firma directa.
+(begin-tx "B: re-lock tranche founder a atacante")
+(env-keys ["admin-key"])
+(env-sigs [{ "key": "admin-key", "caps": [] }])
+(env-data { "atk-ks": { "keys": ["deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"], "pred": "keys-all" } })
+(expect-failure "lock-tranche no invocable directamente (require ADMIN cap en pila)"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.lock-tranche
+    "founder" "k:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef" (read-keyset 'atk-ks)
+    10000.0 (time "2026-06-01T00:00:00Z") 0 1))
+(commit-tx)
+
+;; --- C) Re-init-supply: intentar re-inicializar para re-stampear el calendario/beneficiarios ---
+(begin-tx "C: re-init-supply")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-01-01T00:00:00Z") })
+(env-keys ["admin-key"])
+(env-data
+  { "atk-ks": { "keys": ["deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"], "pred": "keys-all" }
+  , "founder-ks": { "keys": ["deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"], "pred": "keys-all" } })
+(expect-failure "no re-init (already initialized)"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.init-supply
+    "k:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef" (read-keyset 'atk-ks)
+    "k:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef" (read-keyset 'atk-ks)
+    "k:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef" (read-keyset 'atk-ks)
+    "k:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef" (read-keyset 'atk-ks)))
+(commit-tx)
+
+;; --- D) ACELERAR: liberar en un chain != 0 (los reserves solo estan en chain 0) ---
+;; init de otro chain no mintea; el reserve no existe => release debe fallar.
+(begin-tx "D: intentar release en otro chain")
+(env-chain-data { "chain-id": "5", "block-time": (time "2030-06-01T00:00:00Z") })
+(expect-failure "sin reserve en chain 5, no hay tranche row"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity"))
+(commit-tx)
+
+(print "ATK-TRANCHES-4 done")

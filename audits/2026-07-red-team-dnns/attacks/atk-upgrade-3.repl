@@ -1,0 +1,42 @@
+;; ATK-UPGRADE-3: idempotencia PERVERSA. Un chain FRESH (init-supply nueva schema) ya tiene
+;; round-count y, tras dividendos, sum-pending/sum-debt/rounds-applied REALES. Si migrate-adr015
+;; se puede llamar sobre el y ZEREA esos counters, se destruye liability real (dividendos que
+;; alguien deberia cobrar desaparecen del bookkeeping -> solvencia rota / doble-gasto del pool).
+;; Angulo nuevo: probar migrate como ARMA sobre un chain sano y poblado.
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+(load "setup.repl")
+
+;; setup.repl deja chain 0 inicializada con init-supply (nueva schema) + 100000 SPT minteados.
+;; Liberamos la tranche liquidity para tener FLOAT real, declaramos+aplicamos una ronda y
+;; fondeamos -> sum-pending/sum-debt/rps quedan NO-cero. Luego intentamos migrate-adr015.
+
+(begin-tx "release liquidity float")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-10-01T00:00:00Z") })
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity")
+(env-keys ["admin-key"])
+(print (format "circ before: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating)]))
+(commit-tx)
+
+(begin-tx "declare + apply a round -> rps != 0")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R1" 0.02 (time "2026-10-01T00:00:00Z"))
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.apply-round "R1")
+(print (format "rps after apply: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps)]))
+(print (format "liability BEFORE migrate: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability)]))
+(commit-tx)
+
+;; --- ATAQUE: llamar migrate-adr015 sobre este chain SANO y poblado ---
+(begin-tx "ATTACK 3: migrate a healthy freshly-inited chain (must be no-op)")
+(env-keys ["admin-key"])
+(let ((liab-before (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+      (rps-before (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps)))
+  ;; migrate DEBE devolver "already migrated" y NO tocar nada (round-count row existe).
+  (expect "migrate is no-op on fresh-inited chain" "already migrated"
+    (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.migrate-adr015))
+  (expect "liability UNCHANGED by migrate (not zeroed)" liab-before
+    (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+  (expect "rps UNCHANGED by migrate" rps-before
+    (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps)))
+(commit-tx)
+
+(print "ATK-UPGRADE-3 done")

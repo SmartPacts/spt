@@ -1,0 +1,99 @@
+(load "setup.repl")
+;; ===========================================================================
+;; ATK-VOTEKEY-5 -- ANGULOS NUEVOS
+;;  (a) set-vote-key usa WRITE (no insert): registrar vote-key en cuenta
+;;      INEXISTENTE. ?Se puede? y si se puede, ?permite votar peso fantasma?
+;;      La cap VOTE-KEY-ADMIN hace enforce-guard (account-guard account) =
+;;      (read accounts account) -> deberia fallar por "No row found" (no existe).
+;;  (b) DELEGADO + TRANSFER RELEASE + RE-REGISTRO: alice vota via hot (3000),
+;;      transfiere 3000 a bob (release baja tally a 0), luego re-vota via hot.
+;;      Con 0 balance no debe poder inflar (enforce weight>0).
+;;  (c) CLEAR luego RE-SET (mismo delegado): comprobar que NO hay doble conteo
+;;      residual: el account-vote row sobrevive a clear, un re-set + cast debe
+;;      recolocar limpio, no sumar dos veces.
+;; ===========================================================================
+(begin-tx "activate IPO")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(commit-tx)
+(begin-tx "seed alice 3000")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1500.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1500.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "alice" (read-keyset 'alice) 3000.0)
+(commit-tx)
+(begin-tx "announce proposal")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-proposal "P5" "t" "d" (time "2026-06-01T00:00:00Z") 259200)
+(commit-tx)
+
+;; --- (a) register vote-key on a NON-EXISTENT account ---
+(begin-tx "register vote-key on ghost account")
+(env-data { "gk": { "keys": ["ghost-hot"], "pred": "keys-all" } })
+(env-sigs [{ "key": "ghost-owner", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.VOTE-KEY-ADMIN "ghost")] }])
+(env-keys ["ghost-owner"])
+(print "== (a) set-vote-key en cuenta inexistente 'ghost' ==")
+(expect-failure "cannot register vote-key on non-existent account"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.set-vote-key "ghost" (read-keyset 'gk)))
+(commit-tx)
+
+;; --- register alice hot for the rest ---
+(begin-tx "register alice hot")
+(env-data { "hot": { "keys": ["alice-hot"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.VOTE-KEY-ADMIN "alice")] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.set-vote-key "alice" (read-keyset 'hot))
+(commit-tx)
+
+;; --- (b) hot votes 3000, then alice transfers all to bob, then hot re-votes ---
+(begin-tx "hot votes 3000")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(env-sigs [])
+(env-keys ["alice-hot"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "P5" true)
+(print (format "yes tras hot vota (3000): {}" [(at 'yes (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P5"))]))
+(commit-tx)
+(begin-tx "alice transfers all 3000 to bob (release should zero the tally)")
+(env-data { "bob": { "keys": ["bob-key"], "pred": "keys-all" } })
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "bob" 3000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "bob" (read-keyset 'bob) 3000.0)
+(print (format "yes tras transfer (esperado 0): {}" [(at 'yes (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P5"))]))
+(expect "release zeroed the tally" 0.0 (at 'yes (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P5")))
+(commit-tx)
+(begin-tx "hot re-votes with 0 balance -> must fail (no weight)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(env-sigs [])
+(env-keys ["alice-hot"])
+(print "== (b) hot re-vota con balance 0 ==")
+(expect-failure "no voting weight at 0 balance"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "P5" true))
+(commit-tx)
+
+;; --- (c) get bob to vote via a hot, clear, re-set same hot, check no residual double ---
+(begin-tx "bob registers hot and votes 3000")
+(env-data { "bhot": { "keys": ["bob-hot"], "pred": "keys-all" } })
+(env-sigs [{ "key": "bob-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.VOTE-KEY-ADMIN "bob")] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.set-vote-key "bob" (read-keyset 'bhot))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(env-sigs [])
+(env-keys ["bob-hot"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "bob" "P5" true)
+(print (format "yes tras bob(3000): {}" [(at 'yes (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P5"))]))
+(commit-tx)
+(begin-tx "bob clears, re-sets same hot, re-votes -> stays 3000")
+(env-sigs [{ "key": "bob-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.VOTE-KEY-ADMIN "bob")] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.clear-vote-key "bob")
+(env-data { "bhot": { "keys": ["bob-hot"], "pred": "keys-all" } })
+(env-sigs [{ "key": "bob-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.VOTE-KEY-ADMIN "bob")] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.set-vote-key "bob" (read-keyset 'bhot))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(env-sigs [])
+(env-keys ["bob-hot"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "bob" "P5" true)
+(print (format "yes tras clear+reset+revote (esperado 3000): {}" [(at 'yes (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P5"))]))
+(expect "no residual double count: yes=3000" 3000.0 (at 'yes (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-results "P5")))
+(commit-tx)
+
+(print "ATK-VOTEKEY-5 done")

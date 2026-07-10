@@ -22,4 +22,12 @@ live deployment beyond what is needed for a proof of concept.
   program at this stage. A responsible-disclosure policy for the mainnet deployment will be
   published before mainnet launch, and pre-mainnet reporters will be credited (with permission).
 
+## Third-party reviews
+
+- **External red-team — Oberlus / DNNS (July 2026).** Good-faith community security review by
+  invitation: 88 executed attacks across 12 fronts plus a 20-mutation dividend-accounting deep-dive
+  with a negative control. **Zero confirmed vulnerabilities.** Report:
+  [`audits/2026-07-red-team-dnns.md`](audits/2026-07-red-team-dnns.md); the full runnable suite is in
+  [`audits/2026-07-red-team-dnns/`](audits/2026-07-red-team-dnns/).
+
 Thank you for helping keep the system safe.

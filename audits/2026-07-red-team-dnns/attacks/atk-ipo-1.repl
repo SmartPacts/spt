@@ -1,0 +1,33 @@
+;; ATK-IPO-1: manipulacion de precio/redondeo en buy-shares.
+(load "setup.repl")
+
+(begin-tx "init + activate a precio raro 0.333333333333")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.333333333333)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(commit-tx)
+
+(begin-tx "estado antes")
+(print (format "RESERVE antes: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT)]))
+(print (format "INCOME antes: {}" [(coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT)]))
+(commit-tx)
+
+;; ATAQUE 1: firmar cap coin.TRANSFER por 1 tick MENOS que el coste real de 1 SPT (0.333333333333). Debe FALLAR.
+(begin-tx "IPO-1a: pagar 1 tick menos que el coste via cap recortado")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT 0.333333333332)] }])
+(expect-failure "cap recortado no cubre el coste real"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "sender00" (read-keyset 'sender00) 1.0))
+(commit-tx)
+
+;; ATAQUE 2: 3 SPT * 0.333333333333 = 0.999999999999 (floor exacto). Verificar que income=coste y reserve baja 3.
+(begin-tx "IPO-1b: 3 SPT a 0.333333333333 => coste 0.999999999999")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT 1.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "sender00" (read-keyset 'sender00) 3.0)
+(print (format "INCOME despues 3SPT: {}" [(coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT)]))
+(print (format "BUYER SPT: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "sender00")]))
+(expect "income = coste exacto 0.999999999999" 0.999999999999 (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT))
+(expect "buyer recibio 3 SPT" 3.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "sender00"))
+(expect "reserve bajo exactamente 3" 19997.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.IPO-RESERVE-ACCOUNT))
+(commit-tx)
+
+(print "ATK-IPO-1 done")

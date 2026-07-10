@@ -1,0 +1,84 @@
+;; ATK-UPGRADE-2: operar en la VENTANA post-upgrade / pre-migrate. Debe fallar cerrado.
+;; Angulo nuevo: no solo get-rps brickea; probamos declare-round (update round-count sin fila),
+;; apply-round, transfer, claim, y receive-revenue (permissionless). Buscamos CUALQUIER
+;; operacion que mueva valor / avance estado en la ventana sin migrar.
+(env-chain-data { "chain-id": "1", "block-time": (time "2026-06-01T00:00:00Z") })
+
+(begin-tx "load coin")
+(load "../../../tests/fixtures/fungible-v2.pact")
+(load "../../../tests/fixtures/fungible-xchain-v1.pact")
+(load "../../../tests/fixtures/gas-payer-v1.pact")
+(load "../../../tests/fixtures/coin.pact")
+(create-table coin.coin-table)
+(create-table coin.allocation-table)
+(commit-tx)
+
+(begin-tx "fund sender00")
+(env-data { "sender00": { "keys": ["admin-key"], "pred": "keys-all" } })
+(test-capability (coin.COINBASE))
+(coin.coinbase "sender00" (read-keyset "sender00") 1000000.0)
+(commit-tx)
+
+(begin-tx "deploy PRE-module (fresh)")
+(env-data
+  { "ns": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641"
+  , "spt-admin-name": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.spt-admin"
+  , "spt-admin": { "keys": ["admin-key"], "pred": "keys-all" }
+  , "upgrade": false })
+(env-keys ["admin-key"])
+(define-namespace "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641" (read-keyset 'spt-admin) (read-keyset 'spt-admin))
+(load "../../../tests/fixtures/pre-adr015-shares.pact")
+(commit-tx)
+
+(begin-tx "init chain 1 under OLD schema + make an account with balance")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.init "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+(commit-tx)
+
+(begin-tx "UPGRADE to module (upgrade:true) -> WINDOW open, NOT migrated")
+(env-data
+  { "ns": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641"
+  , "spt-admin-name": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.spt-admin"
+  , "spt-admin": { "keys": ["admin-key"], "pred": "keys-all" }
+  , "upgrade": true })
+(env-keys ["admin-key"])
+(load "../../../contracts/testnet06/smartpacts-shares.pact")
+(create-table n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-rounds)
+(create-table n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.round-count)
+(commit-tx)
+
+;; --- ATAQUE 2a: declare-round en la ventana (necesita update round-count -> fila ausente) ---
+(begin-tx "ATTACK 2a: declare-round before migrate (round-count row absent)")
+(env-keys ["admin-key"])
+(expect-failure "declare-round bricks before migrate (round-count row missing)"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "Rx" 0.02 (time "2026-06-01T00:00:00Z")))
+(commit-tx)
+
+;; --- ATAQUE 2b: apply-round en la ventana ---
+(begin-tx "ATTACK 2b: apply-round before migrate")
+(expect-failure "apply-round bricks before migrate (state fields absent)"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.apply-round "Rx"))
+(commit-tx)
+
+;; --- ATAQUE 2c: create-account + transfer (debit/credit llaman get-rps) ---
+(begin-tx "ATTACK 2c: transfer before migrate must brick")
+(env-data { "a": { "keys": ["ak"], "pred": "keys-all" }, "b": { "keys": ["bk"], "pred": "keys-all" } })
+(expect-failure "create-account+transfer path bricks (get-rps in debit/credit)"
+  (let ((_ 0))
+    (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-account "a" (read-keyset 'a))))
+(commit-tx)
+
+;; --- ATAQUE 2d: claim-dividends antes de migrar ---
+(begin-tx "ATTACK 2d: claim before migrate")
+(expect-failure "claim bricks before migrate"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+(commit-tx)
+
+;; --- ATAQUE 2e: fund-dividends antes de migrar (usa dividend-liability -> sum-pending/sum-debt ausentes) ---
+(begin-tx "ATTACK 2e: fund-dividends before migrate")
+(env-keys ["admin-key"])
+(expect-failure "fund-dividends bricks before migrate"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 1.0))
+(commit-tx)
+
+(print "ATK-UPGRADE-2 done")

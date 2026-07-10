@@ -1,0 +1,69 @@
+(load "setup.repl")
+
+;; ATK-6: DRENAJE por claim->transfer->claim y doble-claim.
+;; (a) Reclamar, luego mover shares a otra cuenta propia y reclamar de nuevo:
+;;     intentar cobrar la misma ronda dos veces via churn tras claim.
+;; (b) Doble claim inmediato (misma cuenta, dos veces): debe fallar la 2a.
+;; Medimos el POOL: total pagado nunca puede exceder lo fondeado (circ*rps).
+(begin-tx "seed alice 3000 / bob 2000")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+          , "bob":   { "keys": ["bob-key"],   "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1500.0) (coin.TRANSFER "sender00" "bob" 1000.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1500.0)
+(coin.transfer-create "sender00" "bob"   (read-keyset 'bob)   1000.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "alice" (read-keyset 'alice) 3000.0)
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "bob" (read-keyset 'bob) 2000.0)
+(commit-tx)
+
+;; ronda 0.02 -> rps 0.02, fund a liability
+(begin-tx "declare + fund R1")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R1" 0.02 (time "2026-06-01T00:00:00Z"))
+(let* ((liab (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+       (topup (+ (floor liab 12) 0.000000000001)))
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT topup)] }])
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" topup)
+  (env-keys ["admin-key"])
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends topup)
+  (print (format "pool fondeado con {}" [topup])))
+(commit-tx)
+
+;; (a) alice reclama sus 60
+(begin-tx "alice claim1")
+(let ((pago (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "alice")))
+  (print (format "alice claim1 pago = {} (debe 60)" [pago]))
+  (print (format "alice pending tras claim = {} (debe 0)" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "alice")])))
+(commit-tx)
+
+;; (b) doble-claim inmediato: debe fallar (nada que reclamar)
+(begin-tx "alice claim2 (doble, debe fallar)")
+(expect-failure "segundo claim inmediato rechazado (nothing to claim)"
+  "nothing to claim"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "alice"))
+(commit-tx)
+
+;; (a2) alice mueve sus 3000 a atk y atk intenta reclamar la MISMA ronda
+(begin-tx "alice->atk 3000 tras claim")
+(env-data { "atk": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "atk" 3000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "atk" (read-keyset 'atk) 3000.0)
+(let ((patk (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "atk")))
+  (print (format "atk pending tras recibir shares ya-cobradas = {} (debe 0)" [patk]))
+  (print "Si atk>0 podria reclamar la ronda R1 otra vez => ROTO doble-cobro")
+  (expect "atk no hereda dividendos ya cobrados" 0.0 patk))
+(commit-tx)
+
+;; medir el pool: total pagado (60) <= fondeado. Comprobar solvencia global final.
+(begin-tx "verificar solvencia: bob todavia puede cobrar sus 40")
+(let ((pago (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "bob")))
+  (print (format "bob claim = {} (debe 40)" [pago]))
+  (let ((poolbal (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT)))
+    (print (format "pool restante = {} (>=0; total pagado 60+40=100 == circ*rps)" [poolbal]))
+    (expect "pool no drenado de mas" true (>= poolbal 0.0))))
+(commit-tx)
+(print "ATK-6 done")

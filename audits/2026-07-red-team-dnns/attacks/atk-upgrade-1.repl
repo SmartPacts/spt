@@ -1,0 +1,63 @@
+;; ATK-UPGRADE-1: migrate-adr015 SIN firma admin (control de acceso).
+;; Hipotesis: si un no-admin puede migrar, un atacante controla el momento/estado de la migracion.
+;; Montamos el mismo escenario que smartpacts-upgrade.repl hasta justo antes de migrar,
+;; y llamamos migrate-adr015 con env-keys de un atacante (sin admin-key).
+(env-chain-data { "chain-id": "1", "block-time": (time "2026-06-01T00:00:00Z") })
+
+(begin-tx "load coin")
+(load "../../../tests/fixtures/fungible-v2.pact")
+(load "../../../tests/fixtures/fungible-xchain-v1.pact")
+(load "../../../tests/fixtures/gas-payer-v1.pact")
+(load "../../../tests/fixtures/coin.pact")
+(create-table coin.coin-table)
+(create-table coin.allocation-table)
+(commit-tx)
+
+(begin-tx "fund sender00")
+(env-data { "sender00": { "keys": ["admin-key"], "pred": "keys-all" } })
+(test-capability (coin.COINBASE))
+(coin.coinbase "sender00" (read-keyset "sender00") 1000000.0)
+(commit-tx)
+
+(begin-tx "deploy PRE-module (fresh)")
+(env-data
+  { "ns": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641"
+  , "spt-admin-name": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.spt-admin"
+  , "spt-admin": { "keys": ["admin-key"], "pred": "keys-all" }
+  , "upgrade": false })
+(env-keys ["admin-key"])
+(define-namespace "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641" (read-keyset 'spt-admin) (read-keyset 'spt-admin))
+(load "../../../tests/fixtures/pre-adr015-shares.pact")
+(commit-tx)
+
+(begin-tx "init chain 1 under OLD schema")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.init "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+(commit-tx)
+
+(begin-tx "UPGRADE to module (upgrade:true)")
+(env-data
+  { "ns": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641"
+  , "spt-admin-name": "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.spt-admin"
+  , "spt-admin": { "keys": ["admin-key"], "pred": "keys-all" }
+  , "upgrade": true })
+(env-keys ["admin-key"])
+(load "../../../contracts/testnet06/smartpacts-shares.pact")
+(create-table n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-rounds)
+(create-table n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.round-count)
+(commit-tx)
+
+;; --- ATAQUE: migrar con clave de un ATACANTE, sin admin-key ---
+(begin-tx "ATTACK: migrate-adr015 with attacker key (no admin)")
+(env-keys ["attacker-evil-key"])
+(env-sigs [{ "key": "attacker-evil-key", "caps": [] }])
+(expect-failure "migrate must reject non-admin caller"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.migrate-adr015))
+(commit-tx)
+
+;; Confirmamos que el chain sigue brickeado (migracion NO ocurrio)
+(begin-tx "chain still bricked (migration did not happen)")
+(expect-failure "get-rps still bricks (never migrated by attacker)"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps))
+(commit-tx)
+(print "ATK-UPGRADE-1 done")

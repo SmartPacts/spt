@@ -1,0 +1,33 @@
+;; ATK-IPO-4: angulo nuevo. buyer-guard hijack y desalineacion pagador-receptor.
+(load "setup.repl")
+
+(begin-tx "init+activate 0.5 y sembrar cuenta SPT de sender00 con su guard real")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT 50.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "sender00" (read-keyset 'sender00) 100.0)
+(expect "sender00 tiene 100 SPT" 100.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "sender00"))
+(commit-tx)
+
+;; (a) atacante gasta KDA de sender00 sin su firma de pago => coin.transfer-create debe fallar.
+(begin-tx "IPO-4a: atacante gasta KDA de sender00 sin su firma")
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(env-keys ["atk-key"])
+(env-sigs [{ "key": "atk-key", "caps": [] }])
+(expect-failure "no puede cobrar a sender00 sin su cap de pago"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "sender00" (read-keyset 'atk) 100.0))
+(commit-tx)
+
+;; (b) guard-mismatch: cuenta sender00 existe con guard admin-key. Comprar pasando guard atacante
+;; debe FALLAR en credit (retg != guard). Envuelto en expect-failure.
+(begin-tx "IPO-4b: recablear guard de cuenta existente via buyer-guard => rechazado")
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.SALES-INCOME-ACCOUNT 25.0)] }])
+(expect-failure "account guards do not match"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "sender00" (read-keyset 'atk) 50.0))
+(print (format "sender00 SPT tras 4b (sigue 100): {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "sender00")]))
+(expect "saldo intacto 100" 100.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "sender00"))
+(commit-tx)
+
+(print "ATK-IPO-4 done")

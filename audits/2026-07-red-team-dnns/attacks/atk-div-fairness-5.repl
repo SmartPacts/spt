@@ -1,0 +1,53 @@
+(load "setup.repl")
+
+;; ATK-5: RETROACTIVIDAD por ronda con effective-at en el PASADO.
+;; Carol compra shares HOY (jun 2026) con reward-debt = rps actual (0).
+;; Admin declara ronda #1 con effective-at en el PASADO (ene 2026, antes de que
+;; carol existiera como holder). Hipotesis: como reward-debt de carol es 0 y la
+;; ronda sube rps global, carol cobraria retroactivamente una ronda anterior a su
+;; entrada -> INFRA-cobro para los antiguos / sobre-cobro para el nuevo.
+;; (esto ataca "orden de rondas declaradas" y "gating por tiempo efectivo").
+(begin-tx "seed alice 3000 / bob 2000")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+          , "bob":   { "keys": ["bob-key"],   "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1500.0) (coin.TRANSFER "sender00" "bob" 1000.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1500.0)
+(coin.transfer-create "sender00" "bob"   (read-keyset 'bob)   1000.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "alice" (read-keyset 'alice) 3000.0)
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "bob" (read-keyset 'bob) 2000.0)
+(print (format "alice reward-debt tras comprar = via pending: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "alice")]))
+(commit-tx)
+
+;; Admin declara ronda #1 con effective-at PASADO (2026-01-01, hoy jun 2026).
+(begin-tx "declare round R1 con effective-at PASADO")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R1" 0.02 (time "2026-01-01T00:00:00Z"))
+(let ((rps (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-rps)))
+  (print (format "rps tras ronda pasada = {} (efectiva ya, eff<=now)" [rps]))
+  (print (format "alice pending = {} (3000*0.02=60; cobra retroactivo pese a ronda 'pasada')" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "alice")])))
+(commit-tx)
+
+;; NUEVO holder carol compra AHORA (rps ya 0.02). reward-debt debe = 0.02 -> 0 pending.
+(begin-tx "carol compra shares AHORA (rps=0.02)")
+(env-data { "carol": { "keys": ["carol-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "carol" 1000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "carol" (read-keyset 'carol) 1000.0)
+(let ((pc (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "carol")))
+  (print (format "carol pending = {} (debe 0: llega a rps ya efectivo, NO retroactivo)" [pc]))
+  (print "Si carol > 0 => cobraria una ronda anterior a su entrada => ROTO (sobre-cobro)")
+  (expect "carol NO cobra la ronda previa a su entrada" 0.0 pc))
+(commit-tx)
+
+;; Segundo ataque: declarar OTRA ronda pasada #2 pero con eff < eff de R1 -> debe rechazarse
+(begin-tx "intentar ronda #2 con eff ANTERIOR a R1 (rompe orden)")
+(env-keys ["admin-key"])
+(expect-failure "ronda fuera de orden temporal rechazada"
+  "effective-at must be >= the previous round's"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R2bad" 0.02 (time "2025-12-01T00:00:00Z")))
+(commit-tx)
+(print "ATK-5 done")

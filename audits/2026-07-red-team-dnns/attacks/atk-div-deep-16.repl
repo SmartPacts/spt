@@ -1,0 +1,44 @@
+;; V16 -- DUST 1e-12 REPETIDO. Un holder con saldo que produce dust sub-12dp; se declara
+;; ronda tras ronda de dust y se intenta cobrar cada vez. El dust debe ACUMULARSE en pending
+;; (no perderse ni duplicarse) y L==Spending exacto en cada paso. claim dust-only rebota.
+(load "setup.repl")
+(load "seed-div.repl")
+;; grace con saldo fraccionario que fabrica dust: 123.456789 shares.
+(env-data { "grace": {"keys":["gk"],"pred":"keys-all"}, "accts": ["alice" "bob" "grace"] })
+(begin-tx "V16 grace recibe 123.456789")
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "grace" 123.456789)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "grace" (read-keyset 'grace) 123.456789)
+(commit-tx)
+;; ronda de rate 1e-7 -> grace devenga 123.456789*1e-7 = 1.23456789e-5 (13 dp). claim paga floor12, dust=9e-13.
+(begin-tx "V16 ronda dust #1 + fund + claim")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "Rd1" 0.0000001 (time "2026-06-01T00:00:00Z"))
+(let* ((liab (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+       (fl (floor liab 12)))
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT fl)] }])
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" fl)
+  (env-keys ["admin-key"])
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends fl))
+(let ((paid (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "grace")))
+  (print (format "V16 #1 grace cobro {} dust-restante {}" [paid (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "grace")]))
+  (expect "V16 #1 paga floor12 = 1.2345678e-5" 0.000012345678 paid)
+  (expect "V16 #1 dust 9e-13 arrastrado" 0.0000000000009 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "grace")))
+;; or?culo tras claim con dust
+(let ((o1 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+      (on (fold (+) 0.0 (map (lambda (a:string) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of a)) (read-msg 'accts)))))
+  (print (format "V16 #1 ORACULO: O1={} On={}" [o1 on]))
+  (expect "V16 #1 O1==On tras claim con dust" on o1))
+;; intentar cobrar SOLO el dust -> rebota
+(expect-failure "V16 claim dust-only rebota" "nothing to claim"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "grace"))
+(commit-tx)
+;; segunda ronda dust identica: dust se acumula (9e-13 + nuevo). L sigue == Spending.
+(begin-tx "V16 ronda dust #2")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "Rd2" 0.0000001 (time "2026-06-01T00:00:00Z"))
+(let ((o1 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+      (on (fold (+) 0.0 (map (lambda (a:string) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of a)) (read-msg 'accts)))))
+  (print (format "V16 #2 ORACULO: O1={} On={} grace-pend={}" [o1 on (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "grace")]))
+  (expect "V16 #2 O1==On (dust acumulado, nada perdido)" on o1))
+(commit-tx)
+(print "V16 FIN")

@@ -1,0 +1,49 @@
+;; ATK-SUPPLY-MINT-4: release-tranche como superficie de mint encubierto.
+;; Un tranche mueve de la reserva EXCLUIDA (treasury/founder/liquidity) al beneficiario (float).
+;; INVARIANTE: la suma total(released) de un tranche NUNCA puede superar su total; y el debit
+;; de la reserva reduce su saldo exactamente en lo credited => no se crea SPT neto.
+;; Ataque: forzar sobre-liberacion via (a) release repetido en el mismo instante,
+;;         (b) release justo tras vest-end para que el "top a total" cree dust extra,
+;;         (c) release muchas veces cerca de cliff para acumular redondeos hacia arriba.
+(load "setup.repl")
+
+;; Founder: total 10000, cliff 365d, vest 1460d desde 2026-06-01. cliff-end=2027-06-01, vest-end=2030-05-31 aprox.
+(begin-tx "M4: founder reserva antes")
+(print (format "FUNDERS reserve antes = {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.FUNDERS-ACCOUNT)]))
+(print (format "founder tranche total={} released={}"
+  [(at 'total (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-tranche "founder"))
+   (at 'released (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-tranche "founder"))]))
+(commit-tx)
+
+;; (a) release repetido en el MISMO instante: primer release paga X, segundo debe pagar 0 (nothing releasable)
+(begin-tx "M4a: doble release mismo instante a mitad de vesting")
+(env-chain-data { "chain-id": "0", "block-time": (time "2028-12-01T00:00:00Z") })
+(let ((r1 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "founder")))
+  (print (format "release1 pago = {}" [r1])))
+(expect-failure "segundo release mismo instante: nothing releasable"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "founder"))
+(let ((ben (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0")))
+  (print (format "founder beneficiario tras release1 = {}" [ben])))
+(commit-tx)
+
+;; (b) release tras vest-end: debe topar a EXACTAMENTE total (10000), nunca mas.
+(begin-tx "M4b: release final tras vest-end")
+(env-chain-data { "chain-id": "0", "block-time": (time "2031-01-01T00:00:00Z") })
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "founder")
+(let ((ben (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"))
+      (rel (at 'released (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-tranche "founder")))
+      (res (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.FUNDERS-ACCOUNT)))
+  (print (format "beneficiario={} released={} reserva-restante={}" [ben rel res])))
+;; INVARIANTES: beneficiario == 10000, released == 10000, reserva == 0. Ni un satoshi extra.
+(expect "beneficiario exactamente 10000 (no mas)" 10000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"))
+(expect "released exactamente 10000" 10000.0 (at 'released (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-tranche "founder")))
+(expect "reserva founder vaciada exactamente a 0" 0.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.FUNDERS-ACCOUNT))
+(commit-tx)
+
+;; (c) intentar release una vez agotado => nothing releasable
+(begin-tx "M4c: release tras agotar")
+(env-chain-data { "chain-id": "0", "block-time": (time "2035-01-01T00:00:00Z") })
+(expect-failure "founder agotado: nothing releasable"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "founder"))
+(commit-tx)
+(print "ATK-SUPPLY-MINT-4 done")

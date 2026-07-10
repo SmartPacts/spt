@@ -1,0 +1,64 @@
+;; ATK-RESERVES-6: cruce de cap-guards entre reservas + abuso de debit interno + require-capability.
+(load "setup.repl")
+
+;; (1) debit() directo sobre una reserva => require-capability (DEBIT account) no presente => falla
+(begin-tx "R6a: debit directo sobre treasury")
+(env-keys ["admin-key"])
+(expect-failure "debit treasury directo sin DEBIT cap"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.debit n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT 100.0))
+(commit-tx)
+
+;; (2) with-capability (DEBIT TREASURY-ACCOUNT) desde tx code => DEBIT enforce-guard(account-guard treasury)
+;;     account-guard treasury = TREASURY-G (cap-guard) => enforce-guard falla fuera de TREASURY-GUARD
+(begin-tx "R6b: adquirir DEBIT treasury desde tx code")
+(env-keys ["admin-key"])
+(expect-failure "DEBIT treasury inadquirible (guard=cap-guard)"
+  (with-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.DEBIT n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT)
+    (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.debit n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT 100.0)))
+(commit-tx)
+
+;; (3) CRUCE: si por algun defecto DEBIT de una reserva se satisficiera con el cap-guard de OTRA.
+;;     No hay ruta publica que adquiera TREASURY-GUARD y luego debite FUNDERS; el dispatch de
+;;     release-tranche empareja cada tranche con SU cuenta. Confirmamos que no hay funcion que lo permita:
+;;     intentamos release-tranche con nombre valido pero esperamos que SOLO toque su propia reserva.
+(begin-tx "R6c: release liquidity NO toca treasury/founder")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-08-30T00:00:00Z") })
+(let ((tr0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT))
+      (f0  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.FUNDERS-ACCOUNT)))
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.release-tranche "liquidity")
+  (let ((tr1 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TREASURY-ACCOUNT))
+        (f1  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.FUNDERS-ACCOUNT)))
+    (print (format "treasury {} -> {} ; founder {} -> {}" [tr0 tr1 f0 f1]))
+    (expect "treasury intacto tras release liquidity" tr0 tr1)
+    (expect "founder intacto tras release liquidity" f0 f1)))
+(commit-tx)
+
+;; (4) ABUSO: fund-dividends con importe negativo/cero o sin ronda => sanea. Ademas mover KDA del pool via fund inverso.
+(begin-tx "R6d: fund-dividends importes invalidos")
+(env-keys ["admin-key"])
+(expect-failure "fund-dividends 0 rechazado" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 0.0))
+(expect-failure "fund-dividends negativo rechazado" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends -100.0))
+(commit-tx)
+
+;; (5) ANGULO: receive-revenue redirigido? El destino es fijo REVENUE-ACCOUNT. Comprobar que no
+;;     puedo pasar "amount" negativo para sacar KDA, ni redirigir el credito.
+(begin-tx "R6e: receive-revenue no explotable")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT 10.0)] }])
+(expect-failure "receive-revenue negativo rechazado"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" -10.0))
+(commit-tx)
+
+;; (6) ANGULO FINO: admin withdraw-revenue hacia el POOL (mezclar cuentas). Es admin-legit pero
+;;     ?rompe solvencia del pool contando KDA que no es dividendo? withdraw saca de REVENUE, no mete en pool.
+;;     Confirmamos que withdraw NO puede sacar del POOL (solo REVENUE) con un destino cualquiera.
+(begin-tx "R6f: admin withdraw-revenue solo afecta REVENUE, nunca POOL")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT 50.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" 50.0)
+(env-keys ["admin-key"])
+(env-sigs [{ "key": "admin-key", "caps": [] }])
+(let ((pool0 (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT)))
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.withdraw-revenue "sender00" 50.0)
+  (expect "pool NO cambia con withdraw-revenue" pool0 (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT)))
+(commit-tx)
+
+(print "ATK-RESERVES-6 done")

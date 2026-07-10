@@ -1,0 +1,85 @@
+(load "setup.repl")
+;; ===========================================================================
+;; ATK-VOTEKEY-3 -- DELEGADO OBSOLETO (stale delegate), multiples variables
+;;  (a) delegado vota tras CLEAR -> debe fallar
+;;  (b) delegado vota tras ROTATE (main rotado a otra clave) -> debe fallar
+;;  (c) ROTATE-BACK: main rota a otra clave y VUELVE al guard original.
+;;      El vote-delegate quedo active:false al rotar; ?sigue false tras volver? -> debe seguir false
+;;  (d) tras CLEAR, RE-REGISTRO reactiva; comprobar que el delegado NUEVO vota
+;;      pero comprobar que un clear intermedio realmente lo desactivo (no doble voto)
+;; ===========================================================================
+(begin-tx "activate IPO")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(commit-tx)
+(begin-tx "seed alice 3000")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1500.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1500.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "alice" (read-keyset 'alice) 3000.0)
+(commit-tx)
+(begin-tx "announce proposal")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-proposal "P3" "t" "d" (time "2026-06-01T00:00:00Z") 259200)
+(commit-tx)
+
+;; register hot key
+(begin-tx "register hot key")
+(env-data { "hot": { "keys": ["alice-hot"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.VOTE-KEY-ADMIN "alice")] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.set-vote-key "alice" (read-keyset 'hot))
+(commit-tx)
+
+;; --- (a) CLEAR then delegate tries to vote ---
+(begin-tx "clear then stale delegate votes")
+(env-keys ["alice-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.clear-vote-key "alice")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(env-keys ["alice-hot"])
+(env-sigs [])
+(print "== (a) delegado tras CLEAR ==")
+(expect-failure "cleared delegate cannot vote"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "P3" true))
+(commit-tx)
+
+;; re-register for rotate test
+(begin-tx "re-register hot key for rotate test")
+(env-data { "hot": { "keys": ["alice-hot"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.VOTE-KEY-ADMIN "alice")] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.set-vote-key "alice" (read-keyset 'hot))
+(expect "active before rotate" true (at 'active (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-vote-key "alice")))
+(commit-tx)
+
+;; --- (b) ROTATE main to new key -> delegate must die ---
+(begin-tx "rotate main guard")
+(env-data { "a2": { "keys": ["alice-key2"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.ROTATE "alice")] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.rotate "alice" (read-keyset 'a2))
+(expect "rotate revoked delegate" false (at 'active (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-vote-key "alice")))
+(commit-tx)
+(begin-tx "stale delegate votes after rotate")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(env-keys ["alice-hot"])
+(env-sigs [])
+(print "== (b) delegado tras ROTATE ==")
+(expect-failure "delegate revoked by rotate cannot vote"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "P3" true))
+(commit-tx)
+
+;; --- (c) ROTATE-BACK: does delegate reactivate? (must NOT) ---
+(begin-tx "rotate back to original-ish guard")
+(env-data { "aback": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key2", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.ROTATE "alice")] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.rotate "alice" (read-keyset 'aback))
+(print (format "getter tras rotate-back: {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-vote-key "alice")]))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(env-keys ["alice-hot"])
+(env-sigs [])
+(print "== (c) delegado tras ROTATE-BACK (no debe revivir) ==")
+(expect-failure "delegate stays revoked after rotate-back"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.cast-vote "alice" "P3" true))
+(commit-tx)
+
+(print "ATK-VOTEKEY-3 done")

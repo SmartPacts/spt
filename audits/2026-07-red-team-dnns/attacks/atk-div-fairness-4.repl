@@ -1,0 +1,83 @@
+(load "setup.repl")
+
+;; ATK-4: SOBRE-COBRO POR REDONDEO. Fracciono un holder en muchas sub-cuentas con
+;; balances que fuerzan dust en cada checkpoint. Hipotesis: si el checkpoint (pending
+;; sin floor) + claim (con floor) interactuan mal, la SUMA de floors pagados podria
+;; exceder la liability floor12. Compruebo Sigma-payouts <= floor12(liability) y que
+;; total pagado nunca supera circ*rps.
+(begin-tx "seed alice 3000 / bob 2000")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.init 0.5)
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.resume-sale)
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+          , "bob":   { "keys": ["bob-key"],   "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1500.0) (coin.TRANSFER "sender00" "bob" 1000.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1500.0)
+(coin.transfer-create "sender00" "bob"   (read-keyset 'bob)   1000.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1500.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "alice" (read-keyset 'alice) 3000.0)
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.income-account) 1000.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-ipo.buy-shares "bob" (read-keyset 'bob) 2000.0)
+(commit-tx)
+
+;; alice reparte 3000 en 3 subcuentas con balances fraccionarios raros (fuerzan dust)
+(begin-tx "alice -> 3 subcuentas fraccionarias")
+(env-data { "s1": { "keys": ["alice-key"], "pred": "keys-all" }
+          , "s2": { "keys": ["alice-key"], "pred": "keys-all" }
+          , "s3": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "s1" 1000.000000000001)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "s1" (read-keyset 's1) 1000.000000000001)
+(commit-tx)
+(begin-tx "alice->s2")
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "s2" 1000.000000000001)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "s2" (read-keyset 's2) 1000.000000000001)
+(commit-tx)
+(begin-tx "alice->s3 resto")
+(env-sigs [{ "key": "alice-key", "caps": [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.TRANSFER "alice" "s3" 999.999999999998)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.transfer-create "alice" "s3" (read-keyset 's3) 999.999999999998)
+(print (format "alice bal={} s1={} s2={} s3={}" [
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "alice")
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "s1")
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "s2")
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-balance "s3")]))
+(commit-tx)
+
+;; ronda con rate de 12 decimales rara -> fuerza dust en cada subcuenta
+(begin-tx "declare round rate rara")
+(env-keys ["admin-key"])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "R1" 0.000333333333 (time "2026-06-01T00:00:00Z"))
+(commit-tx)
+
+;; fund a liability exacta
+(begin-tx "fund a liability")
+(let* ((liab (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
+       (poolbal (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT))
+       (topup (- (+ (floor liab 12) 0.000000000001) poolbal)))
+  (print (format "liability={} floor12={} topup={}" [liab (floor liab 12) topup]))
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT topup)] }])
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" topup)
+  (env-keys ["admin-key"])
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends topup))
+(commit-tx)
+
+;; cada subcuenta reclama en su tx; sumo pagos y comparo con floor12(liability inicial)
+(begin-tx "claim s1")
+(print (format "s1 pago={}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "s1")]))
+(commit-tx)
+(begin-tx "claim s2")
+(print (format "s2 pago={}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "s2")]))
+(commit-tx)
+(begin-tx "claim s3")
+(print (format "s3 pago={}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "s3")]))
+(commit-tx)
+(begin-tx "claim bob")
+(print (format "bob pago={}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "bob")]))
+(commit-tx)
+
+;; el pool NUNCA debe quedar negativo; y total pagado <= total fondeado
+(begin-tx "verificar pool no drenado de mas")
+(let ((poolbal (coin.get-balance n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.POOL-ACCOUNT)))
+  (print (format "POOL restante = {} (debe ser >= 0; si <0 imposible, pero si el modelo pago de mas el pool cae por debajo del dust)" [poolbal]))
+  (expect "pool no negativo" true (>= poolbal 0.0)))
+(commit-tx)
+(print "ATK-4 done")

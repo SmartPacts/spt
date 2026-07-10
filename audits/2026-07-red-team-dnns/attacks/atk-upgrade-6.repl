@@ -1,0 +1,35 @@
+;; ATK-UPGRADE-6 (final): dos angulos limpios.
+;; (6a) Gate de upgrade = cap GOVERNANCE: (enforce (not FROZEN-MODULE)) + (enforce-keyset ADMIN-KS).
+;;      Es EXACTAMENTE lo que el nodo evalua al redeployar. Sin admin -> debe fallar; con admin -> pasa.
+;; (6b) Financiar CHAIN MUERTA (circ=0, L=0) -> rechazado (no se puede atrapar KDA en pool sin exit).
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+(load "setup.repl")
+
+;; ---------- 6a: GOVERNANCE gate sin admin ----------
+(begin-tx "ATTACK 6a: acquire GOVERNANCE (upgrade gate) without admin")
+(env-keys ["attacker-key"])
+(env-sigs [{ "key": "attacker-key", "caps": [] }])
+(expect-failure "GOVERNANCE upgrade gate rejects non-admin (redeploy would fail on-chain)"
+  (test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.GOVERNANCE)))
+(commit-tx)
+
+(begin-tx "6a-bis: GOVERNANCE gate DOES pass for admin (FROZEN-MODULE=false)")
+(env-keys ["admin-key"])
+(test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.GOVERNANCE))
+(print "GOVERNANCE acquired by admin OK (frozen=false, legit admin can upgrade)")
+(commit-tx)
+
+;; ---------- 6b: dead-chain funding (circ=0, L=0) ----------
+(begin-tx "ATTACK 6b: fund a dead chain (circ=0, liability=0)")
+(env-keys ["admin-key"])
+(print (format "circ={} L={}"
+  [ (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating)
+    (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability) ]))
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT 5.0)] }])
+(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" 5.0)
+(env-keys ["admin-key"])
+(expect-failure "dead chain (circ=0, L=0) funding rejected -> no trapped KDA"
+  "nothing fundable"
+  (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.fund-dividends 5.0))
+(commit-tx)
+(print "ATK-UPGRADE-6 done")
