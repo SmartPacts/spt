@@ -49,7 +49,7 @@
 (commit-tx)
 
 ;; (6) ANGULO FINO: admin withdraw-revenue hacia el POOL (mezclar cuentas). Es admin-legit pero
-;;     ¿rompe solvencia del pool contando KDA que no es dividendo? withdraw saca de REVENUE, no mete en pool.
+;;     ?rompe solvencia del pool contando KDA que no es dividendo? withdraw saca de REVENUE, no mete en pool.
 ;;     Confirmamos que withdraw NO puede sacar del POOL (solo REVENUE) con un destino cualquiera.
 (begin-tx "R6f: admin withdraw-revenue solo afecta REVENUE, nunca POOL")
 (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT 50.0)] }])

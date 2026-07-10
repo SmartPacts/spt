@@ -1,4 +1,4 @@
-;; V7 — DOBLE APPLY-ROUND (idempotencia): rate normal, apply dos veces; rps no debe inflarse.
+;; V7 -- DOBLE APPLY-ROUND (idempotencia): rate normal, apply dos veces; rps no debe inflarse.
 (load "setup.repl")
 (load "seed-div.repl")
 (env-data { "accts": ["alice" "bob"] })

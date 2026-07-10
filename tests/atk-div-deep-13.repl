@@ -1,4 +1,4 @@
-;; V13 — SOBREFONDEO (fund de mas). Debe pasar; el exceso queda en pool, L no cambia; solvencia holgada.
+;; V13 -- SOBREFONDEO (fund de mas). Debe pasar; el exceso queda en pool, L no cambia; solvencia holgada.
 (load "setup.repl")
 (load "seed-div.repl")
 (env-data { "accts": ["alice" "bob"] })

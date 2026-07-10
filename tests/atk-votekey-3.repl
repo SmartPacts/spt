@@ -1,6 +1,6 @@
 (load "setup.repl")
 ;; ===========================================================================
-;; ATK-VOTEKEY-3 — DELEGADO OBSOLETO (stale delegate), multiples variables
+;; ATK-VOTEKEY-3 -- DELEGADO OBSOLETO (stale delegate), multiples variables
 ;;  (a) delegado vota tras CLEAR -> debe fallar
 ;;  (b) delegado vota tras ROTATE (main rotado a otra clave) -> debe fallar
 ;;  (c) ROTATE-BACK: main rota a otra clave y VUELVE al guard original.

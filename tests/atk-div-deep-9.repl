@@ -1,4 +1,4 @@
-;; V9 — EFFECTIVE-AT = AHORA EXACTO (== block-time). Frontera <=: debe accruar.
+;; V9 -- EFFECTIVE-AT = AHORA EXACTO (== block-time). Frontera <=: debe accruar.
 (load "setup.repl")
 (load "seed-div.repl")
 (env-data { "accts": ["alice" "bob"] })

@@ -1,6 +1,6 @@
 (load "setup.repl")
 ;; ===========================================================================
-;; ATK-VOTEKEY-5 — ANGULOS NUEVOS
+;; ATK-VOTEKEY-5 -- ANGULOS NUEVOS
 ;;  (a) set-vote-key usa WRITE (no insert): registrar vote-key en cuenta
 ;;      INEXISTENTE. ?Se puede? y si se puede, ?permite votar peso fantasma?
 ;;      La cap VOTE-KEY-ADMIN hace enforce-guard (account-guard account) =

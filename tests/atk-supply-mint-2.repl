@@ -1,6 +1,6 @@
-;; ATK-SUPPLY-MINT-2: llamar credit externamente para acuñar SPT de la nada.
+;; ATK-SUPPLY-MINT-2: llamar credit externamente para acu?ar SPT de la nada.
 ;; credit require-capability (CREDIT account). CREDIT es "internal credit token" weak body.
-;; Angulo: intentar adquirir CREDIT desde tx code y acuñar; y via with-capability(CREDIT ...) directo.
+;; Angulo: intentar adquirir CREDIT desde tx code y acu?ar; y via with-capability(CREDIT ...) directo.
 (load "setup.repl")
 
 (begin-tx "M2: supply antes")
@@ -14,7 +14,7 @@
 (env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
 (env-keys ["atk-key"])
 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.create-account "atk-acc" (read-keyset 'atk))
-(expect-failure "no puedo adquirir CREDIT y acuñar externamente"
+(expect-failure "no puedo adquirir CREDIT y acu?ar externamente"
   (with-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.CREDIT "atk-acc")
     (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.credit "atk-acc" (read-keyset 'atk) 1000000.0)))
 (commit-tx)

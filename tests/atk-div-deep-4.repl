@@ -1,4 +1,4 @@
-;; V4 — RATE = 1e-12 (mínimo quantum). circ 5000 -> L = 5000*1e-12 = 5e-9. Oráculo exacto.
+;; V4 -- RATE = 1e-12 (m?nimo quantum). circ 5000 -> L = 5000*1e-12 = 5e-9. Or?culo exacto.
 (load "setup.repl")
 (load "seed-div.repl")
 (env-data { "accts": ["alice" "bob"] })

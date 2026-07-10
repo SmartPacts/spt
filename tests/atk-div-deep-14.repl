@@ -1,6 +1,6 @@
-;; V14 — TRANSFERENCIAS FRACCIONARIAS alrededor de la fecha efectiva.
-;; alice mueve trozos a bob justo antes/después de que R1 sea efectiva. La suma total
-;; devengada del par no puede exceder circ*rps. Oráculo O1==On tras cada movimiento.
+;; V14 -- TRANSFERENCIAS FRACCIONARIAS alrededor de la fecha efectiva.
+;; alice mueve trozos a bob justo antes/despu?s de que R1 sea efectiva. La suma total
+;; devengada del par no puede exceder circ*rps. Or?culo O1==On tras cada movimiento.
 (load "setup.repl")
 (load "seed-div.repl")
 (env-data { "accts": ["alice" "bob"] })
@@ -21,7 +21,7 @@
   (expect "V14 O1==On tras transferencia fraccionaria" on o1)
   ;; el devengado del par no puede superar circ*rps: alice movio DESPUES de devengar,
   ;; su 60 se cristaliza, bob recibe a rps global -> el par sigue 100.
-  (expect "V14 devengado total == circ*rps == 100 (ni doble-pago ni pérdida)" 100.0 o1))
+  (expect "V14 devengado total == circ*rps == 100 (ni doble-pago ni p?rdida)" 100.0 o1))
 (commit-tx)
 ;; segundo movimiento fraccionario de vuelta bob->alice, mismo dia
 (begin-tx "V14b bob->alice 111.111111 vuelta")

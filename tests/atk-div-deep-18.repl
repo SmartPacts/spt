@@ -1,4 +1,4 @@
-;; V18 — ORDEN DE OPERACIONES. Dos secuencias que deben dar el MISMO total devengado.
+;; V18 -- ORDEN DE OPERACIONES. Dos secuencias que deben dar el MISMO total devengado.
 ;; Path A declarar-mover ; Path B mover-declarar. El total owed = circ*rps = 100 en ambos.
 ;; Ademas sub-aditividad agresiva con dust puro (saldo 1e-6, rate 7e-7 -> owed 7e-13, floor 0).
 (load "setup.repl")

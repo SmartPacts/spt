@@ -1,6 +1,6 @@
 (load "setup.repl")
 ;; ===========================================================================
-;; ATK-VOTEKEY-4 — COLISION DE CLAVE (misma hot key en dos cuentas)
+;; ATK-VOTEKEY-4 -- COLISION DE CLAVE (misma hot key en dos cuentas)
 ;; Invariante: cast-vote resuelve el guard del VOTER declarado; una hot compartida
 ;; solo mueve el peso de la cuenta cuyo voter se declara. No debe inflar ni contar
 ;; shares ajenas. Re-voto idempotente.

@@ -1,13 +1,13 @@
 (load "setup.repl")
 
-;; ATK-2: DISOCIACIÓN DATO/CÓDIGO.
-;; La allowlist se evalúa sobre (read-msg "exec-code"). En un tx real esto lo
+;; ATK-2: DISOCIACI?N DATO/C?DIGO.
+;; La allowlist se eval?a sobre (read-msg "exec-code"). En un tx real esto lo
 ;; inyecta Chainweb desde el payload PARSEADO (no del data del atacante). Pero
 ;; probamos el peor caso: el atacante controla exec-code (data) y pone algo
 ;; allowlistado, mientras "de verdad" quiere ejecutar otra cosa.
-;; Vector 2a: exec-code allowlistado, pero múltiples strings escondiendo un 2º.
+;; Vector 2a: exec-code allowlistado, pero m?ltiples strings escondiendo un 2?.
 ;; Vector 2b: exec-code allowlistado como string pero con basura extra tras un
-;;            newline / concatenación para colar una 2ª llamada dentro del mismo string.
+;;            newline / concatenaci?n para colar una 2? llamada dentro del mismo string.
 
 (begin-tx "ATK-2a: dos llamadas, la primera allowlistada, segunda maliciosa")
 (env-chain-data { "gas-price": 0.000001, "gas-limit": 1500
@@ -15,15 +15,15 @@
 (env-data { "tx-type": "exec"
           , "exec-code": [ "(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends \"k:alice\")"
                            "(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.withdraw-revenue \"attacker-acct\" 999.0)" ] })
-(expect-failure "batching una 2ª llamada rechazado"
+(expect-failure "batching una 2? llamada rechazado"
   (test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:alice" 1500 0.000001)))
 (commit-tx)
 
-;; ATK-2b: UN solo string allowlistado que además concatena una 2ª sexpr.
-;; allowlisted? sólo mira el PREFIJO (take (length p) code), así que un string
+;; ATK-2b: UN solo string allowlistado que adem?s concatena una 2? sexpr.
+;; allowlisted? s?lo mira el PREFIJO (take (length p) code), as? que un string
 ;; "(claim-dividends ...)(withdraw-revenue ...)" empieza por el prefijo -> pasa la
-;; allowlist. ¿Cuela? La defensa real es que exec-code es una LISTA parseada por
-;; Chainweb; aquí simulamos que el atacante mete todo en un solo elemento.
+;; allowlist. ?Cuela? La defensa real es que exec-code es una LISTA parseada por
+;; Chainweb; aqu? simulamos que el atacante mete todo en un solo elemento.
 (begin-tx "ATK-2b: un string con dos sexprs, prefijo allowlistado")
 (env-chain-data { "gas-price": 0.000001, "gas-limit": 1500
                 , "chain-id": "0", "block-time": (time "2026-09-02T01:00:00Z") })
@@ -32,13 +32,13 @@
 (print (format "allowlisted? del string-doble = {}"
   [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.allowlisted?
      "(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends \"k:alice\")(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.withdraw-revenue \"attacker-acct\" 999.0)")]))
-;; GAS_PAYER lo acepta (length=1, prefijo ok). Pero: ¿esto DRENA algo?
-;; ALLOW_GAS sólo autoriza el gas-buy; NO ejecuta el exec-code (eso lo hace el
+;; GAS_PAYER lo acepta (length=1, prefijo ok). Pero: ?esto DRENA algo?
+;; ALLOW_GAS s?lo autoriza el gas-buy; NO ejecuta el exec-code (eso lo hace el
 ;; runtime de Chainweb parseando el payload real, no este string del data).
 (test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_PAYER "k:alice" 1500 0.000001))
-(print "GAS_PAYER aceptó el string-doble (length=1, prefijo ok)")
+(print "GAS_PAYER acept? el string-doble (length=1, prefijo ok)")
 (expect "ALLOW_GAS compuesto" true
   (require-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.ALLOW_GAS)))
 ;; Clave: aunque GAS_PAYER acepte pagar el gas, el exec-code del DATA no se ejecuta.
-;; ¿Podría ALLOW_GAS+GAS ahora autorizar retirar revenue? NO: withdraw-revenue exige admin.
+;; ?Podr?a ALLOW_GAS+GAS ahora autorizar retirar revenue? NO: withdraw-revenue exige admin.
 (commit-tx)

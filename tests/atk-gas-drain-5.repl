@@ -1,9 +1,9 @@
 (load "setup.repl")
 
-;; ATK-5 (ÁNGULO REAL DNNS): con GAS+ALLOW_GAS instaladas a nivel tx (como en el
-;; gas-buy real), intentar (a) transferir el saldo de la estación al atacante,
-;; (b) buy-gas con total enorme para drenar. La estación queda con guard
-;; satisfecho durante el gas-buy: ¿se puede abusar?
+;; ATK-5 (?NGULO REAL DNNS): con GAS+ALLOW_GAS instaladas a nivel tx (como en el
+;; gas-buy real), intentar (a) transferir el saldo de la estaci?n al atacante,
+;; (b) buy-gas con total enorme para drenar. La estaci?n queda con guard
+;; satisfecho durante el gas-buy: ?se puede abusar?
 
 (begin-tx "fund station 5 KDA + destino atacante")
 (env-keys ["admin-key"])
@@ -26,12 +26,12 @@
 (expect "ALLOW_GAS realmente en scope" true
   (require-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.ALLOW_GAS)))
 (print "-- transfer estacion->atacante --")
-(expect-failure "transfer del saldo de la estación bloqueada pese a GAS+ALLOW_GAS"
+(expect-failure "transfer del saldo de la estaci?n bloqueada pese a GAS+ALLOW_GAS"
   (coin.transfer n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION "attacker-acct" 5.0))
 (print (format "STATION tras intento transfer = {}" [(at 'balance (coin.details n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION))]))
 (commit-tx)
 
-;; (b) buy-gas con total enorme -> debita la estación DE VERDAD (esto SÍ mueve saldo)
+;; (b) buy-gas con total enorme -> debita la estaci?n DE VERDAD (esto S? mueve saldo)
 (begin-tx "ATK-5b: buy-gas total=5.0 drena la estacion?")
 (env-chain-data { "chain-id": "0", "block-time": (time "2027-05-01T01:00:00Z")
                 , "gas-price": 0.000001, "gas-limit": 1500 })

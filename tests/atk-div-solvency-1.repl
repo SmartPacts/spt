@@ -1,7 +1,7 @@
 ;; ATK div-solvency-1: DOBLE CLAIM temporal + claim tras rotate de guard.
-;; Hipotesis A1: reclamar, declarar otra ronda, reclamar de nuevo => ¿cobra mas de lo devengado?
+;; Hipotesis A1: reclamar, declarar otra ronda, reclamar de nuevo => ?cobra mas de lo devengado?
 ;; Hipotesis A5 (angulo nuevo): rotar el guard de un holder con pending a un guard del atacante
-;;   y reclamar => ¿el KDA aterriza en el principal del ATACANTE (robo)?
+;;   y reclamar => ?el KDA aterriza en el principal del ATACANTE (robo)?
 (load "setup.repl")
 
 (begin-tx "seed alice 3000 / bob 2000 via IPO")
@@ -54,7 +54,7 @@
   (expect "A1: claim2 paga solo R2 = 60, no re-cobra R1" 60.0 paid2))
 (commit-tx)
 
-;; === A5: rotar guard de bob a un guard del ATACANTE, luego reclamar. ¿KDA al atacante? ===
+;; === A5: rotar guard de bob a un guard del ATACANTE, luego reclamar. ?KDA al atacante? ===
 (begin-tx "A5 bob rota su guard al del atacante (mallory) y reclama")
 (env-data { "mallory": { "keys": ["mallory-key"], "pred": "keys-all" } })
 ;; bob tiene 40 pending de R1 + 40 de R2 = 80. Rota su guard con SU clave (legitimo cambio de guard).

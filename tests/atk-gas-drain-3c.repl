@@ -1,11 +1,11 @@
 (load "setup.repl")
 
-;; ATK-3c: block-time HACIA ATRÁS y rollover exacto.
+;; ATK-3c: block-time HACIA ATR?S y rollover exacto.
 ;; Llenar E0 a T0=2027-01-01. Luego:
-;;  - probar now < epoch-start (tiempo atrás): diff negativo -> NO rollover, cap sigue.
+;;  - probar now < epoch-start (tiempo atr?s): diff negativo -> NO rollover, cap sigue.
 ;;  - probar rollover exacto a T0+86400 (24h) -> resetea.
-;; Además cuantificar el "drenaje real por saltos de tiempo": con control de
-;; block-time un atacante NO tiene (consenso lo fija), pero medimos el máximo/época.
+;; Adem?s cuantificar el "drenaje real por saltos de tiempo": con control de
+;; block-time un atacante NO tiene (consenso lo fija), pero medimos el m?ximo/?poca.
 
 (begin-tx "llenar E0")
 (env-chain-data { "chain-id": "0", "block-time": (time "2027-01-01T00:00:00Z")
@@ -17,8 +17,8 @@
 (print (format "spent E0 = {}" [(n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.get-epoch-spent)]))
 (commit-tx)
 
-;; tiempo hacia atrás: 2026-01-01 (un año antes de epoch-start). diff negativo.
-(begin-tx "ATK-3c: block-time hacia atras -> ¿bypass del cap?")
+;; tiempo hacia atr?s: 2026-01-01 (un a?o antes de epoch-start). diff negativo.
+(begin-tx "ATK-3c: block-time hacia atras -> ?bypass del cap?")
 (env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z")
                 , "gas-price": 0.000001, "gas-limit": 1500 })
 (env-data { "tx-type": "cont" })

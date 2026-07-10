@@ -1,4 +1,4 @@
-;; V20 — COBRAR DESDE RESERVA EXCLUIDA. treasury/funders nunca devengan; claim rebota.
+;; V20 -- COBRAR DESDE RESERVA EXCLUIDA. treasury/funders nunca devengan; claim rebota.
 ;; Mover shares A la treasury baja circ pero preserva lo devengado (L intacta).
 (load "setup.repl")
 (load "seed-div.repl")

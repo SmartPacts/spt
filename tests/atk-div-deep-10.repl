@@ -1,4 +1,4 @@
-;; V10 — EFFECTIVE-AT FUTURO. rps NO debe moverse hasta que pase el tiempo; luego sí, UNA vez.
+;; V10 -- EFFECTIVE-AT FUTURO. rps NO debe moverse hasta que pase el tiempo; luego s?, UNA vez.
 (load "setup.repl")
 (load "seed-div.repl")
 (env-data { "accts": ["alice" "bob"] })

@@ -1,4 +1,4 @@
-;; V5 — RATE ENORME (1e6 KDA/share). circ 5000 -> L=5e9. Oráculo exacto, sin overflow.
+;; V5 -- RATE ENORME (1e6 KDA/share). circ 5000 -> L=5e9. Or?culo exacto, sin overflow.
 (load "setup.repl")
 (load "seed-div.repl")
 (env-data { "accts": ["alice" "bob"] })

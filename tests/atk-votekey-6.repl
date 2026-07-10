@@ -1,6 +1,6 @@
 (load "setup.repl")
 ;; ===========================================================================
-;; ATK-VOTEKEY-6 — RECUPERACION DE COMPROMISO (thief vote survives rotate?)
+;; ATK-VOTEKEY-6 -- RECUPERACION DE COMPROMISO (thief vote survives rotate?)
 ;; Escenario: un ladron roba la hot key, VOTA YES 3000. El dueno detecta el robo
 ;; y ROTA su main guard (esto revoca la vote-key). Preguntas:
 ;;  (a) ?El voto YES ya emitido por el ladron sigue en el tally tras rotate? (si;

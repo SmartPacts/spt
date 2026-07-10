@@ -1,11 +1,11 @@
 (load "setup.repl")
 
-;; ATK-4: CONTINUATIONS PATROCINADAS + precios límite.
+;; ATK-4: CONTINUATIONS PATROCINADAS + precios l?mite.
 ;; 4a: cont de un defpact ARBITRARIO (no vote). El contrato lo admite (residual
 ;;     documentado) pero acotado por el cap. Confirmamos que NO drena > cap y que
-;;     el cont no puede ejecutar transfer de la estación.
-;; 4b: gas-price NEGATIVO -> ¿pasa el ceiling (<=) y cobra MAX-TX-COST? ¿o rompe?
-;; 4c: gas-limit 0 / negativo -> ¿pasa y patrocina "gratis" sin tocar el cap?
+;;     el cont no puede ejecutar transfer de la estaci?n.
+;; 4b: gas-price NEGATIVO -> ?pasa el ceiling (<=) y cobra MAX-TX-COST? ?o rompe?
+;; 4c: gas-limit 0 / negativo -> ?pasa y patrocina "gratis" sin tocar el cap?
 ;; 4d: exec-code con la MISMA llamada allowlistada repetida (length=1) pero
 ;;     valores absurdos -> el cap cobra igual; no hay drenaje diferencial.
 

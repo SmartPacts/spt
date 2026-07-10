@@ -1,4 +1,4 @@
-;; V2 — RATE = 0 (rechazo esperado; el oráculo no debe moverse).
+;; V2 -- RATE = 0 (rechazo esperado; el or?culo no debe moverse).
 (load "setup.repl")
 (load "seed-div.repl")
 (env-data { "accts": ["alice" "bob"] })

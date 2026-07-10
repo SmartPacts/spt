@@ -1,4 +1,4 @@
-;; V6 — RATE con 13 DECIMALES (viola enforce-unit -> rechazo esperado).
+;; V6 -- RATE con 13 DECIMALES (viola enforce-unit -> rechazo esperado).
 (load "setup.repl")
 (load "seed-div.repl")
 (env-data { "accts": ["alice" "bob"] })

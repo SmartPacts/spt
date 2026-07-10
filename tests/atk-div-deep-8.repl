@@ -1,4 +1,4 @@
-;; V8 — EFFECTIVE-AT en el PASADO (antes del block-time 2026-06-01). Debe accruar ya.
+;; V8 -- EFFECTIVE-AT en el PASADO (antes del block-time 2026-06-01). Debe accruar ya.
 (load "setup.repl")
 (load "seed-div.repl")
 (env-data { "accts": ["alice" "bob"] })

@@ -1,4 +1,4 @@
-;; V19 — RONDA CON FLOAT = 0. Sin seed: circ=0. declare no mueve KDA; L=0; fund rechaza (dead chain).
+;; V19 -- RONDA CON FLOAT = 0. Sin seed: circ=0. declare no mueve KDA; L=0; fund rechaza (dead chain).
 (load "setup.repl")
 (env-data { "accts": [] })
 (begin-tx "V19 declara ronda con float 0")

@@ -1,4 +1,4 @@
-;; V3 — RATE NEGATIVO (rechazo esperado).
+;; V3 -- RATE NEGATIVO (rechazo esperado).
 (load "setup.repl")
 (load "seed-div.repl")
 (env-data { "accts": ["alice" "bob"] })

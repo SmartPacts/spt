@@ -1,4 +1,4 @@
-;; V11 — FUNDING EXACTO floor(L). Debe pasar y dejar pool>=floor(L).
+;; V11 -- FUNDING EXACTO floor(L). Debe pasar y dejar pool>=floor(L).
 (load "setup.repl")
 (load "seed-div.repl")
 (env-data { "accts": ["alice" "bob"] })

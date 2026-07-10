@@ -1,6 +1,6 @@
 (load "setup.repl")
 ;; ===========================================================================
-;; ATK-VOTEKEY-2 — REGISTRO SIGILOSO REAL + OWNER LOCKOUT
+;; ATK-VOTEKEY-2 -- REGISTRO SIGILOSO REAL + OWNER LOCKOUT
 ;; El atacante NO posee la clave main del dueno. Prueba:
 ;;  (a) registrar una vote-key con SOLO su propia hot key (sin firma del dueno)
 ;;  (b) registrar con una firma de OTRA cuenta cualquiera (bob) presente

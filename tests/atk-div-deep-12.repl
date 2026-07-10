@@ -1,4 +1,4 @@
-;; V12 — FUNDING floor(L) - 1 quantum (infrafondeo por 1e-12). DEBE rebotar.
+;; V12 -- FUNDING floor(L) - 1 quantum (infrafondeo por 1e-12). DEBE rebotar.
 (load "setup.repl")
 (load "seed-div.repl")
 (env-data { "accts": ["alice" "bob"] })

@@ -1,7 +1,7 @@
-;; CONTROL NEGATIVO — el oráculo diferencial NO es una tautología.
-;; Verifico que dividend-liability (O1) y Σpending-of (On) son CÁLCULOS INDEPENDIENTES:
+;; CONTROL NEGATIVO -- el or?culo diferencial NO es una tautolog?a.
+;; Verifico que dividend-liability (O1) y Spending-of (On) son C?LCULOS INDEPENDIENTES:
 ;; O1 lee sum-pending/sum-debt/circ del state; On recorre cuentas y hace pend+bal*(rps-rd).
-;; Si fueran el mismo código, cualquier bug se ocultaria. Demuestro que un On MAL calculado
+;; Si fueran el mismo c?digo, cualquier bug se ocultaria. Demuestro que un On MAL calculado
 ;; (omitiendo una cuenta) DIVERGE de O1 -> mi asercion "expect On O1" SI cazaria un fallo real.
 (load "setup.repl")
 (load "seed-div.repl")

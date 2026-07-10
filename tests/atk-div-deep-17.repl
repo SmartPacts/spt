@@ -1,5 +1,5 @@
-;; V17 — CLAIM PARCIAL + CHURN. alice cobra su devengado, luego mueve shares, luego 2a ronda.
-;; No debe re-cobrar la 1a ronda ni perder la 2a. Oráculo O1==On tras cada paso.
+;; V17 -- CLAIM PARCIAL + CHURN. alice cobra su devengado, luego mueve shares, luego 2a ronda.
+;; No debe re-cobrar la 1a ronda ni perder la 2a. Or?culo O1==On tras cada paso.
 ;; (L es ACUMULATIVA: incluye el R1 no cobrado de bob + la R2 completa sobre el circulante.)
 (load "setup.repl")
 (load "seed-div.repl")

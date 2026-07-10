@@ -1,6 +1,6 @@
-;; V16 — DUST 1e-12 REPETIDO. Un holder con saldo que produce dust sub-12dp; se declara
+;; V16 -- DUST 1e-12 REPETIDO. Un holder con saldo que produce dust sub-12dp; se declara
 ;; ronda tras ronda de dust y se intenta cobrar cada vez. El dust debe ACUMULARSE en pending
-;; (no perderse ni duplicarse) y L==Σpending exacto en cada paso. claim dust-only rebota.
+;; (no perderse ni duplicarse) y L==Spending exacto en cada paso. claim dust-only rebota.
 (load "setup.repl")
 (load "seed-div.repl")
 ;; grace con saldo fraccionario que fabrica dust: 123.456789 shares.
@@ -23,7 +23,7 @@
   (print (format "V16 #1 grace cobro {} dust-restante {}" [paid (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "grace")]))
   (expect "V16 #1 paga floor12 = 1.2345678e-5" 0.000012345678 paid)
   (expect "V16 #1 dust 9e-13 arrastrado" 0.0000000000009 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of "grace")))
-;; oráculo tras claim con dust
+;; or?culo tras claim con dust
 (let ((o1 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-liability))
       (on (fold (+) 0.0 (map (lambda (a:string) (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.pending-dividends-of a)) (read-msg 'accts)))))
   (print (format "V16 #1 ORACULO: O1={} On={}" [o1 on]))
@@ -32,7 +32,7 @@
 (expect-failure "V16 claim dust-only rebota" "nothing to claim"
   (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.claim-dividends "grace"))
 (commit-tx)
-;; segunda ronda dust identica: dust se acumula (9e-13 + nuevo). L sigue == Σpending.
+;; segunda ronda dust identica: dust se acumula (9e-13 + nuevo). L sigue == Spending.
 (begin-tx "V16 ronda dust #2")
 (env-keys ["admin-key"])
 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.declare-round "Rd2" 0.0000001 (time "2026-06-01T00:00:00Z"))

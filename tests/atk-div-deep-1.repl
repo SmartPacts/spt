@@ -1,8 +1,8 @@
 ;; =====================================================================
-;; ATK-DIV-DEEP-1  (V1) — CASO NORMAL / validación del ORÁCULO DIFERENCIAL.
-;; Oráculo: L_O1 = dividend-liability()  vs  L_On = Σ pending-dividends-of(a)
-;; sobre TODAS las cuentas float. Deben ser iguales tras cada mutación.
-;; Invariantes extra: Σpayouts <= floor(L) ; pool>=0 ; nadie cobra dos veces.
+;; ATK-DIV-DEEP-1  (V1) -- CASO NORMAL / validaci?n del OR?CULO DIFERENCIAL.
+;; Or?culo: L_O1 = dividend-liability()  vs  L_On = S pending-dividends-of(a)
+;; sobre TODAS las cuentas float. Deben ser iguales tras cada mutaci?n.
+;; Invariantes extra: Spayouts <= floor(L) ; pool>=0 ; nadie cobra dos veces.
 ;; =====================================================================
 (load "setup.repl")
 (begin-tx "seed alice 3000 / bob 2000 via IPO")
@@ -21,9 +21,9 @@
 (expect "circ 5000" 5000.0 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.get-circulating))
 (commit-tx)
 
-;; ---- ORÁCULO: comparar O(1) vs O(n) ----
+;; ---- OR?CULO: comparar O(1) vs O(n) ----
 (env-data { "accts": ["alice" "bob"] })
-(begin-tx "V1 declare R1 0.02 + fund exacto, oráculo diferencial")
+(begin-tx "V1 declare R1 0.02 + fund exacto, or?culo diferencial")
 (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.REVENUE-ACCOUNT 100.0)] }])
 (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.receive-revenue "sender00" 100.0)
 (env-keys ["admin-key"])

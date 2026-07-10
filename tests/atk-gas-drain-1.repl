@@ -1,6 +1,6 @@
 (load "setup.repl")
 
-;; ATK-1: EL FALLO DNNS — drenar el saldo de la estación con GAS+ALLOW_GAS en scope.
+;; ATK-1: EL FALLO DNNS -- drenar el saldo de la estaci?n con GAS+ALLOW_GAS en scope.
 
 (begin-tx "fund station")
 (env-keys ["admin-key"])
@@ -24,7 +24,7 @@
                 , "chain-id": "0", "block-time": (time "2026-09-01T00:00:00Z") })
 (env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
 (env-keys ["atk-key"])
-(expect-failure "no se puede robar el saldo aunque GAS+ALLOW_GAS estén en scope"
+(expect-failure "no se puede robar el saldo aunque GAS+ALLOW_GAS est?n en scope"
   (test-capability (coin.GAS)
     (test-capability (n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.ALLOW_GAS)
       (coin.transfer n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-gas-station.GAS_STATION "attacker-acct" 5.0))))

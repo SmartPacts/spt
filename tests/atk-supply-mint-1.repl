@@ -37,7 +37,7 @@
 (commit-tx)
 
 ;; (3) init en chain 1 tras init-supply => enforce-not-initialized (state ya existe) debe rechazar
-;;     (state es singleton STATE-KEY; init-supply ya lo insertó => insert duplicate O bien not-initialized)
+;;     (state es singleton STATE-KEY; init-supply ya lo insert? => insert duplicate O bien not-initialized)
 (begin-tx "M1c: init en chain 1 con state ya inicializado")
 (env-chain-data { "chain-id": "1", "block-time": (time "2026-06-01T00:00:00Z") })
 (env-keys ["admin-key"])

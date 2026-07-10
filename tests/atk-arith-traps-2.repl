@@ -2,7 +2,7 @@
 ;; ATK-ARITH-2: DUST FARMING via balances fraccionarios + re-checkpoint repetido.
 ;; En debit/credit, new-pend = pend + bal*(rps-rd) se guarda SIN floor (hasta 24 dec).
 ;; Solo claim floorea. Hipotesis: si un atacante fracciona su balance y hace muchos
-;; micro-movimientos que crystallizan repetidamente, ¿puede su pending TOTAL superar
+;; micro-movimientos que crystallizan repetidamente, ?puede su pending TOTAL superar
 ;; bal_total*rps (cobrar mas que su cuota justa)? Invariante: Sigma pending == circ*rps - (efecto sum-debt),
 ;; y la liability O(1) debe seguir == Sigma pending real.
 ;; Tambien: balance con 12 decimales * rps 12 dec => 24 dec en pending; comprobar que
