@@ -1,24 +1,24 @@
 # Red-team suite — SmartPacts / SPT (external, July 2026)
 
-Executed adversarial test suite contributed by **Oberlus / DNNS** (community security), by invitation and with the maintainer's permission. This is the full runnable suite behind the summary in [`audits/2026-07-red-team-dnns.md`](../audits/2026-07-red-team-dnns.md) — the attacks that summary said were *"available on request"*, now in-repo for reproducibility.
+Executed adversarial test suite contributed by **Oberlus / DNNS** (community security), by invitation and with the maintainer's permission. This is the full runnable suite behind the summary in the report [`../2026-07-red-team-dnns.md`](../2026-07-red-team-dnns.md) — the attacks that summary said were *"available on request"*, now in-repo for reproducibility.
 
 - **Target:** the three Pact modules in `contracts/testnet06/` — `smartpacts-shares`, `smartpacts-ipo`, `smartpacts-gas-station` (namespace `n_d97ffd2ca290429b5dc85ce551a8d07d038e9641`).
 - **Date:** 2026-07-08 · **Interpreter:** Pact 5.4.
 - **Verdict:** 88 executed attacks across 12 fronts + a 20-mutation dividend deep-dive. **Zero confirmed vulnerabilities — the contracts held on every front.**
-- **Layout:** **95 `.repl` in `tests/` run green in the bare REPL** (`pact 5.4`); **12 cross-chain / SPV attacks live in `tests/devnet/`** because they drive multi-chain state the single-DB REPL cannot simulate (see *Scope and honest limits*). All files are ASCII so they run under any locale.
+- **Layout:** **95 `.repl` in [`attacks/`](attacks/) run green in the bare REPL** (`pact 5.4`); **12 cross-chain / SPV attacks live in [`attacks/devnet/`](attacks/devnet/)** because they drive multi-chain state the single-DB REPL cannot simulate (see *Scope and honest limits*). All files are ASCII so they run under any locale.
 
 ## How to run
 
-Every attack in `tests/` is a standalone `.repl` that loads `setup.repl` (already in the repo), which loads the fixtures and the three SPT modules. From the repo root the whole runnable set is green:
+Every attack in [`attacks/`](attacks/) is a standalone `.repl` that loads `setup.repl` (already in the repo), which loads the fixtures and the three SPT modules. Run them from this folder (`audits/2026-07-red-team-dnns/attacks/`); the whole runnable set is green:
 
 ```sh
-pact tests/atk-gas-drain-1.repl                 # a single attack
-for f in tests/atk-*.repl; do pact "$f" || break; done   # all 95 -> Load successful
+pact atk-gas-drain-1.repl                 # a single attack
+for f in atk-*.repl; do pact "$f" || break; done   # all 95 -> Load successful
 ```
 
 Each attack asserts that a defense **stops** it (via `expect-failure`) or that an invariant **holds** (via `expect`/explicit assertion). A run that ends "Load successful" means the defense held; a real break would surface as an unexpected success or a violated assertion.
 
-**`tests/devnet/` (12 attacks):** these drive **cross-chain / SPV state** (chain switches via `env-chain-data`, `transfer-crosschain`, `report-tally-xchain`) that the bare single-DB REPL cannot simulate, so they appear as `expected failure, got result` in a plain sweep — a harness limit, **not** a defense break (see *Scope and honest limits*). The same fronts are also covered by single-chain attacks that do run green. Run these against a multi-chain devnet.
+**`attacks/devnet/` (12 attacks):** these drive **cross-chain / SPV state** (chain switches via `env-chain-data`, `transfer-crosschain`, `report-tally-xchain`) that the bare single-DB REPL cannot simulate, so they appear as `expected failure, got result` in a plain sweep — a harness limit, **not** a defense break (see *Scope and honest limits*). The same fronts are also covered by single-chain attacks that do run green. Run these against a multi-chain devnet.
 
 ## Method
 

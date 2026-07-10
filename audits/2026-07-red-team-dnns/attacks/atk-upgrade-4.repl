@@ -5,10 +5,10 @@
 (env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
 
 (begin-tx "load coin")
-(load "fixtures/fungible-v2.pact")
-(load "fixtures/fungible-xchain-v1.pact")
-(load "fixtures/gas-payer-v1.pact")
-(load "fixtures/coin.pact")
+(load "../../../tests/fixtures/fungible-v2.pact")
+(load "../../../tests/fixtures/fungible-xchain-v1.pact")
+(load "../../../tests/fixtures/gas-payer-v1.pact")
+(load "../../../tests/fixtures/coin.pact")
 (create-table coin.coin-table)
 (create-table coin.allocation-table)
 (commit-tx)
@@ -27,7 +27,7 @@
   , "upgrade": false })
 (env-keys ["admin-key"])
 (define-namespace "n_d97ffd2ca290429b5dc85ce551a8d07d038e9641" (read-keyset 'spt-admin) (read-keyset 'spt-admin))
-(load "fixtures/pre-adr015-shares.pact")
+(load "../../../tests/fixtures/pre-adr015-shares.pact")
 (commit-tx)
 
 (begin-tx "init-supply + seed float")
@@ -63,7 +63,7 @@
   , "spt-admin": { "keys": ["admin-key"], "pred": "keys-all" }
   , "upgrade": true })
 (env-keys ["admin-key"])
-(load "../contracts/testnet06/smartpacts-shares.pact")
+(load "../../../contracts/testnet06/smartpacts-shares.pact")
 (create-table n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.dividend-rounds)
 (create-table n_d97ffd2ca290429b5dc85ce551a8d07d038e9641.smartpacts-shares.round-count)
 (expect-failure "migrate rejects sub-precision non-zero rps (exact equality guard)"

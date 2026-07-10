@@ -1,0 +1,5 @@
+;; Shim — re-exports the repository's maintained test setup so these audit attacks
+;; always run against the same fixtures + deployed contracts as the main suite.
+;; Pact resolves a loaded file's own (load ...) paths relative to THAT file, so the
+;; real setup's "fixtures/*" and "../contracts/testnet06/*" loads resolve under tests/.
+(load "../../../tests/setup.repl")
