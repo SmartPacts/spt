@@ -51,6 +51,7 @@ supply, reserves, time-locks, the live vote — are in [docs/VERIFICATION.md](do
 | [`docs/VERIFICATION.md`](docs/VERIFICATION.md) | Every on-chain fact, and how to check it yourself |
 | [`docs/DEPLOYMENTS.md`](docs/DEPLOYMENTS.md) | Dated record of every deployment and upgrade (including the deprecated prior namespace) |
 | [`docs/EVENT-GUIDE.md`](docs/EVENT-GUIDE.md) | The community event, step by step (CLI) |
+| [`docs/tx-templates/`](docs/tx-templates/) | The complete signable transaction for every governance operation — build votes, claims, and reports with no special tooling |
 | [`SECURITY.md`](SECURITY.md) | How to report a vulnerability |
 
 ## The three modules

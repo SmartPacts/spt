@@ -15,6 +15,8 @@ KDA/SPT**; nothing here is a real security, a real offer, or a real payment.
   this document is the CLI/tooling reference for the same journey.
 - **Deployment verification** (module hashes + deploy request keys):
   [VERIFICATION.md](VERIFICATION.md).
+- **Integration templates** — the full signable transaction (code, signers, capabilities,
+  sender, gas) for every governance operation: [tx-templates/](tx-templates/README.md).
 
 > **The one rule that makes voting free:** when you vote or claim dividends, submit the transaction with
 > the **gas station as the payer** and set **gas limit ≤ 1500, gas price ≤ 1e-6**. Those are the
