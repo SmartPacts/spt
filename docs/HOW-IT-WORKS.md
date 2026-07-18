@@ -262,6 +262,11 @@ the participation governance needs. But an unlimited subsidy is a faucet for att
 dimension of the sponsorship — what, how much, how often — has a hard on-chain bound, and the
 failure mode is "pay your own gas", never "lose funds."
 
+*The above describes the station as deployed for the test event. The mainnet release candidate
+keeps every bound and generalizes the fixed two-call allowlist into an on-chain registry of
+budgeted operations, each with its own gas ceiling and daily budget, every policy change a
+public event — documented completely in [GAS-STATION.md](GAS-STATION.md).*
+
 ## 9. The sale
 
 The initial sale is a deliberately simple, fixed-price mechanism on chain 0: send KDA, receive SPT

@@ -92,11 +92,16 @@ a single-purpose hot key bounds the blast radius of its compromise to a correcta
 
 ## 5. Gas station (gas-free participation)
 
-- A dedicated module sponsors network gas for exactly two actions: **casting a vote** and
-  **claiming distributions**. Buying in the sale is deliberately self-paid.
+- A dedicated module sponsors network gas for approved operations. The deployed test-event
+  version sponsors exactly two actions: **casting a vote** and **claiming distributions**.
+  Buying in the sale is deliberately self-paid.
 - Drain defenses are on-chain: the station only sponsors a transaction whose envelope contains
   exactly one allow-listed call, within strict gas ceilings (limit ≤ 1,500, price ≤ 1e-6), under a
   per-epoch spending cap. If the daily cap is exhausted, the same actions still work self-paid.
+- The mainnet release candidate generalizes the allowlist into an **on-chain registry** of
+  budgeted operations (per-entry gas ceilings and daily budgets, public `ENTRY-SET` policy
+  events, exec-only) — the full design is in [GAS-STATION.md](GAS-STATION.md), the exact deltas
+  in [TESTNET-VS-MAINNET.md](TESTNET-VS-MAINNET.md).
 
 **Why:** holders should not need to hold KDA to exercise their rights — but a subsidy without
 hard on-chain limits would be a faucet for attackers. The envelope allow-list plus epoch cap bounds

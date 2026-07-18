@@ -1,0 +1,524 @@
+;; ===========================================================================
+;; MAINNET RELEASE-CANDIDATE gas station — full adversarial policy suite.
+;; The candidate station is registry-driven (see docs/GAS-STATION.md and
+;; docs/TESTNET-VS-MAINNET.md): sponsorship policy is on-chain data, not code.
+;; This suite attacks that policy surface: registry admin gate + validation,
+;; exact-prefix matching, exec-only, single-call, per-entry gas ceilings,
+;; per-entry epoch caps (isolation!), the global backstop, kill switch,
+;; station guard, meter protection, upgrade survival, worst-case gas.
+;;
+;; A real gas buy is miner machinery (coin.GAS in scope). In REPL we drive the
+;; policy directly: simulate the tx envelope with env-data tx-type/exec-code +
+;; env-chain-data gas-price/gas-limit, then test-capability (GAS_PAYER ...).
+;; The real buyGas integration (the station account pays, the meters advance
+;; inside the node's gas-purchase phase) can only be proven on a live node —
+;; this suite proves the policy logic that phase executes.
+;;
+;; The suite deploys ONLY the station: sponsored prefixes are data rows, so no
+;; target module needs to exist — which is itself part of the design under test.
+;; ===========================================================================
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+
+(begin-tx "load coin")
+(load "fixtures/fungible-v2.pact")
+(load "fixtures/fungible-xchain-v1.pact")
+(load "fixtures/gas-payer-v1.pact")
+(load "fixtures/coin.pact")
+(create-table coin.coin-table)
+(create-table coin.allocation-table)
+(commit-tx)
+
+;; --- deploy the CANDIDATE station into an arbitrary namespace (fresh) ------
+(begin-tx "namespace + admin keyset + fresh station deploy")
+(env-data
+  { "ns": "n_candidate0000000000000000000000000000000000"
+  , "spt-admin": { "keys": ["admin-key"], "pred": "keys-all" }
+  , "upgrade": false })
+(env-keys ["admin-key"])
+(define-namespace "n_candidate0000000000000000000000000000000000" (read-keyset 'spt-admin) (read-keyset 'spt-admin))
+(namespace "n_candidate0000000000000000000000000000000000")
+(define-keyset "n_candidate0000000000000000000000000000000000.spt-admin" (read-keyset 'spt-admin))
+(load "../contracts/mainnet/smartpacts-gas-station.pact")
+(commit-tx)
+
+;; ===========================================================================
+;; GROUP 0 — registry seeding (admin) + admin-gate + validation negatives
+;; ===========================================================================
+(begin-tx "non-admin cannot write the registry")
+(env-keys ["attacker-key"])
+(expect-failure "set-entry needs the admin keyset" "Keyset failure"
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.set-entry
+    "(n_candidate0000000000000000000000000000000000.smartpacts-shares.cast-vote " 1500 0.15 86400 true))
+(commit-tx)
+
+(begin-tx "seed sponsored entries (admin)")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+;; the end-user pair (gasless voting + claims)
+(n_candidate0000000000000000000000000000000000.smartpacts-gas-station.set-entry
+  "(n_candidate0000000000000000000000000000000000.smartpacts-shares.cast-vote " 1500 0.15 86400 true)
+(n_candidate0000000000000000000000000000000000.smartpacts-gas-station.set-entry
+  "(n_candidate0000000000000000000000000000000000.smartpacts-shares.claim-dividends " 1500 0.15 86400 true)
+;; an INTERNAL op (the constant-allowlist design refused these by doctrine;
+;; the registry sponsors whatever is registered)
+(n_candidate0000000000000000000000000000000000.smartpacts-gas-station.set-entry
+  "(n_candidate0000000000000000000000000000000000.smartpacts-shares.fund-dividends " 3000 0.15 86400 true)
+;; a FUTURE-module op: the target module does not even exist yet — onboarding
+;; is one admin tx, prefix is just a string (per-network, no source edit)
+(n_candidate0000000000000000000000000000000000.smartpacts-gas-station.set-entry
+  "(free.sp-launchpad.reject " 1500 0.05 86400 true)
+;; heavy entries for the metering group (cost = 1e-6 * 15000 = 0.015 KDA/tx)
+(n_candidate0000000000000000000000000000000000.smartpacts-gas-station.set-entry
+  "(free.test.heavy " 15000 1.5 86400 true)
+(n_candidate0000000000000000000000000000000000.smartpacts-gas-station.set-entry
+  "(free.test.heavy2 " 15000 1.5 86400 true)
+;; kill-switch subject
+(n_candidate0000000000000000000000000000000000.smartpacts-gas-station.set-entry
+  "(free.test.disabled-op " 1500 0.15 86400 false)
+(expect "ENTRY-SET events emitted (7 seeds)" 7
+  (length (filter (lambda (e:object) (contains "ENTRY-SET" (at 'name e))) (env-events true))))
+(commit-tx)
+
+(begin-tx "set-entry validation negatives (admin)")
+(env-keys ["admin-key"])
+(expect-failure "prefix must start with (" "must start with '('"
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.set-entry
+    "free.x.y " 1500 0.1 86400 true))
+(expect-failure "prefix must end with a space" "must end with a space"
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.set-entry
+    "(free.x.yz" 1500 0.1 86400 true))
+(expect-failure "prefix too short" "too short"
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.set-entry
+    "(free.x " 1500 0.1 86400 true))
+(expect-failure "gas-limit zero rejected" "max-gas-limit must be in"
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.set-entry
+    "(free.x.yyyy " 0 0.1 86400 true))
+(expect-failure "gas-limit above the entry ceiling rejected" "max-gas-limit must be in"
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.set-entry
+    "(free.x.yyyy " 15001 0.1 86400 true))
+(expect-failure "epoch-cap zero rejected" "epoch-cap must be"
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.set-entry
+    "(free.x.yyyy " 1500 0.0 86400 true))
+(expect-failure "epoch-cap above global rejected" "epoch-cap must be"
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.set-entry
+    "(free.x.yyyy " 1500 2.5 86400 true))
+(expect-failure "epoch-len below 1h rejected" "epoch-len must be"
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.set-entry
+    "(free.x.yyyy " 1500 0.1 3599 true))
+(expect-failure "epoch-len above 7d rejected" "epoch-len must be"
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.set-entry
+    "(free.x.yyyy " 1500 0.1 604801 true))
+;; an internal space would let one registered prefix contain another
+;; (breaking at-most-one-match); such prefixes are unregistrable.
+(expect-failure "internal-space prefix rejected (uniqueness by construction)"
+  "exactly one space"
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.set-entry
+    "(free.x.yyyy extra " 1500 0.1 86400 true))
+(commit-tx)
+
+;; ===========================================================================
+;; GROUP 0b — the weak-cap safety property itself: METER / ALLOW_GAS are
+;; module-scoped — EXTERNAL acquisition is blocked by Pact, so the caps are
+;; internal tokens, not public authorization.
+;; ===========================================================================
+(begin-tx "external acquisition of module-internal caps is blocked")
+(expect-failure "METER not acquirable outside the module" "Module admin"
+  (with-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.METER) "x"))
+(expect-failure "ALLOW_GAS not acquirable outside the module" "Module admin"
+  (with-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.ALLOW_GAS) "x"))
+(commit-tx)
+
+;; ===========================================================================
+;; GROUP 1 — matching matrix (allowlisted?) — exact prefix, boundaries, spoofs
+;; ===========================================================================
+(begin-tx "matching matrix")
+(expect "claim-dividends sponsored" true
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.allowlisted? "(n_candidate0000000000000000000000000000000000.smartpacts-shares.claim-dividends \"k:alice\")"))
+(expect "cast-vote sponsored" true
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.allowlisted? "(n_candidate0000000000000000000000000000000000.smartpacts-shares.cast-vote \"k:alice\" \"P1\" true)"))
+(expect "registered internal op sponsored (registry delta vs the constant allowlist)" true
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.allowlisted? "(n_candidate0000000000000000000000000000000000.smartpacts-shares.fund-dividends 10.0)"))
+(expect "future-module op sponsored by row alone" true
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.allowlisted? "(free.sp-launchpad.reject free.shady-token)"))
+(expect "UNregistered admin op NOT sponsored" false
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.allowlisted? "(n_candidate0000000000000000000000000000000000.smartpacts-shares.withdraw-revenue \"k:adm\" 5.0)"))
+(expect "unregistered transfer NOT sponsored" false
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.allowlisted? "(n_candidate0000000000000000000000000000000000.smartpacts-shares.transfer \"k:s\" \"k:r\" 1.0)"))
+;; boundaries / spoofs
+(expect "suffix spoof rejected (trailing-space boundary)" false
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.allowlisted? "(n_candidate0000000000000000000000000000000000.smartpacts-shares.cast-vote-evil \"k:a\")"))
+(expect "claim-dividends-drain spoof rejected" false
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.allowlisted? "(n_candidate0000000000000000000000000000000000.smartpacts-shares.claim-dividends-drain \"k:a\")"))
+(expect "leading-space wrap rejected (match at index 0 only)" false
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.allowlisted? " (n_candidate0000000000000000000000000000000000.smartpacts-shares.claim-dividends \"k:a\")"))
+(expect "wrong namespace rejected" false
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.allowlisted? "(evil.smartpacts-shares.claim-dividends \"k:a\")"))
+(expect "bare prefix (no args) matches — boundary pin" true
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.allowlisted? "(n_candidate0000000000000000000000000000000000.smartpacts-shares.claim-dividends "))
+(expect "disabled entry is NOT allowlisted (kill switch visible)" false
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.allowlisted? "(free.test.disabled-op \"x\")"))
+(commit-tx)
+
+;; ===========================================================================
+;; GROUP 2 — GAS_PAYER positive paths (compose ALLOW_GAS) + per-entry limits
+;; ===========================================================================
+(begin-tx "GAS_PAYER: sponsored user op within ceilings")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:10:00Z")
+                , "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "exec"
+          , "exec-code": ["(n_candidate0000000000000000000000000000000000.smartpacts-shares.claim-dividends \"k:alice\")"] })
+(test-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.GAS_PAYER "k:alice" 1500 0.000001))
+(expect "ALLOW_GAS composed after a sponsored claim" true
+  (require-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.ALLOW_GAS)))
+(commit-tx)
+
+(begin-tx "GAS_PAYER: internal op honors ITS entry limit (3000)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:11:00Z")
+                , "gas-price": 0.000001, "gas-limit": 3000 })
+(env-data { "tx-type": "exec"
+          , "exec-code": ["(n_candidate0000000000000000000000000000000000.smartpacts-shares.fund-dividends 10.0)"] })
+(test-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.GAS_PAYER "k:adm" 3000 0.000001))
+(expect "ALLOW_GAS composed for a registered internal op at its own limit" true
+  (require-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.ALLOW_GAS)))
+(commit-tx)
+
+(begin-tx "GAS_PAYER: a 1500-entry refuses a 3000 gas-limit tx (per-entry ceiling)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:12:00Z")
+                , "gas-price": 0.000001, "gas-limit": 3000 })
+(env-data { "tx-type": "exec"
+          , "exec-code": ["(n_candidate0000000000000000000000000000000000.smartpacts-shares.claim-dividends \"k:alice\")"] })
+(expect-failure "per-entry gas-limit ceiling enforced" "Gas limit must be <="
+  (test-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.GAS_PAYER "k:alice" 3000 0.000001)))
+(commit-tx)
+
+(begin-tx "GAS_PAYER: disabled entry refused")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:13:00Z")
+                , "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "exec", "exec-code": ["(free.test.disabled-op \"x\")"] })
+(expect-failure "kill switch blocks sponsorship" "disabled"
+  (test-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.GAS_PAYER "k:x" 1500 0.000001)))
+(commit-tx)
+
+(begin-tx "kill switch round-trip: re-enable restores sponsorship")
+(env-keys ["admin-key"])
+(n_candidate0000000000000000000000000000000000.smartpacts-gas-station.set-entry
+  "(free.test.disabled-op " 1500 0.15 86400 true)
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:14:00Z")
+                , "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "exec", "exec-code": ["(free.test.disabled-op \"x\")"] })
+(test-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.GAS_PAYER "k:x" 1500 0.000001))
+(expect "re-enabled entry sponsors again" true
+  (require-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.ALLOW_GAS)))
+(commit-tx)
+
+;; ===========================================================================
+;; GROUP 3 — envelope hardening: exec-only, single-call, unknown types
+;; ===========================================================================
+(begin-tx "cont is REFUSED (exec-only: a cont carries no exec-code to allowlist)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:20:00Z")
+                , "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "cont" })
+(expect-failure "no cont sponsorship" "exec transactions only"
+  (test-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.GAS_PAYER "k:carol" 1500 0.000001)))
+(commit-tx)
+
+(begin-tx "unknown tx-type refused")
+(env-chain-data { "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "exotic"
+          , "exec-code": ["(n_candidate0000000000000000000000000000000000.smartpacts-shares.claim-dividends \"k:alice\")"] })
+(expect-failure "tx-type must be exec" "exec transactions only"
+  (test-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.GAS_PAYER "k:alice" 1500 0.000001)))
+(commit-tx)
+
+(begin-tx "multi-call exec rejected (no smuggling a 2nd call)")
+(env-chain-data { "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "exec"
+          , "exec-code": [ "(n_candidate0000000000000000000000000000000000.smartpacts-shares.claim-dividends \"k:alice\")"
+                           "(n_candidate0000000000000000000000000000000000.smartpacts-shares.withdraw-revenue \"k:atk\" 1000.0)" ] })
+(expect-failure "more than one call rejected" "exactly one sponsored call"
+  (test-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.GAS_PAYER "k:alice" 1500 0.000001)))
+(commit-tx)
+
+(begin-tx "empty exec-code rejected")
+(env-chain-data { "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "exec", "exec-code": [] })
+(expect-failure "zero calls rejected" "exactly one sponsored call"
+  (test-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.GAS_PAYER "k:alice" 1500 0.000001)))
+(commit-tx)
+
+;; the platform-injection assumption is fail-closed — a missing or ill-typed
+;; envelope key aborts the acquisition (no gas paid).
+(begin-tx "missing tx-type aborts fail-closed")
+(env-chain-data { "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "not-the-envelope": true })
+(expect-failure "absent tx-type key aborts"
+  (test-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.GAS_PAYER "k:alice" 1500 0.000001)))
+(commit-tx)
+
+(begin-tx "ill-typed exec-code aborts fail-closed")
+(env-chain-data { "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "exec", "exec-code": "not-a-list" })
+(expect-failure "non-list exec-code aborts"
+  (test-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.GAS_PAYER "k:alice" 1500 0.000001)))
+(commit-tx)
+
+(begin-tx "length-1 STRING exec-code aborts fail-closed (string length would pass a naive count)")
+(env-chain-data { "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "exec", "exec-code": "x" })
+(expect-failure "1-char string exec-code aborts"
+  (test-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.GAS_PAYER "k:alice" 1500 0.000001)))
+(commit-tx)
+
+(begin-tx "unregistered call refused")
+(env-chain-data { "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "exec"
+          , "exec-code": ["(n_candidate0000000000000000000000000000000000.smartpacts-shares.withdraw-revenue \"k:atk\" 5.0)"] })
+(expect-failure "not in the registry" "Not a sponsored call"
+  (test-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.GAS_PAYER "k:atk" 1500 0.000001)))
+(commit-tx)
+
+(begin-tx "gas-price over the global ceiling rejected")
+(env-chain-data { "gas-price": 0.00001, "gas-limit": 1500 })
+(env-data { "tx-type": "exec"
+          , "exec-code": ["(n_candidate0000000000000000000000000000000000.smartpacts-shares.claim-dividends \"k:alice\")"] })
+(expect-failure "over-price rejected" "Gas price must be <="
+  (test-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.GAS_PAYER "k:alice" 1500 0.00001)))
+(commit-tx)
+
+;; positivity guard (defense-in-depth: Chainweb rejects non-positive gas
+;; price/limit upstream; the contract does not rely on that invariant)
+(begin-tx "non-positive gas price / gas limit refused")
+(env-chain-data { "gas-price": 0.0, "gas-limit": 1500 })
+(env-data { "tx-type": "exec"
+          , "exec-code": ["(n_candidate0000000000000000000000000000000000.smartpacts-shares.claim-dividends \"k:alice\")"] })
+(expect-failure "zero gas price refused" "Gas price must be positive"
+  (test-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.GAS_PAYER "k:alice" 1500 0.000001)))
+(env-chain-data { "gas-price": 0.000001, "gas-limit": 0 })
+(expect-failure "zero gas limit refused" "Gas limit must be positive"
+  (test-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.GAS_PAYER "k:alice" 1500 0.000001)))
+(env-chain-data { "gas-price": 0.000001, "gas-limit": 1500 })
+(expect "positive within-ceiling values still pass" true
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.enforce-below-or-at-gas-limit 1500))
+(commit-tx)
+
+;; ===========================================================================
+;; GROUP 4 — meters are NOT externally chargeable (METER gate)
+;; ===========================================================================
+(begin-tx "direct charge-entry / charge-global blocked")
+(env-keys ["attacker-key"])
+(expect-failure "charge-entry requires METER" "require-capability"
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.charge-entry "(free.test.heavy " 15000))
+(expect-failure "charge-global requires METER" "require-capability"
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.charge-global 15000))
+(commit-tx)
+
+;; ===========================================================================
+;; GROUP 5 — PER-ENTRY EPOCH CAPS + THE GLOBAL BACKSTOP
+;; Fresh epoch (2026-08-01) isolates this group from earlier charges.
+;; heavy cost/tx = 1e-6 * 15000 = 0.015; heavy cap 1.5 => exactly 100 txs.
+;; ===========================================================================
+(begin-tx "heavy entry: 100 sponsored acquisitions reach ITS epoch cap")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-01T00:00:00Z")
+                , "gas-price": 0.000001, "gas-limit": 15000 })
+(env-data { "tx-type": "exec", "exec-code": ["(free.test.heavy 1)"] })
+(map (lambda (i:integer)
+       (test-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.GAS_PAYER (format "k:u{}" [i]) 15000 0.000001)))
+  (enumerate 1 100))
+(expect "heavy spent-epoch == its cap"
+  1.5 (at 'spent-epoch (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.get-entry "(free.test.heavy ")))
+(commit-tx)
+
+(begin-tx "heavy: the 101st in the same epoch is refused (per-entry, fail-closed)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-01T06:00:00Z")
+                , "gas-price": 0.000001, "gas-limit": 15000 })
+(env-data { "tx-type": "exec", "exec-code": ["(free.test.heavy 1)"] })
+(expect-failure "entry epoch cap holds" "entry epoch cap reached"
+  (test-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.GAS_PAYER "k:over" 15000 0.000001)))
+(commit-tx)
+
+;; THE ISOLATION PROOF (the answer to the shared-budget objection):
+;; heavy is exhausted, but an unrelated entry still sponsors.
+(begin-tx "isolation: claim-dividends still sponsored while heavy is capped out")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-01T06:10:00Z")
+                , "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "exec"
+          , "exec-code": ["(n_candidate0000000000000000000000000000000000.smartpacts-shares.claim-dividends \"k:alice\")"] })
+(test-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.GAS_PAYER "k:alice" 1500 0.000001))
+(expect "an exhausted entry does not starve the others" true
+  (require-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.ALLOW_GAS)))
+(commit-tx)
+
+;; GLOBAL BACKSTOP: global spent so far this epoch = 1.5 (heavy) + 0.0015
+;; (claim) = 1.5015. heavy2 (cost 0.015): 33 fit (1.9965); the 34th would be
+;; 2.0115 > 2.0 => refused by the GLOBAL cap while heavy2's own cap (1.5) is
+;; nowhere near reached (0.495) — proving the backstop bites.
+(begin-tx "global backstop: 33 heavy2 acquisitions fit under the global cap")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-01T07:00:00Z")
+                , "gas-price": 0.000001, "gas-limit": 15000 })
+(env-data { "tx-type": "exec", "exec-code": ["(free.test.heavy2 1)"] })
+(map (lambda (i:integer)
+       (test-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.GAS_PAYER (format "k:v{}" [i]) 15000 0.000001)))
+  (enumerate 1 33))
+(expect "heavy2 entry far below ITS cap"
+  0.495 (at 'spent-epoch (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.get-entry "(free.test.heavy2 ")))
+(expect "global meter at 1.9965"
+  1.9965 (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.get-epoch-spent))
+(commit-tx)
+
+(begin-tx "global backstop: the 34th heavy2 is refused GLOBALLY")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-01T08:00:00Z")
+                , "gas-price": 0.000001, "gas-limit": 15000 })
+(env-data { "tx-type": "exec", "exec-code": ["(free.test.heavy2 1)"] })
+(expect-failure "global epoch cap holds even when the entry cap does not bite"
+  "global epoch cap reached"
+  (test-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.GAS_PAYER "k:v34" 15000 0.000001)))
+(commit-tx)
+
+(begin-tx "epoch rollover (block-time only) resets both meters; totals accumulate")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-02T00:00:01Z")
+                , "gas-price": 0.000001, "gas-limit": 15000 })
+(env-data { "tx-type": "exec", "exec-code": ["(free.test.heavy 1)"] })
+(test-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.GAS_PAYER "k:next" 15000 0.000001))
+(expect "heavy spent-epoch reset to one tx's cost"
+  0.015 (at 'spent-epoch (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.get-entry "(free.test.heavy ")))
+(expect "heavy spent-total accumulated across epochs"
+  1.515 (at 'spent-total (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.get-entry "(free.test.heavy ")))
+(expect "global meter reset to one tx's cost"
+  0.015 (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.get-epoch-spent))
+(commit-tx)
+
+;; ===========================================================================
+;; GROUP 5b — an entry's epoch rolls on ITS OWN clock, independent of the
+;; global epoch. hourly: epoch-len 3600, cap 0.0015 = exactly ONE tx per hour.
+;; ===========================================================================
+(begin-tx "hourly entry: one tx fits its hour; a second within the hour is refused")
+(env-keys ["admin-key"])
+(n_candidate0000000000000000000000000000000000.smartpacts-gas-station.set-entry
+  "(free.test.hourly " 1500 0.0015 3600 true)
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-02T00:10:00Z")
+                , "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "exec", "exec-code": ["(free.test.hourly 1)"] })
+(test-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.GAS_PAYER "k:h1" 1500 0.000001))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-02T00:20:00Z")
+                , "gas-price": 0.000001, "gas-limit": 1500 })
+(expect-failure "second within the hour refused" "entry epoch cap reached"
+  (test-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.GAS_PAYER "k:h2" 1500 0.000001)))
+(commit-tx)
+
+(begin-tx "the entry rolls after ITS hour; the global 24h meter does NOT reset")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-02T01:10:01Z")
+                , "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "exec", "exec-code": ["(free.test.hourly 2)"] })
+(test-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.GAS_PAYER "k:h3" 1500 0.000001))
+(expect "hourly spent-epoch reset to one tx's cost"
+  0.0015 (at 'spent-epoch (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.get-entry "(free.test.hourly ")))
+(expect "hourly lifetime total accumulated"
+  0.003 (at 'spent-total (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.get-entry "(free.test.hourly ")))
+(expect "global meter accumulated across the entry rollover (no reset)"
+  0.018 (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.get-epoch-spent))
+(commit-tx)
+
+;; ===========================================================================
+;; GROUP 6 — registry capacity bound; updates of existing rows still work when full
+;; 8 rows exist (7 seeds + the hourly-rollover entry; disabled-op re-enabled
+;; is the same row). Fill to MAX-REGISTRY-ROWS (32), then the 33rd INSERT
+;; fails while an UPDATE of an existing row still succeeds.
+;; ===========================================================================
+(begin-tx "fill the registry to 32 rows")
+(env-keys ["admin-key"])
+(map (lambda (i:integer)
+       (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.set-entry
+         (format "(free.filler.f{} " [i]) 1500 0.05 86400 true))
+  (enumerate 1 24))
+(expect "registry at capacity" 32
+  (length (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.list-entries)))
+(expect-failure "33rd insert refused" "registry full"
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.set-entry
+    "(free.filler.f25 " 1500 0.05 86400 true))
+(n_candidate0000000000000000000000000000000000.smartpacts-gas-station.set-entry
+  "(free.test.heavy " 15000 1.0 86400 true)
+(expect "updating an existing row works at capacity (cap now 1.0)"
+  1.0 (at 'epoch-cap (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.get-entry "(free.test.heavy ")))
+(expect "update preserved the row's lifetime meter"
+  1.515 (at 'spent-total (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.get-entry "(free.test.heavy ")))
+(commit-tx)
+
+;; ===========================================================================
+;; GROUP 7 — worst-case sponsored-path gas (32-row registry scan)
+;; The GAS_PAYER acquisition itself consumes tx gas; it must fit comfortably
+;; inside the SMALLEST sensible entry limit (1500) alongside the ~300-gas
+;; sponsored calls.
+;; ===========================================================================
+(env-gasmodel "table") (env-gaslimit 150000)
+(begin-tx "GAS_PAYER acquisition gas at full registry")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-02T01:00:00Z")
+                , "gas-price": 0.000001, "gas-limit": 1500 })
+(env-data { "tx-type": "exec"
+          , "exec-code": ["(n_candidate0000000000000000000000000000000000.smartpacts-shares.claim-dividends \"k:alice\")"] })
+(env-gas 0)
+(test-capability (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.GAS_PAYER "k:alice" 1500 0.000001))
+(print (format "GAS GAS_PAYER acquisition (32-row registry): {}" [(env-gas)]))
+(expect "sponsored-path overhead leaves room in a 1500 entry" true (< (env-gas) 1000))
+(commit-tx)
+
+;; ===========================================================================
+;; GROUP 8 — station account & guard (unchanged across station generations)
+;; ===========================================================================
+(begin-tx "station principal is a user-guard principal bound to this module")
+(expect "GAS_STATION is a u: principal" "u:" (take 2 n_candidate0000000000000000000000000000000000.smartpacts-gas-station.GAS_STATION))
+(expect "station coin account exists (created at init) with 0 balance"
+  0.0 (at 'balance (coin.details n_candidate0000000000000000000000000000000000.smartpacts-gas-station.GAS_STATION)))
+(commit-tx)
+
+(begin-tx "station guard: admin keyset leg passes")
+(env-keys ["admin-key"])
+(env-sigs [{ "key": "admin-key", "caps": [] }])
+(expect "admin can satisfy the station guard" true
+  (enforce-guard (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.create-gas-payer-guard)))
+(commit-tx)
+
+(begin-tx "station guard: stranger with no caps and no admin key fails")
+(env-keys ["attacker-key"])
+(env-sigs [{ "key": "attacker-key", "caps": [] }])
+(expect-failure "stranger cannot satisfy the station guard"
+  (enforce-guard (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.create-gas-payer-guard)))
+(commit-tx)
+
+(begin-tx "init is admin-gated (defense-in-depth): non-admin call refused")
+(env-keys ["attacker-key"])
+(expect-failure "non-admin init refused" "Keyset failure"
+  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.init))
+(commit-tx)
+
+;; ===========================================================================
+;; GROUP 9 — upgrade survival: a same-design redeploy (upgrade:true) must load
+;; clean and PRESERVE registry rows + meters (rows and meters must never be
+;; lost by an upgrade).
+;; ===========================================================================
+(begin-tx "upgrade redeploy (upgrade:true) loads clean; registry + meters survive")
+(env-data
+  { "ns": "n_candidate0000000000000000000000000000000000"
+  , "upgrade": true })
+(env-keys ["admin-key"])
+(load "../contracts/mainnet/smartpacts-gas-station.pact")
+(expect "registry rows survived the redeploy" 32
+  (length (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.list-entries)))
+;; 0.0195 = the rollover heavy acquisition (0.015) + the two hourly
+;; acquisitions (0.003) + the GROUP-7 gas-measure claim acquisition (0.0015),
+;; all in the current global epoch
+(expect "global meter survived the redeploy"
+  0.0195 (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.get-epoch-spent))
+(expect "entry lifetime meter survived the redeploy"
+  1.515 (at 'spent-total (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.get-entry "(free.test.heavy ")))
+(commit-tx)
+
+;; Footer mode 2 (migrate-v1: migrating over a live constant-allowlist
+;; deployment) is ONE-SHOT — re-running it against a deployment that already
+;; carries the registry tables aborts on (create-table registry) "table
+;; already exists", atomically (nothing partial lands). This is NOT pinned as
+;; a REPL expect-failure: a failed (load) is not recoverable inside
+;; expect-failure (it wedges the tx machinery); the property rests on
+;; create-table's existing-table abort — the same primitive GROUP 9 shows the
+;; footer branches around on upgrade:true.
+
+(print "mainnet gas-station suite: PASSED")

@@ -65,9 +65,11 @@ dated in [DEPLOYMENTS.md](DEPLOYMENTS.md).
 
 ## Known limitations (accepted, bounded)
 
-- **Sponsored continuations:** a defpact continuation carries no code to allowlist, so the gas
-  station bounds (rather than eliminates) continuation sponsorship via the per-epoch cap. Worst
-  case: the day's subsidy budget is consumed; voting/claiming continue self-paid.
+- **Sponsored continuations (deployed test-event station only):** a defpact continuation carries
+  no code to allowlist, so the deployed station bounds (rather than eliminates) continuation
+  sponsorship via the per-epoch cap. Worst case: the day's subsidy budget is consumed;
+  voting/claiming continue self-paid. The mainnet release candidate closes this entirely — it
+  refuses continuation sponsorship outright (see [GAS-STATION.md](GAS-STATION.md)).
 - **Cross-chain SPV paths** (transfer step 2, tally reports to the hub) cannot be tested in the
   REPL; they are validated on a multi-chain devnet before deployment.
 - **Testnet admin is a single key.** Acceptable for a valueless test deployment; a mainnet
@@ -78,7 +80,9 @@ dated in [DEPLOYMENTS.md](DEPLOYMENTS.md).
 The contracts went through the project's internal structured security review before deployment:
 fresh-context adversarial review passes over the full sources, a capability-by-capability audit,
 and attack simulation. Findings were fixed before going live, and the regressions for them are
-part of the public test suites in [`tests/`](../tests/).
+part of the public test suites in [`tests/`](../tests/). The release candidate's redesigned gas
+station received its own two-pass fresh-context review, published in
+[`audits/2026-07-gas-station-registry-review.md`](../audits/2026-07-gas-station-registry-review.md).
 
 **No external, third-party audit has been performed yet.** One is planned on the frozen source
 before any mainnet deployment — that ordering (freeze first, then audit exactly what will run

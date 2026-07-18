@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 fail=0
-for t in mainnet-lineage smartpacts-shares smartpacts-shares-init smartpacts-shares-ext smartpacts-dividend-fairness smartpacts-tranches smartpacts-votekey smartpacts-ipo smartpacts-ipo-ext smartpacts-governance smartpacts-gas-station smartpacts-attacks smartpacts-attacks-voting smartpacts-upgrade smartpacts-upgrade-float smartpacts-upgrade-rps-guard; do
+for t in mainnet-lineage mainnet-gas-station smartpacts-shares smartpacts-shares-init smartpacts-shares-ext smartpacts-dividend-fairness smartpacts-tranches smartpacts-votekey smartpacts-ipo smartpacts-ipo-ext smartpacts-governance smartpacts-gas-station smartpacts-attacks smartpacts-attacks-voting smartpacts-upgrade smartpacts-upgrade-float smartpacts-upgrade-rps-guard; do
   printf '== %s ==\n' "$t"
   if pact "$t.repl" >/tmp/spt-$t.log 2>&1; then
     grep -E 'PASSED' "/tmp/spt-$t.log" || echo "  (loaded ok)"

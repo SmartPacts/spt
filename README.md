@@ -43,9 +43,11 @@ supply, reserves, time-locks, the live vote — are in [docs/VERIFICATION.md](do
 | [`docs/HOW-IT-WORKS.md`](docs/HOW-IT-WORKS.md) | The whole system in plain language — every module, account, and mechanism, with the business reasoning |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | The terse engineering summary of the same design |
 | [`docs/SECURITY-MODEL.md`](docs/SECURITY-MODEL.md) | Invariants, threats designed against, operator powers and limits, and the honest review status |
+| [`docs/GAS-STATION.md`](docs/GAS-STATION.md) | The gas station, completely: what it sponsors, its budgets and security model, and how to use and verify it |
 | [`contracts/testnet06/`](contracts/testnet06/) | The three deployed Pact modules (live on testnet06, byte-verifiable) |
 | [`contracts/mainnet/`](contracts/mainnet/) | The mainnet **release candidate** — not deployed, published for review; see [Testnet vs. mainnet](docs/TESTNET-VS-MAINNET.md) |
-| [`tests/`](tests/) | The full regression suite — 11 REPL suites including two red-team suites, runnable offline ([how](tests/README.md)) |
+| [`tests/`](tests/) | The full regression suite — 17 REPL suites including two red-team suites, runnable offline ([how](tests/README.md)) |
+| [`audits/`](audits/) | Security reviews: the external community red-team (88 executed attacks) and the station candidate's two-pass internal review |
 | [`docs/VERIFICATION.md`](docs/VERIFICATION.md) | Every on-chain fact, and how to check it yourself |
 | [`docs/DEPLOYMENTS.md`](docs/DEPLOYMENTS.md) | Dated record of every deployment and upgrade (including the deprecated prior namespace) |
 | [`docs/EVENT-GUIDE.md`](docs/EVENT-GUIDE.md) | The community event, step by step (CLI) |
@@ -59,8 +61,10 @@ supply, reserves, time-locks, the live vote — are in [docs/VERIFICATION.md](do
   (proposals, votes, tallies, on-chain result aggregation).
 - **`smartpacts-ipo`** — the fixed-price initial token sale (chain 0). On testnet: a simulated
   sale at a test price.
-- **`smartpacts-gas-station`** — pays network gas for holders' votes and distribution claims,
-  under hard on-chain limits so the subsidy cannot be drained.
+- **`smartpacts-gas-station`** — pays network gas for approved operations under hard on-chain
+  limits so the subsidy cannot be drained. The deployed test-event version sponsors exactly
+  holders' votes and distribution claims; the release candidate generalizes this into a
+  registry of budgeted operations — see [GAS-STATION.md](docs/GAS-STATION.md).
 
 Two design decisions worth noticing up front: the insider reserves sit on **pre-committed
 on-chain time-locks** — releasable by anyone, only on a schedule frozen in the code, impossible
