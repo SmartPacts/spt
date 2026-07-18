@@ -6,10 +6,12 @@
 ;; results transfer. What this file proves is exactly the DELTA:
 ;;   1. the candidate LOADS (fresh deploy path, all tables);
 ;;   2. the namespace-DERIVED constants resolve correctly at load
-;;      (admin keyset name; the gas station's sponsored-call prefixes);
+;;      (admin keyset names — nothing in any source pins a namespace);
 ;;   3. the core paths run end-to-end on the candidate: init-supply, a
 ;;      transfer, a declared dividend round accruing exactly rate x balance,
-;;      and the derived allowlist matching a real sponsored call string.
+;;      and the gas station's registry sponsoring a real call string after
+;;      one admin registration (full adversarial station suite:
+;;      mainnet-gas-station.repl).
 ;; The test namespace is arbitrary — the point is that NOTHING in the source
 ;; pins it: the same files deploy to any namespace unedited.
 ;; ===========================================================================
@@ -53,22 +55,20 @@
 (expect "NAME constant" "Smart Pacts Token" n_candidate0000000000000000000000000000000000.smartpacts-shares.NAME)
 (expect "SYMBOL constant" "SPT" n_candidate0000000000000000000000000000000000.smartpacts-shares.SYMBOL)
 (expect "decimals via fungible-v2 precision" 12 (n_candidate0000000000000000000000000000000000.smartpacts-shares.precision))
-(expect "station allowlist derived: a real sponsored call matches" true
+;; The station's sponsorship policy is an on-chain REGISTRY — no compiled-in
+;; allowlist exists to derive (see docs/GAS-STATION.md). Prove the delta:
+;; empty at deploy, one admin registration sponsors a real call string, and
+;; the admin gate resolved from the deploy namespace.
+(expect "station registry starts empty on a fresh deploy" 0
+  (length (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.list-entries)))
+(n_candidate0000000000000000000000000000000000.smartpacts-gas-station.set-entry
+  "(n_candidate0000000000000000000000000000000000.smartpacts-shares.claim-dividends " 1500 0.15 86400 true)
+(expect "a registered call is sponsored" true
   (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.allowlisted?
     "(n_candidate0000000000000000000000000000000000.smartpacts-shares.claim-dividends \"k:alice\")"))
-(expect "station allowlist derived: an unsponsored call does not match" false
+(expect "an unregistered call is not sponsored" false
   (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.allowlisted?
     "(n_candidate0000000000000000000000000000000000.smartpacts-shares.transfer \"a\" \"b\" 1.0)"))
-;; gas-ceiling positivity guard (candidate-only; red-team O1; see TESTNET-VS-MAINNET.md #6)
-(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z"), "gas-price": 0.0, "gas-limit": 1500 })
-(expect-failure "gas price of 0 is rejected by the positivity guard" "Gas price must be positive"
-  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.enforce-below-or-at-gas-price 0.000001))
-(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z"), "gas-price": 0.000001, "gas-limit": 0 })
-(expect-failure "gas limit of 0 is rejected by the positivity guard" "Gas limit must be positive"
-  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.enforce-below-or-at-gas-limit 1500))
-(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z"), "gas-price": 0.000001, "gas-limit": 1500 })
-(expect "positive within-ceiling values still pass" true
-  (n_candidate0000000000000000000000000000000000.smartpacts-gas-station.enforce-below-or-at-gas-limit 1500))
 (commit-tx)
 
 ;; --- fresh-deploy init + the dividend core on the candidate ---

@@ -1,8 +1,9 @@
 # Test suites
 
-The full regression suite for the deployed contracts — the same suites the project runs before
-any change ships. Everything runs **offline** against the sources in [`contracts/testnet06/`](../contracts/testnet06/)
-(the deployed modules, verbatim): no network, no keys, no accounts needed.
+The full regression suite for the contracts — the same suites the project runs before any change
+ships. Everything runs **offline**: no network, no keys, no accounts needed. Most suites load the
+deployed sources in [`contracts/testnet06/`](../contracts/testnet06/) (verbatim); the two
+`mainnet-*` suites load the release candidate in [`contracts/mainnet/`](../contracts/mainnet/).
 
 ## Run them
 
@@ -11,7 +12,7 @@ prebuilt releases available).
 
 ```bash
 cd tests
-./run-tests.sh          # all 15 suites
+./run-tests.sh          # all 17 suites
 pact smartpacts-governance.repl   # or any single suite
 ```
 
@@ -36,6 +37,7 @@ Every suite prints `… PASSED` on success; `run-tests.sh` exits non-zero on any
 | `smartpacts-upgrade-float.repl` | Upgrade with real balances present: zeroed counters proven exact, first post-upgrade round accrues exactly rate × balance, pre-funding at zero liability allowed |
 | `smartpacts-upgrade-rps-guard.repl` | The migration's safety precondition: a chain that had funded a round under the old model is refused |
 | `mainnet-lineage.repl` | The mainnet release candidate's delta: fresh deploy into an arbitrary namespace, namespace-derived constants resolve, dividend core exact (see [TESTNET-VS-MAINNET.md](../docs/TESTNET-VS-MAINNET.md)) |
+| `mainnet-gas-station.repl` | The candidate's registry-driven gas station, adversarial (see [GAS-STATION.md](../docs/GAS-STATION.md)): registry admin gate + validation, prefix-boundary spoofs, exec-only + single-call, per-entry ceilings and epoch caps with the isolation proof, global backstop, kill switch, meter protection, upgrade survival, worst-case gas |
 
 The `attacks` suites are the threat model in executable form, and the `dividend-fairness` suite is the test-event finding in executable form: each documented attack is run
 and shown to fail.
