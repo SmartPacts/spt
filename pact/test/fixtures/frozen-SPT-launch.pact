@@ -76,7 +76,7 @@
 
   ;; ---- EVENTS / GOVERNANCE ---------------------------------------------------------------
   ;; PROCEEDS-WITHDRAWN carries a BODY, so a withdrawal record cannot be fabricated: on a
-  ;; a sale of this kind, an empty body would make a fake one free to anyone.
+  ;; sale of this kind, an empty body would make a fake one free to anyone.
   ;;
   ;; TOKENS-PURCHASED is deliberately weak, and therefore forgeable. `buy` is PERMISSIONLESS,
   ;; so no holder exists to require, and requiring the token TRANSFER cap instead would lock
