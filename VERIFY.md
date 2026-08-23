@@ -111,7 +111,7 @@ diff -u /tmp/repo-SPT.pact /tmp/onchain-SPT.pact && echo "the chain is running t
 `describe-module` gives back the module form alone, so a diff against the entire payload reports
 the preamble as a difference every time and can never come out clean.
 
-If step 2 prints no differences, the deployed program is the one in this repository. That is the
+If step 3 prints no differences, the deployed program is the one in this repository. That is the
 claim that matters, and it does not depend on hashes agreeing across environments.
 
 **If they DISAGREE: trust the chain, not this repository.** The chain is what executes and what

@@ -308,8 +308,8 @@ operation — it is refused. That is deliberate: a blanket approval is exactly t
 not carry a limit. The operator runbook covers how this is signed; nothing else changed.
 
 `TRANSFER` is a holder's permission, not an administrator's; what it does and does not protect a holder
-from on today's engine is covered under *Holding and moving tokens*, and that caveat is a platform
-fix we are waiting on, not ours.
+from on today's engine is covered under *Holding and moving tokens*, and that caveat rests on a platform
+fix, not on ours — and that fix went live on mainnet in August 2026.
 
 ---
 
