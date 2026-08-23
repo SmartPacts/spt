@@ -231,4 +231,4 @@
   (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "alice"))
 (commit-tx)
 
-(print "a probe kept out of this repo PASSED (both properties remediated)")
+(print "award-safety PASSED (account validation, try-on-missing-row, and rate refusal)")

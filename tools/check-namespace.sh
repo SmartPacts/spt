@@ -123,13 +123,11 @@ done <<< "$matches"
 # 🔴 ALL SEVEN ARE PATCHED BY F2 TOGETHER. Splitting the keyset doubled the F2 surface; a
 # patch that updates the defconsts and forgets the footer's name pins now produces a module
 # whose gate points at a keyset the deploy transaction never defined.
-EXPECTED_MANIFEST='a separate gas-sponsorship module.pact m 0
-a separate gas-sponsorship module.pact plain 0
-SPT-launch.pact m 0
+EXPECTED_MANIFEST='SPT-launch.pact m 0
 SPT-launch.pact plain 2
 SPT.pact m 1
 SPT.pact plain 4'
-# 🔴 THE TERMINATOR CLASS CARRIES `.` AND `"` (delta an internal review verification, newly found).
+# 🔴 THE TERMINATOR CLASS CARRIES `.` AND `"` (found during review).
 # It was `[-a-z:]`, which cannot match a literal that ENDS at the module name — a bare
 # `"<ns>.SPT"` — so an eighth literal of that shape would be invisible and this count would
 # happily stay at 7. MEASURED: the old class saw 7 and missed the injected bare form; the wider
