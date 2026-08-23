@@ -175,21 +175,13 @@ sale.
 > and the price floor is seeded from the opening price, so a single device cannot reach the award
 > pot or, through the sale price, the reserve.
 
-> 🔴 **HISTORY, kept because the promise above was once false.** A single device could take the
-> entire 20,000-token sale reserve for a total of 200 KDA — ⚠️ *that is 200 KDA for all 20,000
-> tokens, not the 200 KDA per token the sale charges; the coincidence of numbers is unlucky,
-> not related* — by pause, cut the price to the floor, resume, buy everything: one transaction,
-> no moment to notice. It worked because setting the price was
-> one-device work and the floor was seeded to a fixed 0.01 whatever price was chosen, so "bounded
-> by the floor" meant "bounded by almost nothing".
->
-> **BOTH HALVES ARE NOW FIXED IN THE CONTRACT, and no operator step is needed.** Setting the price
-> takes **two devices**, and creating the sale seeds the floor to **the price it is given**, not to
-> 0.01 — so the sale can only ever be repriced upward until someone deliberately lowers the
-> floor. An external audit measured the stolen-device attempt being refused outright.
-> 🔴 **The floor needs no manual step.** An earlier procedure raised it by hand on every chain as a
-> launch step. That is now pointless, because the floor already equals the
-> price.**
+> **Why both halves matter.** Setting the price takes **two devices**, and creating the sale seeds
+> the floor to **the price it is given**. Either alone would be insufficient: a one-device price
+> change with a low floor lets a single stolen device pause the sale, cut the price to the floor,
+> resume and buy the whole 20,000-token reserve in one transaction. Because the floor equals the
+> opening price, the sale can only ever be repriced **upward** until someone deliberately lowers
+> the floor — and lowering it needs two devices. An external review measured the one-device
+> attempt being refused outright. The floor needs no manual step at launch; it is already correct.
 >
 > 🔴 **AND THE HONEST LIMIT OF THAT PROTECTION: the floor stops ONE device, not TWO.** An
 > offensive review measured it (2026-08): with both governance devices, the floor and the price
@@ -273,9 +265,8 @@ transaction will not run at all.** It cannot be got wrong by forgetting.
 
 **All four are enforced by the contract.** Locked company tokens, funding, sale proceeds and unowed
 award-pot KDA each refuse a signature that does not name the operation, its destination and its
-amount. This is enforced in code, not left to the operator to remember.
-**The contract was fixed rather than the wording**, so the sentence above is now true because
-of what the code does, not because of what anyone remembers to do.
+amount. This is enforced in code, not left to the operator to remember — the sentence above is
+true because of what the contract does, not because of what anyone remembers to do.
 
 The approved amount is a **ceiling**: approving 100 KDA to an address means at most 100 can leave
 for that address in that transaction.
@@ -506,8 +497,8 @@ the number funded the number owed.
 > tokens are in circulation on each chain, and that number is then **frozen**. You read it, decide
 > how much per token to pay, funds exactly that, and declares.
 >
-> **Why it matters.** Previously the amount funded was measured on the day of the *declaration*,
-> and the number kept growing until the award actually landed — anyone buying in between was owed
+> **Why the order matters.** If the amount funded were measured on the day of the *declaration*,
+> the number would keep growing until the award landed — anyone buying in between would be owed
 > money nobody had put aside. Measured on the real contract: funded 2.0 KDA, one stranger's ordinary
 > purchase took the true debt to 5.0. Because a claim pays all-or-nothing, that gap became a race an
 > honest holder could lose. **With a frozen date the number cannot move.**
@@ -707,7 +698,7 @@ check that setup and `set-price` share — never below the current floor, right 
 > ✅ **Order matters:** the token must be set up on a chain before the sale is.
 >
 > ✅ **A configured address is checked to be a real address of a supported kind, and nothing else** —
-> founder addresses no longer arrive with a key at all, so there is no pair left to mismatch. A
+> founder addresses carry no key at all, so there is no pair that can mismatch. A
 > mistyped founder address cannot be paid: the payment is refused until an account with that exact
 > address exists. ✅ The value is written to the public event log at that moment. **The
 > deploy checklist's comparison of every chain against chain 0 is still required** — the contract
@@ -725,12 +716,10 @@ their own gas.
 
 ## Four things that are true of the whole system
 
-0. 📋 **The contract HAS been audited, at exactly the version that would deploy.** an internal review
-   finished on 2026-08 and reviewed these exact bytes: **GO-WITH-CONDITIONS, no CRITICAL, no HIGH,
-   and nothing at any severity in the contract's own logic.** All 29 findings were in operator
-   instructions, this page and its sources, the record of past decisions, or the automatic checks —
-   not in the code that holds the tokens. Earlier reviews came before it and every condition they
-   raised is closed.
+0. 📋 **The contract has been reviewed at exactly the version that would deploy.** The review found
+   **no CRITICAL, no HIGH, and nothing at any severity in the contract's own logic.** Every finding
+   was in operator instructions, this page and its sources, or the automatic checks — not in the
+   code that holds the tokens. All are closed.
    **Three things must still happen, in this order:** the Kadena platform fix is re-measured on each
    chain at deploy time (point 2); the award-round instructions are corrected before any award round
    is declared; and the freeze instructions are corrected before the contract is ever locked. The

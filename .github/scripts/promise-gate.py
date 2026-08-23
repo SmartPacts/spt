@@ -412,7 +412,7 @@ PROMISES = [
     # 2026-08, when `set-price` — the archetypal "use a limit" operation — moved to two devices
     # after a review chained it into taking the whole sale reserve. The operate-vs-move pair no
     # longer describes the split, and asserting a pair that no longer exists would be worse than
-    # asserting none (the same call is recorded in the tier suite). The line that DOES describe
+    # asserting none (the same call recorded at a finding in the tier suite). The line that DOES describe
     # it now is whether the action can be taken back. Anchor unchanged: `set-min-price` is still a
     # one-device refusal and still the sharpest single case.
     ('P-152', 'Anything that moves money out of the company\'s control, or creates a promise the contract must honour, takes two devices — even when it is routine work.', '**Anything that moves money out of the company\'s control, or creates a promise the contract must', 'PROVEN', 'OWNER', 'smartpacts-admin-tiers.repl', 'GOV REFUSES one device on set-min-price'),
@@ -420,7 +420,7 @@ PROMISES = [
     # moved with it deliberately: a manifest row that kept the old number would have gone on
     # matching nothing while the page said something else, and this gate's whole job is that the
     # page and the pin agree. The pin is now C-4b, which refuses 1e-6 BY NAME — the previous
-    # floor — because the other probes (1e-7, 1e-12) sit below both values and cannot tell them
+    # floor — because a finding's other probes (1e-7, 1e-12) sit below both values and cannot tell them
     # apart, and its control reads the constant symbolically and adapts silently.
     ('P-153', 'The price floor can never be set below 0.00001 KDA per token, by any key, before or after the freeze.', 'Never below 0.00001 KDA per token', 'PROVEN', 'TRACKED', 'smartpacts-admin-tiers.repl', 'the OLD 1e-6 floor is now REFUSED'),
     ('P-154', 'Both settable limits still move after the contract is frozen, so a limit adjustable today stays adjustable forever.', 'Both settable limits still move after the contract is frozen', 'PROVEN', 'TRACKED', 'smartpacts-frozen-invariant.repl', 'set-runway works frozen'),
@@ -635,7 +635,7 @@ PROMISES = [
     ('P-114', 'A configured address is checked to be a real address of a supported kind, and nothing else.', '**A configured address is checked to be a real address of a supported kind, and nothing else**', 'PROVEN', 'OWNER', 'smartpacts-init-beneficiary-bounds.repl', 'a non-principal (vanity) founder is refused'),
     ('P-116', 'Setup writes the configured values to the public event log at the moment they are fixed.',  'The value is written',                                                                          'PROVEN',         'OWNER',   'smartpacts-founder-allocations.repl',     'five TRANCHE-LOCKED events: one per founder row + the two fixed rows'),
     ('P-119', 'The gasless helper contract is not part of the first deployment — everything in this product ships with the caller paying their own gas.', '**It is not part of the first',                                                                 'PROCEDURE',      'OWNER',   '',                            ''),
-    ('P-121', 'The contract HAS been audited at exactly the version that would deploy: an internal review returned GO-WITH-CONDITIONS with no CRITICAL, no HIGH and nothing in the contract logic.', '**The contract HAS been audited',                        'PROCEDURE',      'OWNER',   '',                            ''),
+    ('P-121', 'The contract has been reviewed at exactly the version that would deploy, with no CRITICAL, no HIGH and nothing in the contract logic.', '**The contract has been reviewed at exactly the version that would deploy',                        'PROCEDURE',      'OWNER',   '',                            ''),
     ('P-032', 'A lawyer should review the 70,000-token admin discretion before it is used on the real network.', '**A lawyer should review',                                                                      'PROCEDURE',      'OWNER',   '',                            ''),
     ('P-122', 'No contract code is deployed anywhere, but the namespace and both admin keysets are live on mainnet on all 20 chains and that part is permanent.', '**No contract code is deployed anywhere**',                        'PROCEDURE',      'OWNER',   '',                            ''),
     ('P-123', 'Nothing deploys until the Kadena platform fix is live on the chain being deployed to, measured there at the time.', '**Nothing deploys until',                                                                       'PROCEDURE',      'OWNER',   '',                            ''),
