@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Maintained @kadena/client QA harness for smart-pacts-token \u2014 ADR-006 chain-local governance validation against the dedicated clean test devnet (:8090). Legacy pre-ADR-004 suites removed (git history has them).",
+  "description": "Devnet driver harness for the SPT contracts \u2014 runs the cross-chain proof against a node.",
   "scripts": {
     "accounts": "tsx src/accounts.ts",
     "bless-drill": "tsx src/bless-drill.ts",

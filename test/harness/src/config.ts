@@ -22,24 +22,22 @@ export const client = createClient(
     `${DEVNET_HOST}/chainweb/0.0/${networkId}/chain/${chainId}/pact`,
 );
 
+// 🔴 NO KEYPAIRS LIVE IN THIS FILE. The well-known devnet funding and miner accounts were removed
+// for publication: a 64-hex secret in a public repository is worth removing even when it is a
+// throwaway everyone already has. Drivers take their keys from the environment — see
+// SPT_XC_KEYFILE in spt-xchain-devnet.ts — and never from the repository.
 export type Keypair = { account: string; publicKey: string; secretKey: string };
+
+// A read-only `/local` call is never signed and never charged, so it needs a sender NAME only.
+// This is a label, not an account anyone holds.
+const LOCAL_SENDER = process.env.SPT_LOCAL_SENDER ?? 'sender00';
 
 // Sole faucet — devnet genesis account, funded 100M KDA on every chain.
 // Keypair matches the devnet genesis keys.yaml (kda-community/chainweb-node);
 // verified: this secret derives to the on-chain guard pubkey 368820f8….
-export const SENDER00: Keypair = {
-  account: 'sender00',
-  publicKey: '368820f80c324bbc7c2b0610688a7da43e39f91d118732671cd9c7500ff43cca',
-  secretKey: '251a920c403ae8c8f65f59142316af3c82b631fba46ddea92ee8c95035bd2898',
-};
 
 // Test-devnet miner (block rewards accrue to k:<pub>). Used only as a neutral
 // gas-payer "bot" for permissionless-claim proofs (key ≠ any holder's key).
-export const MINER: Keypair = {
-  account: 'k:f89ef46927f506c70b6a58fd322450a936311dc6ac91f4ec3d8ef949608dbf1f',
-  publicKey: 'f89ef46927f506c70b6a58fd322450a936311dc6ac91f4ec3d8ef949608dbf1f',
-  secretKey: 'da81490c7efd5a95398a3846fa57fd17339bdf1b941d102f2d3217ad29785ff0',
-};
 
 export const signerFor = (kp: Keypair) =>
   createSignWithKeypair({ publicKey: kp.publicKey, secretKey: kp.secretKey });
@@ -86,7 +84,7 @@ export async function localCall(code: string, chainId: string, data?: Record<str
   let b = Pact.builder.execution(code);
   for (const [k, v] of Object.entries(data ?? {})) b = b.addData(k, v);
   const tx: IUnsignedCommand = b
-    .setMeta({ chainId: chainId as ChainId, senderAccount: SENDER00.account, gasLimit: GAS_LIMIT, gasPrice: GAS_PRICE })
+    .setMeta({ chainId: chainId as ChainId, senderAccount: LOCAL_SENDER, gasLimit: GAS_LIMIT, gasPrice: GAS_PRICE })
     .setNetworkId(NETWORK_ID)
     .createTransaction();
   const r = await client.local(tx, { preflight: false, signatureVerification: false });
@@ -234,8 +232,8 @@ export { Pact, type ChainId, type ICommandResult };
 // installed on this chain". Measured 2026-08-21: it cost a full devnet rebuild and an hour of
 // re-warming, because the error sent the diagnosis in the wrong direction.
 //
-// Same shape as an internal review's C-2: a correct payload sent to a chain in an UNEXPECTED STATE,
-// with an error that misdirects. C-2's answer was to refuse at the door, and so is this.
+// A correct payload sent to a chain in an UNEXPECTED STATE,
+// with an error that misdirects. The answer is to refuse at the door.
 //
 // Correct order is real-build drivers first, scaled-build drivers after, freeze last.
 export async function assertProductionBuild(module: string, chainId: string): Promise<void> {
