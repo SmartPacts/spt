@@ -55,7 +55,7 @@ with KDA).
 **What SPT cannot do**
 
 - 🟡 **Mint more than 100,000 tokens**, or burn any. The Kadena platform fix this depended on
-  **went live on mainnet on 2026-08** — so this is now true on the network SPT deploys to.
+  **went live on mainnet in August 2026** — so this is now true on the network SPT deploys to.
   The rule that produced it does not go away: the fix is re-measured on the target chain at
   deploy time, in the same session, never assumed from this page.
 - 📋 **Decide a vote.** Each chain counts its own votes; the winner is added up outside the contract.
@@ -73,7 +73,7 @@ with KDA).
 
 | Tokens | Who | When they unlock |
 |---|---|---|
-| **20,000** (20%) | For sale to the public | No unlock schedule — but **the sale ships CLOSED and only the administrator can open it.** Nobody can buy until you do |
+| **20,000** (20%) | For sale to the public | No unlock schedule — but **the sale ships CLOSED and only the administrator can open it.** Nobody can buy until they do |
 | **10,000** (10%) | The founders — **one to any number of them**, each a plain address with its own amount, all fixed at setup and summing to exactly 10,000 (the contract refuses any other total) | Nothing for 1 year, then a little each day until year 4 — the same calendar for every founder |
 | **55,000** (55%) | Treasury | Nothing for 1 year, then a little each day until year 5 |
 | **15,000** (15%) | Market making / liquidity | Nothing for 3 months, then a little each day until year 2 |
@@ -93,10 +93,10 @@ and the payment goes through. Nothing is lost and there is no deadline — the f
 year away.
 
 🔴 **The address is still final.** A founder allocation is sent to the address given at setup; it is fixed at
-setup and can never be changed, and if the recipient cannot control that address nobody can recover the
+setup and can never be changed, and if the recipient cannot control that address nobody can recover
 the tokens. How the address is made — one key, several keys, whatever the wallet does — is
-yours to decide and yours to get right. A multi-signature founder can spend the tokens it
-receives, not merely hold them — proven with a real 2-of-3 account, because "it arrived" and
+yours to decide and yours to get right. A multi-signature founder can spend the tokens they
+receive, not merely hold them — proven with a real 2-of-3 account, because "it arrived" and
 "the holder can move it" are different claims and only the second one matters.
 
 > 🔴 **Founder tokens and company tokens behave differently.**
@@ -184,7 +184,7 @@ sale.
 > attempt being refused outright. The floor needs no manual step at launch; it is already correct.
 >
 > 🔴 **AND THE HONEST LIMIT OF THAT PROTECTION: the floor stops ONE device, not TWO.** An
-> offensive review measured it (2026-08): with both governance devices, the floor and the price
+> offensive review measured it (August 2026): with both governance devices, the floor and the price
 > can each be lowered to the hard minimum and the whole 20,000-token reserve sells for **0.2 KDA**.
 > That is not a hole — pricing the sale is exactly what two devices are *for*, and the hard minimum
 > is a **fat-finger guard, not a value guarantee**. But it means the floor is protection against a
@@ -193,7 +193,7 @@ sale.
 > keeping the two devices apart.
 
 ✅ **Whichever device can create one of those delays can also clear it, alone.** No second device is
-second device to undo anything in the (1 key) list.
+needed to undo anything in the (1 key) list.
 
 🔴 **Two things to know that the code cannot fix.**
 
@@ -219,10 +219,10 @@ three rows are **holder-side**: they never appear on an administrator's devices,
 | `ADMIN-OPS` | Any of the **(1 key)** operations above | the administrator, one device |
 | `FUND-AWARDS` | Putting KDA **into** the award pot — money in, never out | the administrator, two devices |
 | `GOVERNANCE` | Publishing a new version of the contract, or locking it forever | the administrator, two devices |
-| `DISBURSE` | Sending locked company tokens from a **named** tranche to a **named** destination, up to a **stated amount** which is a real spending limit — and nothing else | you, two devices, **scoped** |
-| `WITHDRAW-FUNDING` | Sending a **stated amount** of company funding to a **named** destination — and nothing else | you, two devices — **you must scope it yourself** |
-| `WITHDRAW-PROCEEDS` | Sending a **stated amount** of token-sale proceeds to a **named** destination — and nothing else | you, two devices — **you must scope it yourself** |
-| `RECOVER-SURPLUS` | Taking back a **stated amount** of award-pot KDA that is owed to nobody — and nothing else | you, two devices — **you must scope it yourself** |
+| `DISBURSE` | Sending locked company tokens from a **named** tranche to a **named** destination, up to a **stated amount** which is a real spending limit — and nothing else | the administrator, two devices, **scoped** |
+| `WITHDRAW-FUNDING` | Sending a **stated amount** of company funding to a **named** destination — and nothing else | the administrator, two devices — **they must scope it themselves** |
+| `WITHDRAW-PROCEEDS` | Sending a **stated amount** of token-sale proceeds to a **named** destination — and nothing else | the administrator, two devices — **they must scope it themselves** |
+| `RECOVER-SURPLUS` | Taking back a **stated amount** of award-pot KDA that is owed to nobody — and nothing else | the administrator, two devices — **they must scope it themselves** |
 | `TRANSFER` | Moving a stated number of tokens from one account to another | any holder |
 | `TRANSFER_XCHAIN` | The same, but to another chain | any holder |
 | `VOTE` | Casting or changing a vote — and nothing else. Satisfied by the account's own key, or by a registered voting key | any holder, **scopable** |
@@ -294,7 +294,7 @@ running total. Nothing about who may approve changed — it is still the adminis
 means. Each signed approval limits **that one transaction**. If a second approval is signed for
 the same tranche and destination later, that second one starts from its own fresh number.
 
-Measured on a real test network on 2026-08, not argued: the same approval naming 100 tokens was
+Measured on a real test network in August 2026, not argued: the same approval naming 100 tokens was
 submitted twice as two separate transactions, and each time the contract reported the same figure
 remaining — `of 100.0 managed`. A lifetime cap would have reported less the second time.
 
@@ -307,7 +307,7 @@ attached.** A blanket approval that just says "I am the admin" no longer works f
 operation — it is refused. That is deliberate: a blanket approval is exactly the thing that could
 not carry a limit. The operator runbook covers how this is signed; nothing else changed.
 
-`TRANSFER` is a holder's permission rather than yours; what it does and does not protect a holder
+`TRANSFER` is a holder's permission, not an administrator's; what it does and does not protect a holder
 from on today's engine is covered under *Holding and moving tokens*, and that caveat is a platform
 fix we are waiting on, not ours.
 
@@ -331,8 +331,8 @@ fix we are waiting on, not ours.
 | 🟢 `get-launch-reserve` | — | The sale reserve's account name. Fixed in the contract itself, so it is the same on every chain and cannot be entered wrong at setup. |
 | 🟢 `precision` | — | How many decimal places a token amount can have: 12. |
 
-> 🔴 **SUPPLY: this section described a live platform weakness. IT WAS FIXED ON MAINNET ON
-> 2026-08, and the two "cannot"s above are now true on the network SPT deploys to.**
+> 🔴 **SUPPLY: this section described a live platform weakness. IT WAS FIXED ON MAINNET IN
+> AUGUST 2026, and the two "cannot"s above are now true on the network SPT deploys to.**
 >
 > There was a bug in the Pact engine itself — not in our contract — that let *another* contract
 > reach into ours. While it was live that meant **tokens could be created from nothing** (our own
@@ -342,7 +342,7 @@ fix we are waiting on, not ours.
 > was untouched.
 >
 > It was fixed in Pact 5.4.1 / chainweb-node 3.2 and switched on at the `Chainweb32` fork.
-> **Measured on mainnet on 2026-08: fork number 1, read from the chain-0 tip's own feature flags
+> **Measured on mainnet in August 2026: fork number 1, read from the chain-0 tip's own feature flags
 > rather than taken from a dashboard.** Before that day this was known, deliberately accepted, and
 > **measured by tests that assert the broken behaviour on purpose** so we would find out the moment
 > it changed.
@@ -387,7 +387,7 @@ fix we are waiting on, not ours.
 > 🔴 **This risk is accepted deliberately.** SPT behaves exactly like Kadena's own KDA contract,
 > which carries the same exposure: *"if the coin contract can accept the risk of burn
 > coins for using a none principal guard on the other end chain, we can do it as well."* **That
-> parity is real and was re-measured on 2026-08: KDA's own contract can be blocked in exactly
+> parity is real and was re-measured in August 2026: KDA's own contract can be blocked in exactly
 > this way, by the same unsigned stranger, after the sender has already been debited.** The
 > trade was a narrow protection against schedule, and against locking nickname-account holders out
 > of receiving cross-chain at all. **The consequence is that this warning, not the code, is now
@@ -446,11 +446,11 @@ fix we are waiting on, not ours.
 > for the award being announced?*
 >
 > **What the administrator does instead:** asks `funding-needed` what this chain needs, sends exactly that, and
-> declare.
+> declares.
 > ✅ **A mistyped rate is refused outright, because the money for it is not there.**
 > That is better than a ceiling was: a ceiling still let a
 > wrong-but-under-the-cap rate through, and only limited how bad it got. This refuses the mistake
-> at the moment you make it.
+> at the moment the administrator makes it.
 >
 > 🔴 **The one mistake this does NOT catch, stated plainly because it is now the only one:** a
 > wrong rate that the pool *already covers* — funded generously, then announced a rate lower
@@ -465,23 +465,23 @@ fix we are waiting on, not ours.
 > ✅ **The notice period can be made LONGER, and can never be made shorter than 12 hours.**
 > The notice period is a setting rather than a fixed number, and the window to change course
 > is always that notice **minus 6 hours** — a notice of two days gives 42 hours, not
-> 48. Lengthening it always makes you safer. **Shortening
+> 48. Lengthening it is always safer. **Shortening
 > it stops at 12 hours and no key of any kind can go below that**, before or after the contract
 > is locked. Changing it needs **two devices**; using it needs one.
 >
 > Both settable limits still move after the contract is frozen — locking the contract freezes the
-> code, not the numbers you are allowed to choose, so a limit that is adjustable today stays
+> code, not the numbers the administrator is allowed to choose, so a limit that is adjustable today stays
 > adjustable forever, within its floor. The same is true of the sale's price floor.
 >
-> 🔴 **It is set per chain, like everything else about a round.** If you lengthen the window,
-> do it on all 20 — a chain still on the old window will accept an announcement the others
-> refuse, and nothing on the blockchain will tell you.
+> 🔴 **It is set per chain, like everything else about a round.** If the administrator lengthens the window,
+> they must do it on all 20 — a chain still on the old window will accept an announcement the others
+> refuse, and nothing on the blockchain will tell the administrator.
 >
 > **There is no maximum date.** An award has to be at least 12 hours out, and nothing caps how far
 > ahead it can be set. A date typed too far ahead jams the administrator's own schedule until it is
 > retracted; it cannot cost a holder anything they are owed.
 
-**Set the date first, then fund, then declare.** This is the the design record order, and it is what makes
+**Set the date first, then fund, then declare.** This is the required order, and it is what makes
 the number funded the number owed.
 
 > ### 🔴 The record date — the part that changed
@@ -494,7 +494,7 @@ the number funded the number owed.
 > ✅ **Anyone can take the count once the date has passed**, so a quiet chain still gets counted.
 >
 > **The administrator announces a DATE before announcing a rate.** On that date the contract writes down how many
-> tokens are in circulation on each chain, and that number is then **frozen**. You read it, decide
+> tokens are in circulation on each chain, and that number is then **frozen**. The administrator reads it, decides
 > how much per token to pay, funds exactly that, and declares.
 >
 > **Why the order matters.** If the amount funded were measured on the day of the *declaration*,
@@ -506,7 +506,7 @@ the number funded the number owed.
 > ✅ **Someone who buys after the date is simply not in that round.** They are not short-changed;
 > that round was never about them. They are in the next one.
 >
-> ✅ **A wrong date is fixable.** You can cancel it up to 6 hours before it lands. A wrong *rate* is
+> ✅ **A wrong date is fixable.** The administrator can cancel it up to 6 hours before it lands. A wrong *rate* is
 > fixable too — retract it and declare the corrected rate **on the same date**, without re-running
 > anything.
 >
@@ -550,16 +550,18 @@ the number funded the number owed.
 > different schedules — the ordinary case — one may already be collecting votes while another is
 > still in its withdrawal window. So the administrator could read the first and then withdraw the second. The
 > contract does not stop that, and **it was decided not to make it stop that**: the administrator controls what gets
-> announced at all, so you could get the same information by simply not announcing the second
+> announced at all, so they could get the same information by simply not announcing the second
 > proposal — and blocking withdrawal whenever anything else is being voted on would take away the
 > only way to fix a proposal sent out by mistake, inside the 48-hour window that exists for it.
 >
-> 🔴 **The cost of that decision, stated plainly because it lands on holders and not on you:** once
+> 🔴 **The cost of that decision, stated plainly because it lands on holders and not on the administrator:** once
 > a vote is announced, people may buy tokens or organise around it. Withdrawing it afterwards wastes
 > that effort; never announcing it wastes nothing. **That is a real harm and it is not fixed** — it
 > is the one thing a code change would have addressed, and the remedy for administrator mistakes was chosen
 > over it. If the administrator withdraws an announced proposal, the reason is stated publicly.
 
+| | What you give it | What it does |
+|---|---|---|
 | 🔴 `set-runway` **(2 keys)** | A number of seconds | Changes how much notice an award or record date must give. **Never below 12 hours**, whatever key is used and whether or not the contract is locked. Longer is always safer. **Set it on all 20 chains.** |
 | 🟢 `get-runway` | — | The notice period currently in force on this chain. It is read back after any change — this is how you confirm all 20 chains agree. |
 | 🔴 `retract-round` **(1 key)** | The round id | ✅ Cancels the newest round — **only up to 6 hours before it takes effect**, not right up to the moment. |
@@ -571,7 +573,7 @@ the number funded the number owed.
 | 🟢 `award-liability` | — | ✅ What this chain owes its holders in KDA **right now**. |
 | 🟢 `get-rpt` · `max-rpt` | — | The award rate per token accumulated so far · what that rate will be once every **declared** round — including future-dated ones — has taken effect. |
 | 🟢 `outstanding-rate` · `get-round-count` | — | Rounds already in effect but not yet folded into the running rate by `apply-round` · how many rounds have been declared on this chain. |
-| 🔴 `recover-pool-surplus` **(2 keys)** | An amount | Takes back pool KDA owed to nobody. 📋 **Only run this after a round is declared** — before that, money you just deposited counts as surplus. |
+| 🔴 `recover-pool-surplus` **(2 keys)** | An amount | Takes back pool KDA owed to nobody. 📋 **Only run this after a round is declared** — before that, money just deposited counts as surplus. |
 
 > 🟡 **Awards accumulate and never expire.** ✅ Reserve accounts always read zero.
 >
@@ -595,7 +597,7 @@ the number funded the number owed.
 | | What you give it | What it does |
 |---|---|---|
 | 🟢 `release-tranche` | `founder:` plus that founder's address (one entry per founder) | Pays a founder whatever has vested. Anyone can trigger it; the tokens only ever go to that founder's address. |
-| 🔴 `disburse-tranche` **(2 keys)** | `treasury` or `liquidity`, a destination account, and an amount | ✅ **The administrator sends treasury or market-making tokens to an account you choose.** Refused unless the amount is already vested and not yet sent. The destination must already exist as an SPT account, and cannot be one of the contract's own accounts — including the sale's. |
+| 🔴 `disburse-tranche` **(2 keys)** | `treasury` or `liquidity`, a destination account, and an amount | ✅ **The administrator sends treasury or market-making tokens to an account they choose.** Refused unless the amount is already vested and not yet sent. The destination must already exist as an SPT account, and cannot be one of the contract's own accounts — including the sale's. |
 | 🟢 `tranche-available` | `treasury` or `liquidity` | **How much can be sent right now.** |
 | 🟢 `tranche-releasable` · `get-tranche` | Which tranche | How much is payable now · the full terms. |
 | 🟢 `tranche-vested` | A total, its two dates, and a time | The vesting curve itself, as pure math: zero before the cliff, then a straight line, then exactly the total. 🟡 Every release, payment and availability read uses this one formula. |
@@ -642,7 +644,7 @@ are listed so this page accounts for every function in the contract, with nothin
 | `results-of` | Packs a yes/no pair into the shape the vote reads return. |
 | `vkey` · `pkey` · `rkey` | How the contract builds its internal record keys — votes · open-proposal slots · award rounds. |
 | `TRANSFER-mgr` · `TRANSFER_XCHAIN-mgr` | Bookkeeping for signed transfer approvals. ⚠️ Until the Kadena platform fix is live on the target network, this bookkeeping is **not** a spending cap — never tell a holder it limits their exposure (see the platform note at the bottom). |
-| `DISBURSE-mgr` | Keeps the running total for a company-token disbursement approval, so the number approved is the most that can leave — across every payment in that transaction, not just the first. This is what makes the amount on your device a **limit**. ⚠️ Unlike the two above, this one is **not** waiting on the platform fix: it protects the company against its own mistake, not a holder against a hostile counterparty, so it works today. |
+| `DISBURSE-mgr` | Keeps the running total for a company-token disbursement approval, so the number approved is the most that can leave — across every payment in that transaction, not just the first. This is what makes the amount on the administrator's device a **limit**. ⚠️ Unlike the two above, this one is **not** waiting on the platform fix: it protects the company against its own mistake, not a holder against a hostile counterparty, so it works today. |
 | `WITHDRAW-FUNDING-mgr` | The same running total, for company funding. The approved amount for a destination is the most that can go there in that transaction. Unlike locked tokens, this one takes **a single payment per destination per transaction**. |
 | `RECOVER-SURPLUS-mgr` | The same running total, for taking back award-pot KDA that is owed to nobody. There is no destination to approve because that money can only return to the funding account. |
 | `WITHDRAW-PROCEEDS-mgr` | The same running total, for token-sale proceeds. |
@@ -650,7 +652,6 @@ are listed so this page accounts for every function in the contract, with nothin
 | `ensure-coin-account` | Opens the company's KDA accounts at setup if they are missing — and tolerates ones someone pre-created, so a squatter cannot break setup. |
 | `enforce-not-initialized` | The one-shot lock: setup refuses to ever run twice. |
 | `enforce-launch-reserve` | Refuses any sale-reserve identity except the exact one written into the code, with a matching key. |
-| `enforce-beneficiary` | The identity checks each founder row passes at setup: a well-formed address with a matching key, no empty or exotic keysets. |
 
 ---
 
@@ -663,8 +664,8 @@ with a cross-chain transfer afterwards. 📋 Tokens, voting and awards work on a
 |---|---|---|
 | 🔵 `buy` | 🟡 Your account, your key, how many tokens | Pays KDA, receives tokens at the current price. The sale's own accounts are refused as buyers. |
 | 🟢 `get-price` · `is-active` | — | The price per token · whether the sale is open. |
-| 🔴 `set-price` **(2 keys)** | A new price | 🟡 Changes the price — **refused while the sale is open**, and **never below the floor**, which now starts equal to the price the sale opened at rather than a fixed 0.01. There is no upper limit: a price set too high simply makes no sales, and you fix it yourself by pausing, re-pricing and reopening. |
-| 🔴 `set-min-price` **(2 keys)** | A new floor | Changes the lowest price the sale will ever accept. **Never below 0.00001 KDA per token**, whatever key is used and whether or not the contract is locked, and **refused while the sale is open**. This exists so a mistyped price cannot hand someone the whole reserve — measured, a price of 0.000000000001 bought all 20,000 tokens for 0.00000002 KDA. At the floor itself the whole reserve would still cost only 0.2 KDA, so **the floor stops a mistyped price, it does not make a low one safe** — what protects the reserve is the price you actually set, and the fact that lowering the floor takes two keys. |
+| 🔴 `set-price` **(2 keys)** | A new price | 🟡 Changes the price — **refused while the sale is open**, and **never below the floor**, which now starts equal to the price the sale opened at rather than a fixed 0.01. There is no upper limit: a price set too high simply makes no sales, and the administrator fixes it by pausing, re-pricing and reopening. |
+| 🔴 `set-min-price` **(2 keys)** | A new floor | Changes the lowest price the sale will ever accept. **Never below 0.00001 KDA per token**, whatever key is used and whether or not the contract is locked, and **refused while the sale is open**. This exists so a mistyped price cannot hand someone the whole reserve — measured, a price of 0.000000000001 bought all 20,000 tokens for 0.00000002 KDA. At the floor itself the whole reserve would still cost only 0.2 KDA, so **the floor stops a mistyped price, it does not make a low one safe** — what protects the reserve is the price the administrator actually sets, and the fact that lowering the floor takes two keys. |
 | 🟢 `get-min-price` | — | The price floor currently in force. |
 | 🔴 `pause` / `resume-sale` **(1 key)** | — | Closes and opens the sale. **It starts closed** and stays closed until someone opens it. |
 | 🔴 `withdraw-proceeds` **(2 keys)** | A destination and an amount | Moves the sale's KDA out. |
@@ -728,16 +729,16 @@ their own gas.
    network** — building it now was necessary (it is impossible to add after freezing); using it is a
    separate decision.
    > ⚠️ **Do not trust this paragraph on its own.** Hand-written status lines in this project have
-   > gone stale three separate times — this one was itself seven audits out of date until cold audit
-   > #22 caught it. `the internal reports` holds what each audit actually measured; if this paragraph
+   > gone stale three separate times — this one was itself seven audits out of date until a later
+   > cold audit caught it. The internal review reports hold what each audit actually measured; if this paragraph
    > and a report disagree, the report is right.
 1. 📋 **No contract code is deployed anywhere** — not mainnet, not testnet. **But the namespace and
-   both admin keysets ARE live on mainnet, on all 20 chains, since 2026-08, and that part is
+   both admin keysets ARE live on mainnet, on all 20 chains, since August 2026, and that part is
    permanent** — it is the governance authority the three devices control, and it cannot be
    un-created. What is not yet on the network is the contract code itself.
 2. 📋 **Nothing deploys until the Kadena platform fix is live on the target chain**, measured there at
    the time, never assumed. That fix stops *other people's contracts* from reaching into SPT.
-   **It went live on mainnet on 2026-08** — so this condition is now satisfiable, and it is still
+   **It went live on mainnet in August 2026** — so this condition is now satisfiable, and it is still
    re-measured per chain at deploy time rather than inherited from this line.
 2b. 🔴 **One permanent dependency on Kadena that cannot be removed, and it matters before
    the freeze is approved.** SPT talks to KDA through Kadena's own `coin` contract, and the
@@ -758,8 +759,8 @@ their own gas.
    ✅ After freezing, no function can ever be changed or repaired.
 4. 🟡 **Once frozen, value can still leave.** The complete list, all of which survive the freeze:
    - 🔴 **`disburse-tranche`** — admin-only, up to **70,000 SPT** (treasury + market-making) to any
-     address you choose, as it vests. This is the largest exit by far and this page describes it
-     above; the old "three functions" sentence contradicted it.
+     address the administrator chooses, as it vests. This is the largest exit by far, and this page
+     describes it above.
    - 🔴 `withdraw-funding` — admin-only, company KDA out.
    - 🔴 `withdraw-proceeds` — admin-only, sale KDA out.
    - 🟢 `claim-awards` — **permissionless**: anyone can trigger it, and the KDA always lands on the

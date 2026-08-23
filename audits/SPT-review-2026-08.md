@@ -11,7 +11,8 @@ third-party engagement**, and it is a **delta** over a longer preceding programm
 
 The single HIGH finding (A, below) was in the **deploy tooling**, not the contracts: no finding in
 this review required a module byte to change, which is why the hashes above are the same ones the
-review read. Twenty-one findings were raised. **All are now closed**, and each fix is named below.
+review read. Twenty-one findings were raised. **All are now closed.** The fifteen published below each name
+its fix; the six withheld are described under *Redactions*.
 
 ## Redactions
 
@@ -49,12 +50,12 @@ fix with its named test.** What is cut: the reproduction.
 | **N** | LOW | **A test comment credited the wrong assertion.** Measured across mutations: the assertion it named fired in none of them. | Comment corrected to name the assertion that actually fires. |
 | **O** | LOW | **A signing-path fix had no regression test.** Unreachable on mainnet and fail-loud at the node. | Recorded, not fixed — the failure is immediate and visible. |
 
-## 7. WHAT I COULD **NOT** VERIFY
+## WHAT I COULD **NOT** VERIFY
 
 1. **No node, no devnet, in this session — so nothing here is node evidence.** Every measurement
    above is REPL (5.4ce) or static.
 2. **Deploy gas at these exact bytes is UNMEASURED.** `.github/scripts/deploy-budget.py` compares *bytes*
-   (77,648 ≤ 77,721 measured) and then reports the **an earlier measurement** gas figures. The `as_of` field says
+   (77,648 ≤ 77,721 measured) and then reports gas figures from **an earlier measurement**. The `as_of` field says
    so itself. This estate's own measurement says **bytes → gas is the wrong model, not an imprecise
    one** — `SPT-launch` once paid **+16.9 %** deploy gas with not one byte of its own source
    changed. Both modules *shrank*, so the direction is favourable and 71.2 % of the ceiling leaves

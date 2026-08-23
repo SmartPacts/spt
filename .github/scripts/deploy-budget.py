@@ -5,7 +5,7 @@ WHY
 ------------------------------
 `SPT` grew **6 % past a HARD 150,000-gas ceiling across two audited
 items and nothing went red**, because nothing in this tree measured deploy cost.
-It was found only when an reviewer deployed it on a node: **176,205 gas, 117.5 %**.
+It was found only when a reviewer deployed it on a node: **176,205 gas, 117.5 %**.
 The ceiling was bisected there — 150,000 accepted, **150,001 rejected at validation**.
 
 🔴 THIS GATE NEVER EXTRAPOLATES, AND THAT IS ITS WHOLE DESIGN.

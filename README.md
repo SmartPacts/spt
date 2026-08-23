@@ -41,7 +41,7 @@ tools/            check-namespace.sh
 verification/     the recorded artifact identity
 docs/             SPT-WHAT-IT-DOES.md — plain language, written for a non-engineer
 audits/           an independent review of these exact bytes
-VERIFY.md         how to check this repository against the chain, once deployed
+VERIFY.md         how to check this repository — locally now, against the chain once deployed
 ```
 
 ## Run the tests yourself

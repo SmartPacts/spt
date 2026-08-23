@@ -46,6 +46,49 @@ check() {   # $1 = human name, $2 = ERE
   fi
 }
 
+# ---------------------------------------------------------------------------
+# WRAP-TOLERANT PASS. A line-based grep cannot see a reference broken across a
+# line break, and prose wraps. MEASURED: "cold audit #22" shipped publicly past
+# the audit-round pattern below, because the scrub left "cold audit" ending one
+# line and "> #22" starting the next. The pattern was right; the line was wrong.
+#
+# So every pattern is applied a second time to each line JOINED WITH THE NEXT,
+# after stripping the continuation's blockquote/list prefix. Pairwise, never the
+# whole file: joining everything would invent matches across paragraphs.
+# ---------------------------------------------------------------------------
+check_wrapped() {   # $1 = human name, $2 = ERE
+  local name="$1" re="$2" bad=0 f out
+  for f in "${FILES[@]}"; do
+    [ -f "$f" ] || continue
+    out=$(python3 - "$f" "$re" <<'PYEOF'
+import sys, re, io
+path, pat = sys.argv[1], sys.argv[2]
+try:
+    lines = io.open(path, encoding="utf-8", errors="replace").read().split("\n")
+except OSError:
+    sys.exit(0)
+rx = re.compile(pat)
+strip = re.compile(r"^[\s>]*(?:[-*+]\s+|\d+\.\s+)?")
+for i in range(len(lines) - 1):
+    joined = lines[i].rstrip() + " " + strip.sub("", lines[i + 1])
+    # only report what the single-line pass could NOT already see
+    if rx.search(joined) and not rx.search(lines[i]) and not rx.search(lines[i + 1]):
+        print("%d: %s" % (i + 1, joined.strip()[:160]))
+PYEOF
+) || out=""
+    if [ -n "$out" ]; then
+      bad=$((bad + 1))
+      printf '%s\n' "$out" | sed "s|^|    $f:|"
+    fi
+  done
+  if [ "$bad" -ne 0 ]; then
+    echo "  FAILED — $name (across a line break): $bad file(s)."
+    fail=1
+  else
+    echo "  clean — $name (across a line break)"
+  fi
+}
+
 echo "== publication hygiene =="
 for f in "${FILES[@]}"; do [ -f "$f" ] && scanned=$((scanned + 1)); done
 if [ "$scanned" -eq 0 ]; then
@@ -61,6 +104,13 @@ check "private filesystem paths"      '(/home/[a-z]|/Users/[a-z]|~/claude/)'
 check "personal email addresses"      '[A-Za-z0-9._%+-]+@(gmail|hotmail|outlook|yahoo)\.'
 check "AI-assistant traces"           '(CLAUDE\.md|[Cc]laude [Cc]ode|Anthropic|Co-Authored-By)'
 check "signing-device identifiers"    "(Nano S|Ledger device|device hash|m/44'?/626)"
+
+# The same patterns again, this time across a line break. See check_wrapped.
+check_wrapped "internal decision-record ids"  '\bADR-[0-9]{3}\b'
+check_wrapped "internal work-item ids"        '\bCW32-[0-9]+\b'
+check_wrapped "internal finding ids"          '\b(F-[0-9]{1,2}|F#[0-9]{1,2}|C-[0-9]{1,2}|L[0-9]-F[0-9]{1,2})\b'
+check_wrapped "audit-round references"        '\b(cold |delta |confirmatory |external )?audit #?[0-9]+'
+check_wrapped "private filesystem paths"      '(/home/[a-z]|/Users/[a-z]|~/claude/)'
 
 # A 64-hex string is a public key. The suites use synthetic repeated-nibble keys
 # on purpose (aaaa…, f0f0…, deadbeef-style); a REAL key is never a short repeat,

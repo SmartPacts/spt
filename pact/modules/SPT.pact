@@ -501,7 +501,7 @@
   ;; into this chain's rpt). No holder exists to require.
   (defcap ROUND-APPLIED (id:string chain:string rate:decimal)
     @doc "Permissionless: rate is the sum of newly effective round rates just folded into this chain's stored reward-per-token. Bookkeeping only, since rounds pay from their own effective-at whether or not anyone calls this; id is a caller label."
-    @event true)       ; the design record
+    @event true)
   ;; ---- Record-date events ----------------------------------------------------------------
   ;; These two carry `require-capability (ADMIN-OPS)` because that is the tier their emitters
   ;; acquire. 🔴 NAME THE TIER THE EMITTER ACTUALLY HOLDS — and know that NOTHING AT RUNTIME

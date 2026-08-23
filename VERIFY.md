@@ -1,7 +1,8 @@
 # Verifying this repository
 
-Three separate claims, in increasing order of what they prove. The first two you can check right
-now. The third needs the contracts to be deployed, which at the time of writing they are not.
+Four separate claims, in increasing order of what they prove. Three of them — 1, 2 and 4 — you
+can check right now, with no network. Only 3 needs the contracts to be deployed, which at the
+time of writing they are not.
 
 You need the [Pact 5.4ce](https://github.com/kda-community/pact-5) binary — the Community Edition
 engine this artifact is measured against — plus `python3` and `sha256sum`.
@@ -28,7 +29,8 @@ for M in SPT SPT-launch; do
 done
 ```
 
-`strip-for-deploy.py` removes `;;` comments and nothing else. If that prints `identical` for both,
+`strip-for-deploy.py` removes `;` comments — the `;;` blocks and the short trailing ones alike —
+along with the blank lines they leave behind, and touches nothing else: no code, and no `@doc`. If that prints `identical` for both,
 then every annotation in `pact/modules/` is provably **absent** from what deploys, and the
 commentary cannot be hiding a behavioural difference. CI runs this on every push.
 
@@ -52,19 +54,62 @@ ever fail, and would say nothing about whether the code matches.
 
 **Compare the code, then hash it yourself under one fixed environment:**
 
+Save this as `fetch-onchain.py`. It is read-only: it signs nothing and sends nothing.
+`/local` takes a full command envelope rather than a bare expression, which is why this is a
+script and not a one-line `curl`.
+
+```python
+#!/usr/bin/env python3
+"""Print the source the chain is running for one module. Read-only."""
+import json, sys, time, base64, hashlib, urllib.request
+
+module  = sys.argv[1]
+chain   = sys.argv[2] if len(sys.argv) > 2 else "0"
+network = sys.argv[3] if len(sys.argv) > 3 else "mainnet01"
+host    = sys.argv[4] if len(sys.argv) > 4 else "https://api.chainweb-community.org"
+
+cmd = json.dumps({
+    "networkId": network,
+    "payload": {"exec": {"data": {}, "code": '(describe-module "%s")' % module}},
+    "signers": [],
+    "meta": {"creationTime": int(time.time()) - 60, "ttl": 600, "gasLimit": 150000,
+             "chainId": chain, "gasPrice": 1e-8, "sender": ""},
+    "nonce": "verify",
+}, separators=(",", ":"))
+
+digest = hashlib.blake2b(cmd.encode(), digest_size=32).digest()
+body = json.dumps({
+    "cmd": cmd,
+    "hash": base64.urlsafe_b64encode(digest).decode().rstrip("="),
+    "sigs": [],
+}).encode()
+
+url = "%s/chainweb/0.0/%s/chain/%s/pact/api/v1/local" % (host, network, chain)
+req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+res = json.load(urllib.request.urlopen(req, timeout=60))["result"]
+if res["status"] != "success":
+    sys.exit("chain refused the read: %s" % json.dumps(res)[:300])
+sys.stdout.write(res["data"]["code"])
+```
+
 ```bash
 NS=n_48867b242317a0216a67f8c7ca26696b5878e0e3
-API=https://api.chainweb.com/chainweb/0.0/mainnet01/chain/0/pact/api/v1/local
 
 # 1. ask the chain for the module's source
-curl -s -X POST "$API" -H 'Content-Type: application/json' \
-  -d "{\"exec\":{\"data\":{},\"code\":\"(describe-module \\\"$NS.SPT\\\")\"}}" \
-  | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["data"]["code"])' \
-  > /tmp/onchain-SPT.pact
+python3 fetch-onchain.py "$NS.SPT" 0 mainnet01 > /tmp/onchain-SPT.pact
 
-# 2. compare it to the bytes this repo publishes
-diff -u deploy-bytes/SPT.pact /tmp/onchain-SPT.pact && echo "the chain is running these bytes"
+# 2. take the module form out of the deploy payload. The payload is a whole
+#    transaction — a namespace line and a keyset check, then the module —
+#    while describe-module returns the module and nothing else.
+sed -n '/^(module SPT /,$p' deploy-bytes/SPT.pact > /tmp/repo-SPT.pact
+
+# 3. compare
+diff -u /tmp/repo-SPT.pact /tmp/onchain-SPT.pact && echo "the chain is running these bytes"
 ```
+
+🔴 **Do not compare the whole of `deploy-bytes/SPT.pact` against what the chain returns.**
+`describe-module` gives back the module form alone, so a diff against the entire payload reports
+the preamble as a difference every time and can never come out clean.
 
 If step 2 prints no differences, the deployed program is the one in this repository. That is the
 claim that matters, and it does not depend on hashes agreeing across environments.
@@ -91,6 +136,6 @@ ceiling. Prints `ALL SUITES PASS`, or names exactly which gate failed.
   that program does what the documentation says is what `audits/` and your own reading are for.
 - **That the tests are strong enough.** A passing suite proves the assertions hold, not that the
   assertions are demanding. Two properties in this artifact are correct as written but pinned only
-  by a change detector rather than a behavioural test; the audit report names them.
+  by a change detector rather than a behavioural test; the published review names them.
 - **Anything about a network other than the one you queried.** SPT deploys to all 20
   chains, and each is a separate deployment. Step 3 checks the chain you point it at.
