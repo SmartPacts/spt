@@ -112,8 +112,8 @@ receive, not merely hold them — proven with a real 2-of-3 account, because "it
 >
 > ✅ This means **the administrator controls where up to 70,000 tokens end up** — worth restating
 > plainly because it is the single biggest discretion in the design. Two consequences follow:
-> a lawyer should look at this before it is used on the real network, and tokens sent to a
-> voting account do vote, so the old line "treasury tokens never vote" is no longer true.
+> a lawyer should look at this before it is used on the real network, and tokens the
+> administrator sends to a voting account **do vote** — only the reserves themselves are excluded.
 
 ---
 
@@ -242,11 +242,9 @@ single `ADMIN-GOV` signature authorizes **seven** operations:
 | the price floor · the award notice period | the two settings |
 | the three one-time setup steps | token supply, token per-chain, sale |
 
-The two in bold were missing from the old wording, which described `ADMIN-GOV` as "only settings and
-one-time setup". It is not: the same signature that changes a setting can also declare a round and
-reprice the sale in the same transaction. The **(2 keys)** list further up this page was always
-correct and named both — so the page contradicted itself, and the wrong half was the paragraph
-whose whole job is to explain this.
+The two in bold are the ones that catch people out: the same signature that changes a setting can
+also declare an award round and reprice the sale, in that same transaction. The **(2 keys)** list
+further up this page is the full inventory of what one gov signature can reach.
 
 ✅ **Every operation that moves money out now names its own amount and destination.** That is all
 four of them — locked company tokens, company funding, sale proceeds, and unowed award-pot KDA.
@@ -729,9 +727,8 @@ their own gas.
    network** — building it now was necessary (it is impossible to add after freezing); using it is a
    separate decision.
    > ⚠️ **Do not trust this paragraph on its own.** Hand-written status lines in this project have
-   > gone stale three separate times — this one was itself seven audits out of date until a later
-   > cold audit caught it. The internal review reports hold what each audit actually measured; if this paragraph
-   > and a report disagree, the report is right.
+   > gone stale in this project before now. The internal review reports hold what each audit
+   > actually measured; if this paragraph and a report disagree, the report is right.
 1. 📋 **No contract code is deployed anywhere** — not mainnet, not testnet. **But the namespace and
    both admin keysets ARE live on mainnet, on all 20 chains, since August 2026, and that part is
    permanent** — it is the governance authority the three devices control, and it cannot be
