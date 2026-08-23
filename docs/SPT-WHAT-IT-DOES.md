@@ -86,11 +86,11 @@ tokens exactly as a broken multi-signature account would, so the restriction wou
 identical doors while banning every multi-signature founder.
 
 🔴 **What protects a recipient now is not a stricter address check — it is that a wrong address no longer
-loses anything.** ✅ **Each founder creates their own SPT account first, and the payment goes to an
-account that already exists.** If it does not exist yet, the payment is simply refused and the
-tokens stay in the reserve, waiting, earning nothing for anybody. The founder creates the account
-and the payment goes through. Nothing is lost and there is no deadline — the first unlock is a
-year away.
+loses anything.** ✅ **The payment goes to an SPT account that already exists, and opening that
+account needs no signature — the administrator can open it, or the founder can.**
+If it does not exist yet, the payment is simply refused and the tokens stay in the reserve,
+waiting, earning nothing for anybody. Once the account exists, the payment goes through.
+Nothing is lost and there is no deadline — the first unlock is a year away.
 
 🔴 **The address is still final.** A founder allocation is sent to the address given at setup; it is fixed at
 setup and can never be changed, and if the recipient cannot control that address nobody can recover

@@ -2926,8 +2926,13 @@
         ;; excluded reserve — outside the float, accruing nothing, owed to nobody — and anyone
         ;; can retry the moment the account exists. Nothing is lost. Paying them to an address
         ;; nobody controls loses them permanently.
-        ;; The message names the remedy because the founder is the only one who can apply it,
-        ;; and whoever triggers this permissionless release may not be them.
+        ;; 🔴 THE MESSAGE OVERSTATES WHO CAN APPLY THE REMEDY, AND IT IS LEFT THAT WAY ON
+        ;; PURPOSE. `create-account` takes no signature, and `enforce-reserved` only checks that
+        ;; the name is the principal of its guard — so ANYONE holding the address can open the row,
+        ;; the administrator included. The founder does not have to act, and nothing waits on them.
+        ;; The string still says "the founder must create it" because it is CODE: it ships inside
+        ;; the module and editing it moves the hash the audit read. The founder-facing page carries
+        ;; the accurate version. If a hash ever moves for another reason, correct this string with it.
         (let ((exists (with-default-read accounts ben
                         { "balance": -1.0 } { "balance" := b } (!= b -1.0))))
           (enforce exists

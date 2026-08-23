@@ -484,7 +484,7 @@ PROMISES = [
     # founder account can never be set up" — and that is now false. Rewritten rather than
     # deleted, because the founder was told the old thing and the page has to say it changed.
     ('P-024', 'A founder can use any address they control, including a multi-signature account.', '**A founder can use any address they control, including a multi-signature account.**', 'PROVEN', 'OWNER', 'smartpacts-founder-address.repl', 'a multisig founder address is ACCEPTED by the ceremony'),
-    ('P-155', 'Each founder creates their own SPT account first, and the payment goes to an account that already exists.', '**Each founder creates their own SPT account first, and the payment goes to an\naccount that already exists.**', 'PROVEN', 'OWNER', 'smartpacts-founder-address.repl', 'a release to a not-yet-created account is REFUSED, retryably'),
+    ('P-155', 'The founder payment goes to an SPT account that already exists, and opening that account needs no signature from anyone.', '**The payment goes to an SPT account that already exists, and opening that\naccount needs no signature — the administrator can open it, or the founder can.**', 'PROVEN', 'OWNER', 'smartpacts-founder-address.repl', 'a release to a not-yet-created account is REFUSED, retryably'),
     # 🔴 a later change RE-ANCHORED. The promise has two clauses — the payment is REFUSED, and the tokens
     # WAIT in the reserve — and the old anchor named the success-after-creation case, which proves
     # NEITHER. It would have stayed green if the refusal became a silent no-op or, worse, if the
