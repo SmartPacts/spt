@@ -1,0 +1,271 @@
+;; ===========================================================================
+;; SPT-launch REPL suite — LAUNCH purchases (KDA in / SPT out), no per-buyer cap,
+;; pause/price/withdraw, and admin-gating negatives. Run from pact/test/.
+;; Buyer = sender00 (funded with KDA in setup).
+;; ===========================================================================
+(load "setup.repl")
+
+;; --- init the sale (creates SALES-PROCEEDS account + price config) ---
+(begin-tx "sale init")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5)
+(expect "price 0.5" 0.5 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.get-price))
+(expect "inactive until resumed" false (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.is-active))
+(commit-tx)
+
+(begin-tx "double init rejected")
+(env-keys ["admin-key"])
+(expect-failure "sale already initialized"
+  "sale already initialized" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5))
+(commit-tx)
+
+(begin-tx "buy before active rejected")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.SALES-PROCEEDS-ACCOUNT 500.0)] }])
+(expect-failure "sale is not active"
+  "sale is not active" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "sender00" (read-keyset 'sender00) 1000.0))
+(commit-tx)
+
+;; --- activate + buy ---
+(begin-tx "resume + buy 1000 @ 0.5")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.SALES-PROCEEDS-ACCOUNT 500.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "sender00" (read-keyset 'sender00) 1000.0)
+(expect "buyer got 1000 SPT" 1000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "sender00"))
+(expect "reserve 19000" 19000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-ACCOUNT))
+(expect "circulating 1000 (reserve excluded, buyer participates)" 1000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+(expect "sales proceeds 500 KDA" 500.0 (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.SALES-PROCEEDS-ACCOUNT))
+(commit-tx)
+
+;; --- no per-buyer cap: same buyer buys again ---
+(begin-tx "buy 500 more (no per-buyer cap)")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.SALES-PROCEEDS-ACCOUNT 250.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "sender00" (read-keyset 'sender00) 500.0)
+(expect "buyer now holds 1500 SPT" 1500.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "sender00"))
+(expect "sales proceeds 750 KDA" 750.0 (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.SALES-PROCEEDS-ACCOUNT))
+(commit-tx)
+
+;; --- pause blocks purchases ---
+(begin-tx "pause blocks buy")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.pause)
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.SALES-PROCEEDS-ACCOUNT 50.0)] }])
+(expect-failure "sale is not active"
+  "sale is not active" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "sender00" (read-keyset 'sender00) 100.0))
+(commit-tx)
+
+;; --- set-price + resume + buy at new price ---
+;; the design record D2 POSITIVE CONTROL (the measured-open half — a later change lesson: a refusal
+;; without a control is not evidence): the sale is PAUSED here (previous tx), so
+;; set-price succeeds, then resume, then a buy lands at the NEW price. This is the
+;; exact forced sequence D2 exists to create: pause -> reprice -> resume.
+(begin-tx "D2 control: set-price 1.0 while paused + resume + buy 100")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-price 1.0)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.SALES-PROCEEDS-ACCOUNT 100.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "sender00" (read-keyset 'sender00) 100.0)
+(expect "buyer now 1600 SPT" 1600.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "sender00"))
+(expect "sales proceeds 850 KDA" 850.0 (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.SALES-PROCEEDS-ACCOUNT))
+(commit-tx)
+
+;; ===========================================================================
+;; the design record D2 (founder, ) — THE PRICE CANNOT CHANGE WHILE THE SALE IS OPEN.
+;; A mid-sale reprice is now IMPOSSIBLE rather than against policy: reaching a new
+;; price requires a pause, and the pause is what fails any in-flight purchase, so a
+;; buyer can never be charged a price they did not see. This is the NAMED test that
+;; goes RED if D2 is violated (VISION-SPEC P4 pin). String captured from a run.
+;; BOUNDARY: D2 does not constrain pause/resume semantics, enforce-price's band, or
+;; buy. The TTL-stale-tx residual is PROCEDURAL (the operator runbook numbered step), by
+;; founder decision, and does not survive the freeze.
+;; ===========================================================================
+(begin-tx "D2: set-price is REFUSED while the sale is active")
+(env-keys ["admin-key"])
+(expect-failure "D2: repricing a live sale is refused with the exact lockout error"
+  "SPT price is locked while the sale is active"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-price 2.0))
+;; STATE UNCHANGED — not merely "an error fired": the price a buyer sees is intact.
+(expect "D2: the live price is untouched" 1.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.get-price))
+(expect "D2: the sale is still active (the refusal did not pause it)" true
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.is-active))
+(commit-tx)
+
+;; --- admin gating negatives ---
+;; ===========================================================================
+;; H-3 (a later change / the operator runbook an internal review) — THE PRICE IS BANDED.
+;; `set-price` was bounded only by `> 0.0`. MEASURED by the reviewer: `set-price 0.000000001`
+;; then ONE permissionless `buy` took **19,000 SPT for 0.000019 KDA** — the whole
+;; remaining reserve, on a single mistyped exponent, with no second signature and no undo.
+;; It was the last unbounded admin input in the estate. The band is a fat-finger and
+;; compromised-key bound, not a pricing policy, so it is deliberately wide.
+;; ENGINE-INDEPENDENT: survives any fork, unfixable after FROZEN-MODULE.
+;; ===========================================================================
+(begin-tx "H-3: the measured exploit price is REFUSED")
+(env-keys ["admin-key"])
+;; the design record D2: set-price now refuses outright while the sale is active, so the band
+;; negatives below are reachable only from a PAUSED sale — pause first. The band is
+;; unchanged by D2 (its boundary explicitly leaves enforce-price alone); what changed
+;; is only WHEN a reprice attempt gets far enough to hit it.
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.pause)
+(let ((price-before (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.get-price))
+      (reserve-before (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-ACCOUNT)))
+ ;; the reviewer's exact value
+  (expect-failure "the measured 1e-9 exploit price is refused" "price below the"
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-price 0.000000001))
+ ;; and the boundary, one KDA-precision unit under the floor
+  (expect-failure "one unit below MIN-PRICE is refused" "price below the"
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-price (- (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.get-min-price) 0.000000000001)))
+ ;; 🔴 THE CEILING NEGATIVE STOOD HERE AND IS DELETED (the design record, a later change). MAX-PRICE is gone,
+ ;; so "one unit above the ceiling is refused" names a refusal that cannot happen. The two
+ ;; ends of this band were never symmetric: a price too LOW hands a permissionless caller the
+ ;; whole reserve (measured, 19,000 SPT for 0.000019 KDA), while a price too HIGH harms
+ ;; nobody — the buyer's own purchase fails on their own funds — and the admin recovers alone
+ ;; via pause -> set-price -> resume. The FLOOR negatives above are untouched and are the
+ ;; half that was load-bearing.
+ ;; and a price finer than KDA can express, which would silently truncate the cost
+  (expect-failure "sub-precision price is refused" "price must respect KDA precision"
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-price 1.0000000000001))
+ ;; STATE UNCHANGED, not merely "an error fired"
+  (expect "H-3: the price is untouched" price-before (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.get-price))
+  (expect "H-3: the reserve is untouched" reserve-before
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-ACCOUNT)))
+(commit-tx)
+
+(begin-tx "H-3 CONTROLS: the floor is ACCEPTED at exactly MIN-PRICE (inclusive)")
+;; Without these the negatives above would also pass if set-price rejected everything.
+;; Still PAUSED from the H-3 tx above — which is now the only state where set-price
+;; can succeed at all (the design record D2).
+(env-keys ["admin-key"])
+(expect "exactly MIN-PRICE is accepted" "price updated" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-price (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.get-min-price)))
+(expect "and it took effect" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.get-min-price) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.get-price))
+(expect "a high price is still accepted — nothing bounds it from above now" "price updated"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-price 1000.0))
+(expect "and it took effect" 1000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.get-price))
+;; restore a sane price, then reopen the sale so the rest of the suite (and the
+;; upgrade-redeploy check) runs against the pre-D2 end state
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-price 1.0)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(commit-tx)
+
+(begin-tx "a finding (an internal review): the sale cannot REOPEN below its own price floor")
+;; 🔴 NODE-MEASURED DEFECT, CLOSED AT ITS ROOT. `set-min-price` refuses while the sale is ACTIVE,
+;; so the floor cannot move under a live price — but pause -> raise the floor above the price ->
+;; `resume-sale` was open, and `resume-sale` is ONE ops key with no band check. Measured on a
+;; devnet at price 0.5 / floor 5.0: a buyer took 10 SPT for 5 KDA, a TENFOLD underpay.
+;; 🔴 THIS TEST IS THE PIN: delete the enforce in `resume-sale` and it goes RED.
+;; The sequence below is exactly the exploit, stopped one step short of the sale opening.
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.pause)
+(env-keys ["admin-key"])
+;; legal: the sale is paused, and the floor may be raised while paused
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-min-price 5.0)
+(expect "a finding precondition: the floor is now ABOVE the live price" true
+  (> 5.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.get-price)))
+(env-keys ["admin-key"])
+(expect-failure "a finding: reopening below the floor is REFUSED"
+  "SPT sale cannot open below its own price floor"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale))
+(expect "a finding: and the sale really is still closed — the refusal was not cosmetic" false
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.is-active))
+(rollback-tx)
+
+(begin-tx "a finding CONTROL: raising the PRICE to meet the floor lets it reopen (not a brick)")
+;; 🔴 WITHOUT THIS THE REFUSAL ABOVE IS COMPATIBLE WITH `resume-sale` BEING BROKEN OUTRIGHT.
+;; It also proves the remedy is the operator's own and needs nobody else: `set-price` still works
+;; while paused, so a mis-set floor is recoverable rather than a permanent brick.
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.pause)
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-min-price 5.0)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-price 5.0)
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(expect "a finding control: at price == floor the sale reopens" true
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.is-active))
+(rollback-tx)
+
+(begin-tx "non-admin set-price / withdraw rejected")
+(env-keys ["intruder-key"])
+(expect-failure "GOV TIER: a stranger is refused at ADMIN-GOV (set-price — a later change moved it)"
+  "Keyset failure (keys-all): [admin-ke...]" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-price 9.0))
+;; 🔴 a later change: WITHDRAW-PROCEEDS is now `@managed amount`, so an unscoped stranger no longer
+;; reaches the keyset at all — MEASURED, this line caught "Managed capability not installed"
+;; instead of the keyset failure it names. The signature below names the cap so the call
+;; reaches the ORIGINAL check, and this stays a test of the GOV keyset gate rather than a test
+;; of the engine's install rule (which is pinned separately, below).
+(env-sigs [{ "key": "intruder-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.WITHDRAW-PROCEEDS "sender00" 1.0)] }])
+(expect-failure "GOV TIER: a stranger is refused at ADMIN-GOV (withdraw-proceeds)"
+  "Keyset failure (keys-all): [admin-ke...]" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.withdraw-proceeds "sender00" 1.0))
+(commit-tx)
+
+;; --- withdraw-proceeds AMOUNT bounds (a later change) --------------------------------
+;; The ADMIN gate above was the only negative this function had; its `amount` bound had
+;; none — a Hard Rule 11 gap on a function that moves KDA out of the sale. Strings
+;; captured from a run. `SPT proceeds amount must be positive` is module-unique by
+;; construction (a later change §4): the bare `amount must be positive` it replaced is a
+;; substring of coin's `transfer amount must be positive`, so a pin on the old wording
+;; would have been satisfied by coin's failure on the `coin.transfer` two lines below —
+;; unfalsifiable, which is exactly how this branch could have stayed untested.
+;; Rolled back: nothing may write before the enforce, and the successful withdraw below
+;; asserts the full 850.0 balance, which a leak would break.
+;; 🔴 a later change: `enforce (> amount 0.0)` lives INSIDE `(with-capability (WITHDRAW-PROCEEDS ...))`,
+;; and that cap is now `@managed amount`. Under the old `(env-keys ["admin-key"])` both lines
+;; below caught "Managed capability not installed" and never reached the bound they name —
+;; MEASURED. Each call now carries a signature naming the cap with its OWN amount, so the
+;; amount bound is again the thing under test.
+(begin-tx "withdraw-proceeds non-positive rejected")
+(env-sigs [{ "key": "admin-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.WITHDRAW-PROCEEDS "sender00" 0.0)] }])
+(expect-failure "zero withdrawal rejected"
+  "SPT proceeds amount must be positive"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.withdraw-proceeds "sender00" 0.0))
+(env-sigs [{ "key": "admin-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.WITHDRAW-PROCEEDS "sender00" -1.0)] }])
+(expect-failure "negative withdrawal rejected — it would PULL KDA into the sale account"
+  "SPT proceeds amount must be positive"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.withdraw-proceeds "sender00" -1.0))
+(rollback-tx)
+
+;; --- withdraw proceeds ---
+;; 🔴 a later change (founder, ): WITHDRAW-PROCEEDS became `@managed amount` because an
+;; UNSCOPED 2-of-3 gov signature moved KDA for an amount and a destination it never named —
+;; measured on a node, mined. This is the NAMED test that goes RED the moment the `@managed`
+;; is removed. Its OWN rollback-tx: the refusal must leave the proceeds untouched, and
+;; (measured) `expect-failure` leaks an `install-capability` through a commit if it stops
+;; refusing here.
+(begin-tx "a later change: an UNSCOPED gov signature cannot drive withdraw-proceeds")
+(env-keys ["admin-key"])
+(expect "the refused withdrawals moved nothing — full proceeds still there" 850.0
+  (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.SALES-PROCEEDS-ACCOUNT))
+(expect-failure "a later change: an UNSCOPED gov signature cannot drive withdraw-proceeds at all"
+  "Managed capability not installed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.withdraw-proceeds "sender00" 850.0))
+(expect "and the unscoped refusal moved nothing either" 850.0
+  (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.SALES-PROCEEDS-ACCOUNT))
+(rollback-tx)
+
+;; POSITIVE CONTROL: the same call succeeds once the signature names the cap with the SAME
+;; destination and the SAME amount. Without this the negative above would also pass if
+;; withdraw-proceeds were broken outright.
+(begin-tx "withdraw-proceeds, signature SCOPED to WITHDRAW-PROCEEDS")
+(env-sigs [{ "key": "admin-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.WITHDRAW-PROCEEDS "sender00" 850.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.withdraw-proceeds "sender00" 850.0)
+(expect "sales proceeds drained to 0" 0.0 (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.SALES-PROCEEDS-ACCOUNT))
+(commit-tx)
+
+;; --- 5th-pass MED-2 regression: an IN-PLACE upgrade redeploy must not abort ---
+;; The footer had NO upgrade guard, so any redeploy (e.g. the FROZEN-MODULE freeze)
+;; aborted on "table config already exists". Config/init-state must survive.
+(begin-tx "upgrade redeploy (upgrade:true) loads clean; config survives")
+(env-data
+  { "ns": "n_48867b242317a0216a67f8c7ca26696b5878e0e3"
+, "upgrade": true
+, "spt-gov-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-gov"
+, "spt-gov": { "keys": ["admin-key"], "pred": "keys-all" }
+, "spt-ops-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-ops"
+, "spt-ops": { "keys": ["admin-key"], "pred": "keys-any" } })
+(env-keys ["admin-key"])
+(load "../modules/SPT-launch.pact")
+;; init did NOT re-run and the pre-redeploy price config survived
+(expect "price config survived the redeploy" 1.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.get-price))
+(commit-tx)
+
+(print "SPT-launch REPL suite PASSED")

@@ -1,0 +1,29 @@
+;; MUST-FAIL FIXTURE (external audit, a finding).
+;;
+;; The PREDICATE half of the fresh-deploy keyset validation:
+;; (enforce (or (= (typeof-principal op) "k:") (contains (drop 46 op) [...builtins...]))
+;; "SPT spt-ops predicate must be a built-in")
+;;
+;; 🔴 `keys-1` IS THE EXACT SPELLING the design record'S OWN TEXT ASKS FOR, AND PACT HAS NO SUCH PREDICATE.
+;; It parses as a CUSTOM predicate — a module function that does not exist — and the failure mode
+;; is the dangerous one: `define-keyset` ACCEPTS it, `describe-keyset` prints it back, both
+;; modules load, and gov-tier init succeeds. It fails only LATER, at the first `enforce-keyset`,
+;; with "Invalid custom predicate for keyset expected native" — by which point EVERY ops
+;; operation on that chain is dead FOREVER: governance, record dates, award rounds and the sale.
+;; The keyset itself is unrepairable even holding all three keys, because redefining it must
+;; first enforce the dead keyset.
+;;
+;; The gov keyset is deliberately VALID here, so the abort can only be the ops predicate check.
+(load "setup.repl")
+(begin-tx "fresh deploy whose spt-ops predicate is keys-1")
+(env-data
+  { "ns": "n_48867b242317a0216a67f8c7ca26696b5878e0e3"
+, "upgrade": false
+, "spt-gov-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-gov"
+, "spt-gov": { "keys": ["admin-key"], "pred": "keys-all" }
+, "spt-ops-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-ops"
+ ;; The payload under test.
+, "spt-ops": { "keys": ["admin-key"], "pred": "keys-1" } })
+(env-keys ["admin-key"])
+(load "../modules/SPT.pact")
+(commit-tx)

@@ -1,0 +1,49 @@
+;; ===========================================================================
+;; MUST-FAIL FIXTURE (asserted by run-tests.sh: non-zero exit + error grep).
+;; a later change — THE SECOND HALF OF THE FREEZE INVARIANT, for SPT-launch.
+;;
+;; The first half (smartpacts-frozen-invariant.repl) proves every operation still works when
+;; FROZEN-MODULE=true. On its own that is satisfied by a module which simply is not frozen —
+;; so a change that weakened the freeze itself would be catastrophic and would look GREEN.
+;; This fixture is the other half: the upgrade path must still be REFUSED.
+;;
+;; WHY A FIXTURE AND NOT AN `expect-failure`: a failing module `load` is a COMPILE-TIME abort
+;; and leaves the parser inside the module's namespace, so expect-failure cannot catch it
+;; (measured — wrapping it produced "Cannot find module: rollback-tx" and killed the
+;; suite instead of asserting). The runner therefore asserts from OUTSIDE, on the exit code AND
+;; the error text, because a fixture that failed for an unrelated reason — a typo, a renamed
+;; path — would otherwise read as a pass.
+;;
+;; MUTATION-PROVEN: regenerate the fixture with FROZEN-MODULE left FALSE and this file stops
+;; failing, which the runner reports as "fixture SUCCEEDED; the attack it encodes is live
+;; again". That is the check that keeps the freeze honest.
+;; ===========================================================================
+(load "setup.repl")
+
+(begin-tx "freeze SPT-launch in place")
+(env-data
+  { "ns": "n_48867b242317a0216a67f8c7ca26696b5878e0e3"
+, "upgrade": true
+, "spt-gov-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-gov"
+, "spt-gov": { "keys": ["admin-key"], "pred": "keys-all" }
+, "spt-ops-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-ops"
+, "spt-ops": { "keys": ["admin-key"], "pred": "keys-any" } })
+(env-keys ["admin-key"])
+(load "fixtures/frozen-SPT-launch.pact")
+(commit-tx)
+
+(begin-tx "and now the frozen module must REFUSE its own redeploy")
+(env-data
+  { "ns": "n_48867b242317a0216a67f8c7ca26696b5878e0e3"
+, "upgrade": true
+, "spt-gov-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-gov"
+, "spt-gov": { "keys": ["admin-key"], "pred": "keys-all" }
+, "spt-ops-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-ops"
+, "spt-ops": { "keys": ["admin-key"], "pred": "keys-any" } })
+(env-keys ["admin-key"])
+;; THIS LOAD MUST ABORT with "Module is frozen — no further upgrades" (the GOVERNANCE body).
+;; If it succeeds, freeze is not freeze and every assertion in
+;; smartpacts-frozen-invariant.repl is describing an unfrozen module.
+(load "fixtures/frozen-SPT-launch.pact")
+(print "REGRESSION: a FROZEN SPT-launch accepted an upgrade — the freeze is not a freeze")
+(commit-tx)

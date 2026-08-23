@@ -1,0 +1,31 @@
+;; MUST-FAIL FIXTURE (an internal review, a finding — the second half of external audit a finding).
+;;
+;; a finding added FOUR value enforces to the deploy preamble and shipped fixtures for TWO of them.
+;; This one falsifies the third:
+;; (enforce (!= (take 46 op) "w:DldRw…:") "SPT spt-ops must not be an empty keyset")
+;; Measured unpinned: deleting that enforce and regenerating the derived frozen fixtures left
+;; run-tests.sh printing ALL SUITES PASS, the static gate at RESULT: PASS, and BOTH recorded
+;; module hashes unchanged — the preamble is outside the module form, so nothing downstream of
+;; the source file can see the deletion.
+;;
+;; 🔴 WHY THE OPS HALF IS NOT COVERED BY THE GOV HALF. `{"keys":[],"pred":"keys-all"}` is
+;; vacuously true, so an empty spt-ops makes the ENTIRE ops tier satisfiable by anyone — record
+;; dates, award rounds and the sale, on a module that FREEZES. The deploy is one-shot across 20
+;; chains and each chain reads its own payload, so a paste error on the ops line only is exactly
+;; the shape this must refuse.
+;;
+;; The GOV keyset is deliberately VALID here, so the abort can only be the ops empty-keyset check
+;; — the same construction the two shipped fixtures use, for the same reason.
+(load "setup.repl")
+(begin-tx "fresh deploy whose spt-ops keyset has NO KEYS")
+(env-data
+  { "ns": "n_48867b242317a0216a67f8c7ca26696b5878e0e3"
+, "upgrade": false
+, "spt-gov-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-gov"
+, "spt-gov": { "keys": ["admin-key"], "pred": "keys-all" }
+, "spt-ops-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-ops"
+ ;; The payload under test. Well-formed, accepted by define-keyset, satisfiable by anyone.
+, "spt-ops": { "keys": [], "pred": "keys-all" } })
+(env-keys ["admin-key"])
+(load "../modules/SPT.pact")
+(commit-tx)

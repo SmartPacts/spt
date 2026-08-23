@@ -1,0 +1,114 @@
+;; ===========================================================================
+;; a later change cold-audit findings 2 + 3 — THE EMERGENCY UPGRADE PATH MUST ACTUALLY WORK.
+;;
+;; The founder's rule is that the module is not patched after deploy, with the upgrade window
+;; reserved for emergencies and platform changes. That is a policy only if the upgrade
+;; mechanism works. It did not.
+;;
+;; MEASURED on the pre-a later change footer, against a chain initialized from the module itself:
+;; upgrade:true -> Error during database operation:
+;; Table n_58b2….SPT_award-rounds already exists
+;; upgrade:false -> the same, on `accounts`
+;; BOTH branches were dead, so there was no working upgrade path at all — which is what turned
+;; finding 1 (a one-transaction permanent brick of the award subsystem) from a bad day into
+;; a permanent one. This suite is the standing proof that the escape hatch opens.
+;;
+;; Finding 3 (the `chain-count` backfill) was the other half of this suite. Both the field and
+;; `migrate-chain-count` were DELETED on with the cross-chain aggregation
+;; (a later change / the design record Decision 1), so §4 is gone — see the note there. The general lesson it
+;; taught is kept because it applies to ANY future field addition: `with-default-read`'s
+;; default covers a missing ROW, not a missing FIELD, so adding a field to a schema on a chain
+;; that already holds rows makes every read of a legacy row abort, and `try` contains neither.
+;; ===========================================================================
+(load "setup.repl")
+
+;; --- 1) a chain in real service: a proposal exists and has been voted on -----------------
+(begin-tx "seed float")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5)
+(commit-tx)
+(begin-tx "resume")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(commit-tx)
+(begin-tx "fund alice")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 2500.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 2500.0)
+(commit-tx)
+(begin-tx "alice buys")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 2500.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "alice" (read-keyset 'alice) 5000.0)
+(commit-tx)
+
+(begin-tx "a proposal is created and voted, exactly as in service")
+(env-chain-data { "chain-id": "0", "block-time": (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) })
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal
+  "UP1" "in service" "d" (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) (add-time (time "2026-06-02T00:00:00Z") 1.0) 259200)
+(commit-tx)
+(begin-tx "alice votes")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T01:00:00Z") })
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.VOTE "alice")] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "alice" "UP1" true)
+(commit-tx)
+
+;; --- 2) THE EMERGENCY UPGRADE ITSELF ------------------------------------------------------
+;; This is the assertion that was impossible before: reload the SAME module in place over a
+;; live, initialized, proposal-holding chain. `upgrade: true` says "skip the create-tables",
+;; which is the case for every chain deployed from this version. If this transaction ever
+;; aborts again, the module is unpatchable and finding 2 is back — do not "fix" this test,
+;; fix the footer.
+;;
+;; a later change made this file MORE load-bearing, not less: it is now the ONLY proof that an
+;; in-place upgrade works at all, since the four legacy upgrade suites were deleted with the
+;; historical migrations. It carries no migration reference and must not be folded into
+;; anything.
+(begin-tx "EMERGENCY in-place upgrade over a live chain")
+(env-data
+  { "ns": "n_48867b242317a0216a67f8c7ca26696b5878e0e3"
+, "upgrade": true
+, "spt-gov-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-gov"
+, "spt-gov": { "keys": ["admin-key"], "pred": "keys-all" }
+, "spt-ops-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-ops"
+, "spt-ops": { "keys": ["admin-key"], "pred": "keys-any" } })
+(env-keys ["admin-key"])
+(load "../modules/SPT.pact")
+(commit-tx)
+
+(begin-tx "the chain survived the upgrade with its state intact")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T02:00:00Z") })
+(expect "balances survived" 5000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice"))
+(expect "the live tally survived" 5000.0
+  (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "UP1")))
+(expect "the proposal row still reads" "in service"
+  (at 'title (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.proposal-details "UP1")))
+(expect "and the PRODUCT read path still works across the upgrade" true
+  (at 'exists (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-record "UP1")))
+(expect "the record's tally matches the live one after the upgrade" 5000.0
+  (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-record "UP1")))
+(commit-tx)
+
+;; --- 3) the footer input is REQUIRED, not defaulted --------------------------------------
+;; `read-msg` on a missing key aborts, deliberately: on a one-way door the operator states
+;; which case the upgrade is, rather than a default silently picking the wrong one.
+;; That negative CANNOT live here — a failed `load` leaves the parser inside the module's
+;; namespace, so every later top-level form misresolves (measured: `rollback-tx` came back as
+;; `Cannot find module: rollback-tx`). It is asserted from OUTSIDE instead, in
+;; `upgrade-nokey.repl-must-fail`, which run-tests.sh checks on BOTH the exit code and the
+;; error text — the same pattern the compose fixtures use.
+
+;; --- 4) migrate-chain-count — DELETED (a later change / the design record Decision 1) ----------
+;; The `chain-count` proposal field and its one-shot backfill are gone with the cross-chain
+;; aggregation, so there is no migration left to gate, to run, or to prove idempotent.
+;;
+;; KEEP THE SHAPE IN MIND rather than the code: it existed because a schema field added to a
+;; live chain makes every legacy row unreadable, and `with-default-read` does not save you —
+;; its default covers a missing ROW, not a missing FIELD. Any future field addition to
+;; `proposal`, `accounts` or `state` needs the same one-shot backfill and the same
+;; run-it-unconditionally property. Sections 1-3 above, which prove the emergency upgrade path
+;; opens at all, are the load-bearing part of this file and are untouched.
+
+(print "smartpacts-upgrade-emergency a later change suite PASSED")

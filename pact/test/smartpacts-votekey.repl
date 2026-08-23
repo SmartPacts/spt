@@ -1,0 +1,277 @@
+;; ===========================================================================
+;; SPT VOTING KEY (the design record) — hot key votes, transfer key stays cold.
+;; Proves: main-guard-only registration; hot key CAN vote (and re-vote); main key
+;; still votes (never locked out); hot key CANNOT transfer / rotate / re-register /
+;; clear; clear deactivates; re-registration works; weight semantics unchanged;
+;; delegate vote gas stays under the 1500 gas-sponsorship ceiling (gasless intact).
+;; Run from pact/test/.
+;; ===========================================================================
+(load "setup.repl")
+
+;; --- seed alice 3000 SPT via the launch (float-entry path) ---
+(begin-tx "activate launch for seeding")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(commit-tx)
+(begin-tx "seed alice 3000 via launch")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1500.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1500.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 1500.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "alice" (read-keyset 'alice) 3000.0)
+(commit-tx)
+
+;; --- a proposal to vote on ---
+(begin-tx "announce VK proposal")
+(env-chain-data { "chain-id": (at 'chain-id (chain-data)), "block-time": (add-time (time "2026-06-01T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) })  ; the design record: announce 48h before open-at
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal "VK" "votekey test" "d" (add-time (time "2026-06-01T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) (add-time (time "2026-06-01T00:00:00Z") 1.0) 259200)
+(commit-tx)
+
+;; --- registration is MAIN-guard-only ---
+(begin-tx "hot key cannot self-register")
+(env-data { "hot": { "keys": ["alice-hot"], "pred": "keys-all" } })
+(env-keys ["alice-hot"])
+(expect-failure "Keyset failure"
+  "Keyset failure (keys-all): [alice-ke...]"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.set-vote-key "alice" (read-keyset 'hot)))
+(commit-tx)
+
+(begin-tx "main key registers the vote key — with a SCOPED signature (reviewer F1)")
+(env-data { "hot": { "keys": ["alice-hot"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.VOTE-KEY-ADMIN "alice")] }])
+(expect "registered via scoped sig" "vote key set"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.set-vote-key "alice" (read-keyset 'hot)))
+(expect "getter shows active" true
+  (at 'active (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-vote-key "alice")))
+(commit-tx)
+
+;; --- the hot key votes (weight = balance, tally correct) ---
+(begin-tx "hot key votes YES 3000")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(env-keys ["alice-hot"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "alice" "VK" true)
+(expect "yes = 3000 via hot key" 3000.0 (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "VK")))
+(commit-tx)
+
+;; --- main key is never locked out: re-votes NO, correcting the hot key ---
+(begin-tx "main key re-votes NO (corrects the hot vote)")
+(env-keys ["alice-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "alice" "VK" false)
+(expect "yes back to 0" 0.0 (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "VK")))
+(expect "no = 3000" 3000.0 (at 'no (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "VK")))
+(commit-tx)
+
+;; --- hot-key blast radius: votes ONLY ---
+(begin-tx "hot key cannot transfer")
+(env-data { "bob": { "keys": ["bob-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-hot", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" "bob" 1.0)] }])
+(expect-failure "Keyset failure"
+  "Keyset failure (keys-all): [alice-ke...]"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create "alice" "bob" (read-keyset 'bob) 1.0))
+(commit-tx)
+
+(begin-tx "hot key cannot rotate the account guard")
+(env-data { "hot": { "keys": ["alice-hot"], "pred": "keys-all" } })
+(env-keys ["alice-hot"])
+(expect-failure "Keyset failure"
+  "Keyset failure (keys-all): [alice-ke...]"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.rotate "alice" (read-keyset 'hot)))
+(commit-tx)
+
+(begin-tx "hot key cannot clear or replace itself")
+(env-data { "hot2": { "keys": ["alice-hot2"], "pred": "keys-all" } })
+(env-keys ["alice-hot"])
+(expect-failure "Keyset failure"
+  "Keyset failure (keys-all): [alice-ke...]"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.clear-vote-key "alice"))
+(expect-failure "Keyset failure"
+  "Keyset failure (keys-all): [alice-ke...]"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.set-vote-key "alice" (read-keyset 'hot2)))
+(commit-tx)
+
+;; --- clear (main) deactivates the hot key ---
+(begin-tx "main clears the vote key; hot vote now rejected")
+(env-keys ["alice-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.clear-vote-key "alice")
+(env-keys ["alice-hot"])
+(expect-failure "neither account guard nor registered vote key satisfied"
+  "neither account guard nor registered vote key satisfied"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "alice" "VK" true))
+(commit-tx)
+
+;; --- THE DELEGATE GUARD IS VALIDATED (a later change / an internal review a finding) --------------
+;; 🔴 WITHOUT THIS TEST THE FIX IS UNTESTED, and I know that because reverting the enforce
+;; left this whole suite GREEN. `set-vote-key` accepted ANY guard, including guards whose
+;; satisfaction does not reduce to signatures. MEASURED before the fix: registering THIS
+;; MODULE'S OWN `FUNDING-G` — a module guard, satisfied whenever the module is on the call
+;; stack, which inside `cast-vote` it always is — let an UNSIGNED stranger with no keys at
+;; all cast the holder's full 3,000-token vote.
+(begin-tx "a MODULE guard cannot be registered as a vote key")
+(env-data { "emptyks": { "keys": [], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.VOTE-KEY-ADMIN "alice")] }])
+(expect-failure "module guard (m:) refused as a vote key"
+  "SPT vote key must be a keyset guard (k:/w:/r:)"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.set-vote-key
+    "alice" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-G))
+;; 🔴 AND THE VACUOUS KEYSET — the hole my FIRST version of this fix left open. An empty
+;; keyset is a KEYSET, so its principal is `w:` and the type test admitted it; `keys-all` over
+;; zero keys is vacuously true, so an unsigned stranger cast the holder's full weight through
+;; the door the fix opened. Measured before the second fix.
+(expect-failure "an EMPTY keyset is refused as a vote key"
+  "SPT vote key must not be an empty keyset"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.set-vote-key
+    "alice" (read-keyset 'emptyks)))
+;; The SET, not the instance: a capability guard is refused for the same reason.
+(expect-failure "capability guard (c:) refused as a vote key"
+  "SPT vote key must be a keyset guard (k:/w:/r:)"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.set-vote-key
+    "alice" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-G))
+(rollback-tx)
+
+;; CONTROL — without this the two refusals above are equally consistent with "registration is
+;; broken". A plain keyset must still be accepted, and so must a keyset REFERENCE (r:), which
+;; this function's docstring endorses and which my first version of the check wrongly refused.
+(begin-tx "CONTROL: a plain keyset is still accepted")
+(env-data { "ctl": { "keys": ["alice-ctl"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.VOTE-KEY-ADMIN "alice")] }])
+(expect "a k: keyset guard is accepted" "vote key set"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.set-vote-key "alice" (read-keyset 'ctl)))
+(rollback-tx)
+
+;; --- clear without any registration (a later change / an internal review a finding) ---------------
+;; 🔴 THIS TEST ASSERTED A DIFFERENT BRANCH THAN ITS NAME, and it passed the whole time.
+;; It used `bob`, who has NO `accounts` row — the only `transfer-create` to him sits inside
+;; an `expect-failure` that aborts in the sender-side debit, so the credit never happens.
+;; `clear-vote-key` therefore died at `account-guard` -> `(read accounts …)`, an ACCOUNTS-table
+;; error, and the pin was that string. So the file had a NONEXISTENT-ACCOUNT test wearing a
+;; no-registration name, and the branch it claimed to cover had NO coverage anywhere:
+;; mutating `update` -> `write` at the real site left the entire suite green.
+;;
+;; Both branches are now covered, with the errors they ACTUALLY produce — different table,
+;; different verb, different line — which is the whole reason one could stand in for the other.
+(begin-tx "clear on a NONEXISTENT account fails at the accounts read (not the registration)")
+(env-keys ["bob-key"])
+(expect-failure "nonexistent account: dies at account-guard's accounts read"
+  "No value found in table n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT_accounts for key: bob"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.clear-vote-key "bob"))
+(commit-tx)
+
+;; THE BRANCH THE OLD TEST NAMED: a REAL holder who never registered a vote key. carol is a
+;; genuine account (bought tokens below-market via the launch), so `account-guard` resolves and
+;; VOTE-KEY-ADMIN passes — execution reaches the `update vote-delegates`, which is the site
+;; that has no row. That is the refusal this test is named for.
+(begin-tx "seed carol as a REAL holder so the no-registration branch is reachable")
+(env-data { "carol": { "keys": ["carol-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "carol" 100.0)] }])
+(coin.transfer-create "sender00" "carol" (read-keyset 'carol) 100.0)
+(env-sigs [{ "key": "carol-key", "caps": [(coin.TRANSFER "carol" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 100.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "carol" (read-keyset 'carol) 200.0)
+(commit-tx)
+
+(begin-tx "clear WITHOUT a prior registration rejected — the named branch, finally covered")
+(env-sigs [{ "key": "carol-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.VOTE-KEY-ADMIN "carol")] }])
+(expect-failure "real holder, never registered: dies at the vote-delegates update"
+  "No row found during update in table n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT_vote-delegates at key carol"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.clear-vote-key "carol"))
+(commit-tx)
+
+;; --- re-registration works; delegate vote gas stays gasless-compatible (< 1500) ---
+(begin-tx "re-register a NEW hot key; gas-measured delegate vote")
+(env-data { "hot2": { "keys": ["alice-hot2"], "pred": "keys-all" } })
+(env-keys ["alice-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.set-vote-key "alice" (read-keyset 'hot2))
+(env-keys ["alice-hot2"])
+(env-gasmodel "table")
+(env-gaslimit 150000)
+(env-gas 0)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "alice" "VK" true)
+(expect "delegate cast-vote gas under the 1500 station ceiling" true (< (env-gas) 1500))
+(print (format "delegate cast-vote gas: {}" [(env-gas)]))
+(env-gaslimit 999999999)
+(expect "yes = 3000 via NEW hot key" 3000.0 (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "VK")))
+(commit-tx)
+
+;; --- the reviewer F2 fix: rotating the MAIN guard revokes an active vote key ---
+(begin-tx "rotate revokes the vote key (compromise-recovery hygiene)")
+(env-data { "v1": { "keys": ["vicky-1"], "pred": "keys-all" }
+       , "v2": { "keys": ["vicky-2"], "pred": "keys-all" }
+       , "vhot": { "keys": ["vicky-hot"], "pred": "keys-all" } })
+(env-keys ["vicky-1"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-account "vicky" (read-keyset 'v1))
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.set-vote-key "vicky" (read-keyset 'vhot))
+(expect "vicky vote key active" true (at 'active (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-vote-key "vicky")))
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.rotate "vicky" (read-keyset 'v2))
+(expect "rotation revoked the vote key" false (at 'active (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-vote-key "vicky")))
+(commit-tx)
+
+;; --- the reviewer F3: keyset-REF guard as the vote key (DB lookup at enforcement) ---
+;; (The node leg lived in f9-devnet.ts, DELETED a later change: the design record's 48-h review gap — measured
+;; from the announcement's own block time — forecloses any one-session on-node vote, so THIS
+;; REPL leg is the standing pin for the keyset-REF lookup path.)
+(begin-tx "keyset-ref-guard vote key (REPL leg)")
+(env-data { "refks": { "keys": ["alice-ref"], "pred": "keys-all" } })
+(env-keys ["admin-key"])
+(namespace "n_48867b242317a0216a67f8c7ca26696b5878e0e3")   ; define-keyset requires namespace context on-chain
+(define-keyset "n_48867b242317a0216a67f8c7ca26696b5878e0e3.vote-ref" (read-keyset 'refks))
+(env-keys ["alice-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.set-vote-key "alice" (keyset-ref-guard "n_48867b242317a0216a67f8c7ca26696b5878e0e3.vote-ref"))
+(env-keys ["alice-ref"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "alice" "VK" false)
+(expect "keyset-ref vote key voted (no = 3000)" 3000.0 (at 'no (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "VK")))
+(commit-tx)
+
+;; ===========================================================================
+;; 🔴 R3 — ACCEPTED RESIDUAL, PINNED. FOUNDER DECISION (a later change).
+;;
+;; Cold an internal review found this four times independently (a finding / L1-F1 / L2-F3 / L6-F2): an `r:`
+;; principal encodes a keyset NAME and resolution is LATE, so `r:` does NOT reduce to
+;; signatures — which is exactly what the admitted set above claims about itself. The founder
+;; was asked whether to delete the `r:` branch (it would have REMOVED source) and chose to KEEP
+;; keyset-ref delegation and ACCEPT the exposure, disclosed in set-vote-key's docstring.
+;;
+;; THIS BLOCK EXISTS SO THE ACCEPTANCE CANNOT BE UNDONE OR "FIXED" SILENTLY. It MEASURES the
+;; accepted exposure rather than describing it: if the exposure ever stops reproducing, that is
+;; a real engine change and this goes RED.
+;;
+;; 🔴 WHAT IT DOES **NOT** PROVE, STATED BECAUSE THE FIRST DRAFT CLAIMED IT DID. This block is
+;; NOT what catches a later round narrowing the admitted set. MEASURED (a later change M5, deleting the
+;; `r:` disjunct): the suite goes RED at the keyset-ref POSITIVE on :216 with a fatal
+;; "SPT vote key must be a keyset guard (k:/w:/r:)", the load ABORTS there, and this block never
+;; executes at all. The narrowing IS caught, and loudly — but by :216, one block earlier. Do not
+;; delete :209-220 believing this section covers it.
+;; The whole block is ROLLED BACK — it mutates a keyset and a live tally.
+;; ===========================================================================
+(begin-tx "R3 accepted residual: an r: delegate rotated to empty votes unsigned")
+(env-data { "emptyks": { "keys": [], "pred": "keys-all" } })
+;; The delegate keyset's OWN key rotates it — SPT is not consulted and cannot be.
+(env-keys ["alice-ref"])
+(namespace "n_48867b242317a0216a67f8c7ca26696b5878e0e3")
+(define-keyset "n_48867b242317a0216a67f8c7ca26696b5878e0e3.vote-ref" (read-keyset 'emptyks))
+;; ...and now NOBODY casts alice's full weight. No keys, no sigs, no relationship to alice.
+(env-keys [])
+(env-sigs [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "alice" "VK" true)
+(expect "R3 ACCEPTED: an unsigned stranger cast alice's full 3,000-token vote"
+  3000.0 (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "VK")))
+(expect "R3 ACCEPTED: and the recorded delegate still reads active and unchanged"
+  true (at 'active (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-vote-key "alice")))
+(rollback-tx)
+
+;; The sibling instance of the same class at THIS site, also accepted and also pinned: a
+;; CUSTOM-PREDICATE keyset is a non-empty `w:` principal, so EMPTY-KEYSET-PREFIX cannot see it
+;; and its satisfaction reduces to an arbitrary module function. It is refused at
+;; `enforce-beneficiary` (a later change R4) because that surface is ADMIN-chosen, one-shot and worth
+;; 80% of supply; it is ADMITTED here because this one is HOLDER-chosen at an owner-signed
+;; registration — the same shape the founder accepted for `r:`. If a later round narrows this,
+;; it is a founder decision, not a tidy, and this test says so by going RED.
+(begin-tx "R3 sibling: a custom-predicate vote key is admitted (accepted residual)")
+(env-data { "cpks": { "keys": ["alice-cp"], "pred": "free.nosuch.anyone" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.VOTE-KEY-ADMIN "alice")] }])
+(expect "R4 BOUNDARY: set-vote-key admits a custom predicate, enforce-beneficiary does not"
+  "vote key set"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.set-vote-key "alice" (read-keyset 'cpks)))
+(rollback-tx)
+
+(print "smartpacts-votekey the design record suite PASSED")

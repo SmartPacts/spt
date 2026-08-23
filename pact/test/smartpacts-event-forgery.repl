@@ -1,0 +1,169 @@
+;; ===========================================================================
+;; GOVERNANCE EVENT FORGERY — one foreign-compose negative per event cap.
+;; a later change / the design record Decision 3b.
+;;
+;; WHAT WAS MEASURED FIRST, BEFORE ANY FIX (on a pre-fix engine), because
+;; the two routes behave differently and the analysis feeding the design record conflated them:
+;;
+;; ROUTE 1 — a FOREIGN module calling `emit-event` on one of OUR caps:
+;; REFUSED on every engine, "Module admin necessary for operation but
+;; has not been acquired". The obvious forgery never worked.
+;; ROUTE 2 — a FOREIGN module COMPOSING the cap: SUCCEEDED with `env-sigs []`.
+;; It acquired `VOTE-CAST "victim" "P1" 99999.0 true`, and an `@event`
+;; cap EMITS ON ACQUISITION — so acquiring it is emitting it.
+;;
+;; ROUTE 2 is therefore the whole exposure, and it is what this file pins. Each cap
+;; now requires the capability that authorizes the underlying action, so composing
+;; the event demands something the attacker does not have.
+;;
+;; WHY THIS IS HYGIENE AND NOT THE SECURITY BOUNDARY: a forged event cannot move the
+;; tally. The tally is the product (the design record Decision 3) and only `cast-vote` and the
+;; release loop inside `debit` write it. What a forged event does is mislead anyone
+;; reading the event stream instead of the table — explorers, indexers, holders.
+;;
+;; PROVEN FALSIFYING: every negative below was run against the module with the OLD
+;; `@event true` bodies and SUCCEEDED there (the compose was accepted). A negative
+;; that passes against both versions proves nothing.
+;; ===========================================================================
+(load "setup.repl")
+
+;; --- seed: alice holds tokens and P1 exists, so the CONTROLS below are real ---------
+(begin-tx "seed alice via the launch, and announce P1")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1250.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1250.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 1250.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "alice" (read-keyset 'alice) 2500.0)
+(commit-tx)
+
+;; Announce P1 in its OWN transaction: env-sigs above scoped the admin key to coin.TRANSFER,
+;; and a capability-scoped signature does not satisfy `enforce-keyset` (measured here as
+;; "Keyset failure (keys-all)" out of create-proposal's ADMIN gate).
+(begin-tx "announce P1")
+(env-sigs [])
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal
+  "P1" "Adopt plan" "desc" (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) (add-time (time "2026-06-02T00:00:00Z") 1.0) 259200)
+(commit-tx)
+
+(begin-tx "the forger — one entry point per governance event")
+(env-data { "fk": { "keys": ["forger"], "pred": "keys-all" } })
+(env-keys ["forger"])
+(define-namespace "forgens" (read-keyset 'fk) (read-keyset 'fk))
+(namespace "forgens")
+(module forger G
+ ;; Real governance: the attack composes SPT's caps, not this module's.
+  (defcap G () (enforce-guard (read-keyset 'fk)))
+
+  (defcap C-CAST (voter:string proposal:string weight:decimal direction:bool)
+    (compose-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.VOTE-CAST voter proposal weight direction)))
+  (defun cast:string (voter:string proposal:string weight:decimal direction:bool)
+    (with-capability (C-CAST voter proposal weight direction) "FORGED"))
+
+  (defcap C-REL (voter:string proposal:string amount:decimal)
+    (compose-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.VOTE-RELEASED voter proposal amount)))
+  (defun released:string (voter:string proposal:string amount:decimal)
+    (with-capability (C-REL voter proposal amount) "FORGED"))
+
+  (defcap C-CREATED (id:string title:string)
+    (compose-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.PROPOSAL-CREATED id title)))
+  (defun created:string (id:string title:string)
+    (with-capability (C-CREATED id title) "FORGED"))
+
+  (defcap C-KSET (account:string key:string)
+    (compose-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.VOTE-KEY-SET account key)))
+  (defun kset:string (account:string key:string)
+    (with-capability (C-KSET account key) "FORGED"))
+
+  (defcap C-KCLR (account:string)
+    (compose-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.VOTE-KEY-CLEARED account)))
+  (defun kclr:string (account:string)
+    (with-capability (C-KCLR account) "FORGED"))
+
+ ;; The CONTROL: PROPOSAL-CLOSED deliberately keeps a weak body, because
+ ;; close-proposal is permissionless and there is no authority to require. This
+ ;; entry point exists so the file measures that rather than quietly omitting it.
+  (defcap C-CLOSED (id:string status:string)
+    (compose-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.PROPOSAL-CLOSED id status)))
+  (defun closed:string (id:string status:string)
+    (with-capability (C-CLOSED id status) "FORGED"))
+)
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; The negatives. ZERO signatures, foreign namespace, an earlier engine.
+;; 3-arg expect-failure throughout: a 2-arg form matches ANY failure and has
+;; already passed on an arity error in this repo.
+;; ---------------------------------------------------------------------------
+(begin-tx "EF: every authorized governance event refuses a foreign compose")
+(env-sigs [])
+(env-keys [])
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })
+
+(expect-failure "EF-1: VOTE-CAST cannot be forged — it needs the voter's own VOTE"
+  "not granted"
+  (forgens.forger.cast "alice" "P1" 99999.0 true))
+
+(expect-failure "EF-2: VOTE-RELEASED cannot be forged — it needs DEBIT of the account"
+  "not granted"
+  (forgens.forger.released "alice" "P1" 99999.0))
+
+(expect-failure "EF-3: PROPOSAL-CREATED cannot be forged — it needs ADMIN"
+  "not granted"
+  (forgens.forger.created "FAKE" "a proposal nobody announced"))
+
+(expect-failure "EF-4: VOTE-KEY-SET cannot be forged — it needs VOTE-KEY-ADMIN"
+  "not granted"
+  (forgens.forger.kset "alice" "k:deadbeef"))
+
+(expect-failure "EF-5: VOTE-KEY-CLEARED cannot be forged — needs VOTE-KEY-ADMIN or ROTATE"
+  "neither VOTE-KEY-ADMIN nor ROTATE is in scope"
+  (forgens.forger.kclr "alice"))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; THE ACCEPTED RESIDUAL, asserted rather than omitted.
+;; ---------------------------------------------------------------------------
+(begin-tx "EF: PROPOSAL-CLOSED is still forgeable, and that is a recorded decision")
+(env-sigs [])
+(env-keys [])
+;; close-proposal is PERMISSIONLESS (a later change), so no capability authorizes it and there is
+;; nothing to require. Inventing one would recreate the weak `LIFECYCLE` cap that a later change's
+;; an internal reviewrated CRITICAL — a body asserting a PRECONDITION while reading as an
+;; AUTHORIZATION. If this assertion ever flips to a failure, someone added such a cap:
+;; triage it as a design change, do not celebrate it as a fix.
+(expect "EF-6: PROPOSAL-CLOSED CAN be composed by a stranger — accepted, documented"
+  "FORGED" (forgens.forger.closed "P1" "closed"))
+;; The answer to it is that the TABLE is the truth, and it disagrees with the forged event.
+(expect "EF-6: the table says the proposal is still active" "active"
+  (at 'status (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-record "P1")))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; CONTROL — the LEGITIMATE emitters still work. Without this, every negative
+;; above would also pass if the caps were simply broken and refused everyone.
+;; ---------------------------------------------------------------------------
+(begin-tx "EF-CONTROL: a real vote still emits its event")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })
+(env-sigs [{ "key": "alice-key"
+        , "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.VOTE "alice")] }])
+(expect "EF-CONTROL: alice's own vote is accepted" "vote cast"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "alice" "P1" true))
+(commit-tx)
+
+(begin-tx "EF-CONTROL: a real vote-key registration still emits its event")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:10:00Z") })
+(env-data { "vk": { "keys": ["alice-vote-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key"
+        , "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.VOTE-KEY-ADMIN "alice")] }])
+(expect "EF-CONTROL: alice may register her own vote key" "vote key set"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.set-vote-key "alice" (read-keyset 'vk)))
+(expect "EF-CONTROL: and clear it again" "vote key cleared"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.clear-vote-key "alice"))
+(commit-tx)
+
+(print "smartpacts-event-forgery suite PASSED")

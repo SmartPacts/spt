@@ -1,0 +1,215 @@
+(load "setup-noinit.repl")
+
+(begin-tx "a finding #80 a VANITY beneficiary is refused")
+(env-data
+  { "fk": { "keys": ["f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"], "pred": "keys-all" }
+, "tk": { "keys": ["a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"], "pred": "keys-all" }
+, "lk": { "keys": ["b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"], "pred": "keys-all" } })
+(env-keys ["admin-key"])
+;; a later amendment (a later change): the vanity beneficiary rides a FOUNDER-ALLOC ROW.
+;; 🔴 THE PARAGRAPH THAT STOOD HERE WAS STALE AND IT MATTERED (corrected a later change). It said
+;; "founder rows are k:-ONLY ... and that gate runs BEFORE enforce-beneficiary — so this and
+;; the empty-keyset case below now pin ITS message". the design record (a later change) DELETED the k:-only
+;; rule — see init-supply, which records why: it banned every multisig founder while closing
+;; only one of two identical entrances. So there is no earlier gate any more, and these two
+;; negatives pin `enforce-beneficiary-address`'s OWN messages, which is what they assert.
+;; The stale text mattered because it described the `w:` shape as unreachable through this
+;; path, and that is exactly the shape §PRED below now pins.
+(expect-failure "a finding #80: a non-principal (vanity) founder is refused"
+  "beneficiary must be a k:/w: principal"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init-supply
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G
+    [ { "account": "founder-vanity"
+   , "amount": n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-TRANCHE } ]))
+(rollback-tx)
+
+(begin-tx "a later change F-B: an EMPTY KEYSET beneficiary is refused")
+;; 🔴 THE k:/w: TEST ADMITS A GUARD SATISFIED BY NOBODY'S SIGNATURE. An empty keyset is a
+;; keyset, so its principal is `w:` and the type check above passes it — and `keys-all` over
+;; zero keys is VACUOUSLY TRUE. MEASURED before the fix: init-supply accepted it as the
+;; liquidity beneficiary, the permissionless release-tranche vested 15,000 SPT to it, and an
+;; UNSIGNED top-level transfer moved the whole 15,000 away because DEBIT's enforce-guard
+;; passed. Up to 80% of supply has this shape across the three tranches, init-supply is
+;; one-shot, and it FREEZES. The deploy engine independently refuses non-k: beneficiaries;
+;; that is ops-layer defence in depth, and this module is the one that freezes.
+(env-data
+  { "fk": { "keys": [], "pred": "keys-all" }
+, "tk": { "keys": ["a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"], "pred": "keys-all" }
+, "lk": { "keys": ["b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"], "pred": "keys-all" } })
+(env-keys ["admin-key"])
+(expect-failure "F-B: an empty-keyset founder is refused (vacuously satisfiable by anybody)"
+  "beneficiary must not be an empty keyset"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init-supply
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G
+    [ { "account": (create-principal (read-keyset 'fk))
+   , "amount": n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-TRANCHE } ]))
+(rollback-tx)
+
+;; ===========================================================================
+;; §PRED — a later change: "beneficiary keyset predicate must be a built-in" (token:3066).
+;;
+;; 🔴 COLD AUDIT #15 FOUND THIS BRANCH HAD ZERO TESTS. Its two siblings in the same function
+;; are both pinned above; this middle one was not, and the audit's mutation sweep measured the
+;; consequence: delete the enforce and 0 of 55 suites go red. The check is PRESENT and CORRECT —
+;; nothing here "fixes" the module, and this change moves no module byte. What was missing is
+;; that nothing went red if it were deleted, which is Rule 11, not a defect.
+;;
+;; WHAT IT GUARDS. A keyset's predicate may be an ARBITRARY MODULE FUNCTION. `{"keys":[k],
+;; "pred":"vac.vacmod.anyone"}` is a keyset, so its principal is `w:` and the k:/w: type check
+;; passes it; its key list is non-empty, so the empty-keyset check passes it too. This enforce
+;; is the ONLY thing that refuses it. MEASURED here while writing this pin: that keyset's
+;; principal is `w:fLb5WSkKZ6rxhNNw8xVp_2jnnNVjjVrU8_sELBkfhCM:vac.vacmod.anyone`, and
+;; `enforce-guard` on it returns TRUE under `env-sigs []` — satisfied by anybody, with no
+;; signature at all. `init-supply` is one-shot and the module FREEZES.
+;;
+;; 🔴 IT IS ENGINE-INDEPENDENT. No capability forgery is involved, so unlike the earlier-engine
+;; probes this does not change behaviour at Chainweb32 and must not be triaged as one.
+;;
+;; 🔴 THE CONTROL IS NOT DECORATION. Refusing every `w:` principal would also make the negative
+;; pass, and would silently ban every MULTISIG founder on a module that freezes — the exact cost
+;; the design record deleted the k:-only rule to avoid. §PRED-2 proves a legitimate multi-key `keys-2`
+;; founder is still ACCEPTED, so the refusal is the PREDICATE and not the principal type.
+;; ===========================================================================
+(begin-tx "§PRED setup: a module whose function can serve as a keyset predicate")
+;; Nothing SPT-specific — this is how a custom predicate is spelled in Pact, and it is the
+;; shape a real ceremony could be handed by a mistaken or hostile operator.
+(env-data { "vac-ks": { "keys": ["vac-key"], "pred": "keys-all" } })
+(env-keys ["vac-key"])
+(define-namespace "vac" (read-keyset 'vac-ks) (read-keyset 'vac-ks))
+(namespace "vac")
+(define-keyset "vac.vac-ks" (read-keyset 'vac-ks))
+;; Governance is a real keyset, NOT a bare `true` — a weak governance cap here would trip the
+;; static gate, and rightly: this module exists to demonstrate a weak PREDICATE, and giving it
+;; weak GOVERNANCE too would muddle which weakness the test is about.
+(module vacmod "vac.vac-ks"
+ ;; A keyset predicate takes (count, matched) and returns bool. This one ignores both, which
+ ;; is what makes any keyset naming it satisfiable by anybody.
+  (defun anyone:bool (count:integer matched:integer) true))
+(commit-tx)
+
+(begin-tx "§PRED-1 a CUSTOM-PREDICATE founder beneficiary is refused")
+(env-data
+  { "vacuous": { "keys": ["f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"]
+            , "pred": "vac.vacmod.anyone" } })
+;; The two branches that would otherwise answer first are proven NOT to fire on this input, so
+;; the refusal below cannot be a different check wearing the same test name.
+(expect "§PRED-1 it really is a w: principal, so the k:/w: branch does NOT refuse it" "w:"
+  (typeof-principal (create-principal (read-keyset 'vacuous))))
+(expect "§PRED-1 and its key list is NOT empty, so the empty-keyset branch does NOT refuse it"
+  false
+  (= (take (length n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.EMPTY-KEYSET-PREFIX)
+           (create-principal (read-keyset 'vacuous)))
+     n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.EMPTY-KEYSET-PREFIX))
+;; 🔴 AND THE HARM IS REAL, NOT HYPOTHETICAL: this guard is satisfied with NO SIGNATURES.
+(env-sigs [])
+(expect "§PRED-1 the vacuous guard is satisfied by ANYBODY — enforce-guard passes unsigned" true
+  (enforce-guard (read-keyset 'vacuous)))
+(env-keys ["admin-key"])
+(expect-failure "§PRED-1: a custom-predicate founder beneficiary is REFUSED"
+  "beneficiary keyset predicate must be a built-in"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init-supply
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G
+    [ { "account": (create-principal (read-keyset 'vacuous))
+   , "amount": n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-TRANCHE } ]))
+;; STATE UNCHANGED — the ceremony did not half-run. init-supply is one-shot, so a partial run
+;; would be unrecoverable; own rollback-tx because expect-failure LEAKS WRITES through commit-tx.
+(expect-failure "§PRED-1 no tranche-lock row was written — the ceremony did not half-run"
+  "No value found in table"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-tranche "treasury"))
+;; and the one-shot gate is still UNSPENT — §PRED-2 below runs a full init-supply, which is
+;; only possible because this refusal consumed nothing.
+(rollback-tx)
+
+(begin-tx "§PRED-2 CONTROL: a legitimate MULTISIG founder is still accepted")
+;; 🔴 THIS IS THE HALF THAT KEEPS §PRED-1 HONEST. `keys-2` over three keys yields a `w:`
+;; principal too — `w:<hash>:keys-2` — so a check that simply rejected `w:` would pass §PRED-1
+;; while banning every multisig founder forever. the design record deleted the k:-only rule precisely to
+;; allow this shape; if this control ever goes red, the predicate check has over-reached.
+(env-data
+  { "multisig": { "keys": ["f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"
+                           "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+                           "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"]
+             , "pred": "keys-2" } })
+(expect "§PRED-2 a multisig founder is a w: principal, exactly like the refused one" "w:"
+  (typeof-principal (create-principal (read-keyset 'multisig))))
+(env-keys ["admin-key"])
+(expect "§PRED-2 CONTROL: the multisig founder ceremony SUCCEEDS" "supply initialized"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init-supply
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G
+    [ { "account": (create-principal (read-keyset 'multisig))
+   , "amount": n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-TRANCHE } ]))
+(rollback-tx)
+
+;; 🔴 a finding #81 IS DELETED (the design record, a later change), NOT WEAKENED. It supplied a well-formed k:
+;; principal paired with SOMEONE ELSE'S guard and asserted "beneficiary guard/principal
+;; mismatch" — the shape a copy-paste slip in a 20-chain ceremony actually produces. After
+;; the design record the ceremony receives NO guard, so the pair it mismatched cannot be built and the
+;; refusal cannot happen. A negative for an impossible refusal is a test that cannot fail.
+;;
+;; 🔴 THE SLIP IT GUARDED IS NOT MERELY UNTESTED, IT IS UNREPRESENTABLE — which is a strictly
+;; better outcome than a check, and is the reason the design record removes the input rather than
+;; validating it harder. The name<->guard binding itself still runs twice: `enforce-reserved`
+;; when the founder creates the account, and `enforce-beneficiary` at release against the guard
+;; read from that account's own row.
+
+;; ===========================================================================
+;; a finding (an internal review, MEDIUM) — A SECOND ROW-CREATING WRITER INTO `tranche-locks`
+;; EXISTS OUTSIDE THE MODULE, AND IT IS THE MODULE-ADMIN ROUTE, NOT A CAPABILITY.
+;;
+;; 🔴 WHY THE EXISTING PINS CANNOT SEE IT, stated because both look like they should:
+;; * `locktranche-compose.repl-must-fail` pins the deleted NAME `lock-tranche`.
+;; * `a probe kept out of this repo` composes `ADMIN-GOV`, the destination's own capability.
+;; Both are CAPABILITY routes. This one names no function and composes no capability: it is
+;; `(acquire-module-admin …)` followed by a direct `(insert tranche-locks …)` from top-level
+;; transaction code, in any transaction already carrying an admin signature. Deleting a name
+;; and hardening a capability closed neither half of it. ENGINE-INDEPENDENT — not fork-gated.
+;;
+;; 🔴 AND THE DAMAGE IS PERMANENT, WHICH IS WHY IT IS NOT MERELY UNTIDY. `init-supply` writes
+;; the two fixed rows with `insert`, and `insert` aborts on an existing key. One planted
+;; `"treasury"` row BEFORE the ceremony therefore makes `init-supply` fail forever — and
+;; `init-supply` is one-shot on chain 0 and this module freezes, so there is no second attempt
+;; and no repair. A stranger cannot do it (module admin needs the admin keyset), but a
+;; mis-ordered or hostile ceremony transaction can, and nothing in the tree looked.
+;;
+;; 🔴 THE FIX IS A CEREMONY CONTROL, NOT MODULE CODE, and that is a deliberate Rule 16 call.
+;; Guarding the table in-module would mean adding a check to a path that has no legitimate
+;; caller — the write already has no name. The refusal that matters has to happen BEFORE the
+;; one-shot transaction is signed, which is ops. What this block does is establish the two
+;; facts that control depends on: the hazard is real, and it is DETECTABLE from outside with a
+;; public reader. `ops/deploy/runbook.ts` acts on the second.
+;; ===========================================================================
+(begin-tx "F-12a: the module-admin route plants a tranche row with no function named")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+(env-keys ["admin-key"])
+;; DETECTION SIGNAL, BEFORE: on a clean pre-ceremony chain the row does not exist, so the
+;; public reader ABORTS. That abort is what the ceremony check reads as "clean".
+(expect-failure "a finding: pre-ceremony, get-tranche 'treasury' aborts — no row"
+  "No value found in table"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-tranche "treasury"))
+;; THE ROUTE. No capability is composed and no module function is called.
+(acquire-module-admin n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT)
+(insert n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.tranche-locks "treasury"
+  { "beneficiary": "k:dead0000000000000000000000000000000000000000000000000000000dead"
+, "total": 1.0, "released": 0.0
+, "cliff-end": (time "2026-06-02T00:00:00Z")
+, "vest-end":  (time "2026-06-03T00:00:00Z") })
+;; DETECTION SIGNAL, AFTER: the same public reader now SUCCEEDS. One `/local` call
+;; distinguishes a clean chain from a planted one, with no module change and no new function.
+(expect "a finding: the planted row is READABLE through the public reader" 1.0
+  (at 'total (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-tranche "treasury")))
+
+;; 🔴 AND THE CEREMONY IS NOW DEAD. This is the half that makes a finding permanent rather than
+;; cosmetic: `init-supply` cannot write its own "treasury" row over the planted one.
+(env-data
+  { "founder-ks": { "keys": ["f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"], "pred": "keys-all" } })
+(expect-failure "a finding: init-supply is BRICKED FOREVER by one planted row"
+ ;; Engine text, pinned with the TABLE AND KEY included so it cannot match another insert.
+  "Value already found while in Insert mode in table n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT_tranche-locks at key \"treasury\""
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init-supply
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G
+    [ { "account": (create-principal (read-keyset 'founder-ks))
+   , "amount": n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-TRANCHE } ]))
+;; 🔴 ROLLED BACK — this block plants a row and the chain must stay clean for anything later.
+(rollback-tx)
+
+(print "smartpacts-init-beneficiary-bounds: beneficiary shape and guard binding covered.")

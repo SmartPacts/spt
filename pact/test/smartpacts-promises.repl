@@ -1,0 +1,277 @@
+;; ===========================================================================
+;; PROMISE PINS — the founder page's unpinned guarantees (Rule 14(c)).
+;;
+;; WHY THIS FILE EXISTS. `.github/scripts/promise-gate.py` derives every status mark on
+;; docs/SPT-WHAT-IT-DOES.md from a named manifest, and a promise may only be marked ✅ when a
+;; test in this tree goes RED if it stops being true. The promise-mapping pass found a set of
+;; guarantees the page STATES and no test ASSERTED — each one a sentence the founder would read
+;; as a commitment while nothing in the suite defended it. This file closes the ones that are
+;; reachable from the standard fixture.
+;;
+;; 🔴 EVERY BOUND IS PINNED FROM BOTH SIDES. A refusal outside the bound proves only that
+;; SOMETHING refuses; it does not prove the bound sits where the page says. Each section
+;; therefore refuses just outside AND accepts AT the exact limit, so moving the constant in
+;; either direction turns one of the two red. A one-sided bound test passes unchanged if the
+;; limit is tightened to zero, which would break the product while the suite stayed green.
+;;
+;; The numbers are never restated here — every assertion reads the module's own defconst, so a
+;; deliberate change to a bound cannot leave this file quietly asserting the old value.
+;; Run from pact/test/.
+;; ===========================================================================
+(load "setup.repl")
+
+(begin-tx "promises: activate the sale, still CLOSED")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5)
+;; The page promises the sale ships closed; SPT-launch.repl pins that. Re-read here only
+;; because every price assertion below depends on it (set-price is refused while active).
+(expect "sale ships closed" false (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.is-active))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; A. "The price can only ever be between 0.01 and 1,000 KDA per token."
+;; PAGE: The sale / set-price. Was BUILT-UNPINNED: the band was stated to the founder and
+;; no test asserted either end, so either constant could have been edited silently.
+;; ---------------------------------------------------------------------------
+(begin-tx "A1: one tick below the floor is refused")
+(env-keys ["admin-key"])
+;; 🔴 a later change: the floor is seeded FROM THE PRICE at init, not from MIN-PRICE-INITIAL, so this
+;; fixture's floor is its launch price (0.5) — not 0.01. That is the fix for the measured
+;; one-device reserve drain: a floor unrelated to the price bounds nothing.
+(expect-failure "below MIN-PRICE"
+  "price below the 0.5 KDA/SPT floor"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-price 0.009))
+(rollback-tx)
+
+;; 🔴 A2 IS DELETED (the design record, a later change) — it pinned the page's "at most 1,000 KDA per token"
+;; ceiling, and that promise is deleted from the page in this same commit. A pin for a promise
+;; the page no longer makes is a check that cannot fail.
+;; CONTROL — the exact floor is ACCEPTED. Without it, tightening the floor upward would leave
+;; A1 green while the promise on the page became false.
+(begin-tx "A3: the exact floor is accepted")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-price
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.get-min-price))
+(expect "price is the floor" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.get-min-price)
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.get-price))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; B. "A vote must run for between 3 and 14 days, and those limits can never be changed
+;; after the contract is frozen." PAGE: Voting / create-proposal.
+;; The FREEZE half is covered by smartpacts-frozen-invariant; the NUMBERS were unpinned.
+;; ---------------------------------------------------------------------------
+(begin-tx "B1: one second under the 72h minimum is refused")
+(env-chain-data { "chain-id": (at 'chain-id (chain-data)), "block-time": (time "2026-06-01T00:00:00Z") })
+(env-keys ["admin-key"])
+(expect-failure "duration below the minimum"
+  "duration below 72h minimum"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal
+    "PD-MIN" "duration floor" "d"
+    (time "2026-06-01T00:00:00Z")
+    (add-time (time "2026-06-01T00:00:00Z")
+      (+ n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP 1.0))
+    (- n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-PROPOSAL-DURATION 1)))
+(rollback-tx)
+
+(begin-tx "B2: one second over the 14d maximum is refused")
+(env-chain-data { "chain-id": (at 'chain-id (chain-data)), "block-time": (time "2026-06-01T00:00:00Z") })
+(env-keys ["admin-key"])
+(expect-failure "duration above the maximum"
+  "duration above 14d maximum"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal
+    "PD-MAX" "duration ceiling" "d"
+    (time "2026-06-01T00:00:00Z")
+    (add-time (time "2026-06-01T00:00:00Z")
+      (+ n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP 1.0))
+    (+ n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MAX-PROPOSAL-DURATION 1)))
+(rollback-tx)
+
+(begin-tx "B3: CONTROL — both exact endpoints are accepted")
+(env-chain-data { "chain-id": (at 'chain-id (chain-data)), "block-time": (time "2026-06-01T00:00:00Z") })
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal
+  "PD-OK-MIN" "duration floor accepted" "d"
+  (time "2026-06-01T00:00:00Z")
+  (add-time (time "2026-06-01T00:00:00Z")
+    (+ n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP 1.0))
+  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-PROPOSAL-DURATION)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal
+  "PD-OK-MAX" "duration ceiling accepted" "d"
+  (time "2026-06-01T00:00:00Z")
+  (add-time (time "2026-06-01T00:00:00Z")
+    (+ n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP 1.0))
+  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MAX-PROPOSAL-DURATION)
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; C. DELETED (a later amendment, a later change).
+;; It pinned the page promise "an award round can never promise more than 0.5 KDA per
+;; token" — C1 the refusal one pico over the cap, C2 the control at exactly the cap. That
+;; promise is deleted from the founder page in this same commit, because the constant
+;; behind it is gone: the design record said prove it, and the harm the cap named was attempted on a
+;; capless module and did not reproduce (`a probe kept out of this repo`, a later amendment).
+;;
+;; 🔴 WHAT THE PAGE SAYS INSTEAD IS STRONGER, AND IT IS PINNED ELSEWHERE: fund what
+;; `funding-needed` reports, and a mistyped rate is REFUSED ON THE MONEY — measured Z-6,
+;; pinned in `an independent probe kept out of this repo` and `a probe kept out of this repo`, both of which now assert that
+;; refusal by its real message rather than a cap's.
+;; ---------------------------------------------------------------------------
+;; D. "At the cliff you get zero; it accrues after." PAGE: Locked tokens / tranche-vested.
+;; The page calls this "the vesting curve itself, as pure math", and every release, payment
+;; and availability read routes through it — so an off-by-one at the cliff would pay early
+;; on all three paths at once. It is a pure function, so the curve is pinned directly.
+;; ---------------------------------------------------------------------------
+(begin-tx "D: the vesting curve at both ends and the midpoint")
+(let* ((total 1000.0)
+       (cliff (time "2027-06-01T00:00:00Z"))
+       (vend  (time "2030-06-01T00:00:00Z"))
+       (mid   (add-time cliff (/ (diff-time vend cliff) 2.0))))
+ ;; BEFORE the cliff: nothing, not a prorated amount
+  (expect "one second before the cliff pays zero" 0.0
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.tranche-vested
+      total cliff vend (add-time cliff -1.0)))
+ ;; 🔴 AT the cliff: still zero. This is the boundary the page states in its own words
+ ;; ("At the cliff you get zero; it accrues after") and the one a `>=` would silently move.
+  (expect "at the cliff exactly, still zero" 0.0
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.tranche-vested
+      total cliff vend cliff))
+ ;; AFTER the cliff it accrues, and it is LINEAR — the midpoint is exactly half
+  (expect "the midpoint vests exactly half" 500.0
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.tranche-vested
+      total cliff vend mid))
+  (expect "at vest-end exactly, the whole total" total
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.tranche-vested
+      total cliff vend vend))
+ ;; and it never exceeds the total afterwards
+  (expect "long after vest-end, still exactly the total" total
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.tranche-vested
+      total cliff vend (add-time vend 315360000.0))))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; E. "Anyone can open an SPT account under any unused name and attach their own key,
+;; with no signature needed." PAGE: Holding and moving tokens / create-account.
+;; Stated plainly to the founder as an open door. Pinned with NO signature in the
+;; environment at all, so a future `enforce-guard` on the caller turns this red.
+;; ---------------------------------------------------------------------------
+(begin-tx "E1: an unused nickname opens with zero signatures")
+(env-data { "stranger-ks": { "keys": ["stranger-key"], "pred": "keys-all" } })
+(env-sigs [])
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-account
+  "a-plain-nickname" (read-keyset 'stranger-ks))
+(expect "the account exists and holds nothing" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "a-plain-nickname"))
+(expect "and it carries the stranger's own key" (read-keyset 'stranger-ks)
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-guard "a-plain-nickname"))
+(commit-tx)
+
+;; The BOUNDARY the page states in the same breath: a k: name derived from a key cannot be
+;; squatted this way. Without this, "anyone can open any unused name" would read as unlimited.
+(begin-tx "E2: a k: name whose key does not match is still refused")
+(env-data { "stranger-ks": { "keys": ["stranger-key"], "pred": "keys-all" } })
+(env-sigs [])
+(env-keys [])
+(expect-failure "reserved-name squat refused"
+  "SPT reserved protocol guard violation: k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-account
+    "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"
+    (read-keyset 'stranger-ks)))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; F. "transfer only reaches an account that already exists on this chain."
+;; PAGE: Holding and moving tokens. The page draws the whole distinction between
+;; `transfer` and `transfer-create` on this, and nothing asserted it.
+;; ---------------------------------------------------------------------------
+(begin-tx "F: seed a float holder through the sale")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-price 0.5)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(env-data { "buyer": { "keys": ["buyer-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "buyer" 3000.0)] }])
+(coin.transfer-create "sender00" "buyer" (read-keyset 'buyer) 3000.0)
+(env-sigs [{ "key": "buyer-key"
+        , "caps": [(coin.TRANSFER "buyer"
+                        (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 1000.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "buyer" (read-keyset 'buyer) 2000.0)
+(expect "the buyer holds 2000 SPT" 2000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "buyer"))
+(commit-tx)
+
+(begin-tx "F1: transfer to a name that does not exist is refused, and moves nothing")
+(env-sigs [{ "key": "buyer-key"
+        , "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER
+                        "buyer" "no-such-account" 1.0)] }])
+(expect-failure "receiver row absent"
+  "SPT_accounts for key: no-such-account"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer
+    "buyer" "no-such-account" 1.0))
+(expect "the sender's balance is untouched" 2000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "buyer"))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; G. "There is no per-buyer cap — one buyer can buy as many times and as much as they like."
+;; PAGE: The sale. This is a promise about an ABSENCE, and the page explains WHY the cap was
+;; removed (Sybil-circumventable). Re-adding one would be a silent product change; this
+;; turns red if it comes back.
+;; ---------------------------------------------------------------------------
+(begin-tx "G: the same buyer buys again, larger, with no cap")
+(env-sigs [{ "key": "buyer-key"
+        , "caps": [(coin.TRANSFER "buyer"
+                        (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 1500.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "buyer" (read-keyset 'buyer) 3000.0)
+(expect "both purchases landed on one account" 5000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "buyer"))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; H. THE NUMBERS THE PAGE STATES TO THE FOUNDER.
+;;
+;; 🔴 THIS SECTION EXISTS BECAUSE THE SECTIONS ABOVE DID NOT CATCH A MOVED BOUND. Every test
+;; above builds its input by READING the module's own defconst — deliberately, so a bound change
+;; is never asserted against a stale restated number. But that is exactly what makes them blind
+;; to the change that matters here: move MAX-ROUND-RATE from 0.5 to 0.6 and section C still
+;; passes, because C's input moves with it. Measured, not reasoned — the mutation was run and
+;; section C stayed GREEN while the founder page's "at most 0.5 KDA per token" became false.
+;;
+;; The page makes promises about VALUES, so the values need literal assertions. These are the
+;; only restated numbers in this file and they are restated ON PURPOSE: each is transcribed from
+;; a sentence on docs/SPT-WHAT-IT-DOES.md, so changing a constant without changing the page —
+;; or changing the page without changing the constant — turns this red. Both directions matter;
+;; the page is the deliverable, not the module.
+;; ---------------------------------------------------------------------------
+(begin-tx "H: every number the founder page states matches the module")
+;; "never below the price the sale opened at" (The sale / set-price) — a later change.
+(expect "page: the floor equals the launch price, not a constant"   0.5
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.get-min-price))
+;; "must run between 3 and 14 days" (Voting / create-proposal)
+(expect "page: a vote runs at least 3 days"  259200
+  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-PROPOSAL-DURATION)
+(expect "page: a vote runs at most 14 days" 1209600
+  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MAX-PROPOSAL-DURATION)
+;; "Voting must open at least 48 hours after announcing" (Voting / create-proposal)
+(expect "page: 48h announce-to-open gap" 172800.0
+  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)
+;; 🔴 THREE VALUE PINS DELETED HERE (the design record, a later change): "at most 0.5 KDA per token", "at most
+;; 10,000 KDA per round" and "at most 1 year away". The page no longer promises any of them
+;; because the constants are gone. The 12-HOUR FLOOR BELOW SURVIVES AND MATTERS MORE THAN IT
+;; DID — see the module's constants block: with the rate cap deleted, that runway is the only
+;; remedy for a mistyped rate the pool already covers.
+;; "the effective date must be at least 12 hours away" (Awards)
+;; The 12h floor is stated in the module as 2 x MIN-RETRACT-LEAD, so both halves are pinned.
+(expect "page: retract lead is 6 hours" 21600
+  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-RETRACT-LEAD)
+(expect "page: the 12h effective-at floor is twice the retract lead" 43200
+  (* 2 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-RETRACT-LEAD))
+;; "How many decimal places a token amount can have: 12" (Holding and moving tokens)
+(expect "page: precision is 12" 12
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.precision))
+;; "100,000 tokens, fixed" (The tokens — who gets what)
+(expect "page: total supply is 100,000" 100000.0
+  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TOTAL-SUPPLY)
+(commit-tx)
+
+(print "PROMISE PINS PASSED — price band, vote duration, award rate ceiling, vesting cliff, open account creation, transfer-to-existing, no per-buyer cap, and every number the page states")

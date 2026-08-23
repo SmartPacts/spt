@@ -1,0 +1,359 @@
+{
+  "_doc": [
+    "THE PINNED DML SURFACE OF THE DEPLOY ARTIFACT — every table, every write site, by OWNING FUNCTION.",
+    "",
+    "Checked by `dml-manifest.py --manifest`, which run-tests.sh invokes on every run. Two assertions,",
+    "and the second is the one that was missing:",
+    " 1. per table: the (op, owning-function) multiset matches `sites` exactly;",
+    " 2. COVERAGE: the set of tables pinned here matches the set of `deftable` declarations in the",
+    " module source, so a NEW TABLE cannot arrive with an unpinned writer.",
+    "",
+    "🔴 WHY IT COVERS EVERY TABLE AND NOT JUST THE FAMOUS TWO (an internal review, a finding).",
+    "Until a later change exactly two tables were pinned — `accounts` and `tallies` — and the finding that",
+    "forced this was DEMONSTRATED, not argued: a planted permissionless writer zeroing `sum-pending`",
+    "in the `state` table passed every suite and every correctness gate in the tree. `state` carries",
+    "the award solvency counters, and nothing looked at it. It was not special; 12 of the 14 tables",
+    "were in that position. Pinning the one table the finding named would have reproduced the estate's",
+    "most-repeated defect — fixing the instance and leaving the class — which is the same mistake",
+    "run-tests.sh already records at a later change (\"cover the set, not the instance\").",
+    "",
+    "🔴 A COUNT IS NOT A MANIFEST (a later change a finding). Deleting a legitimate `(update tallies …)` and",
+    "planting one inside the PERMISSIONLESS `close-proposal` kept the count at 3 and the gate printed",
+    "\"unchanged\" while the mutator set had changed. Add-only and delete-only both went red; only",
+    "RELOCATION was invisible, and relocation is what an attacker-shaped edit looks like. So each site",
+    "names its owning function, and duplicate entries are meaningful (two sites in one function).",
+    "",
+    "🔴 WHEN THIS GOES RED, EDITING THIS FILE IS ALMOST NEVER THE FIX. A mutator appearing, vanishing",
+    "or moving between functions is a DESIGN CHANGE. Change the code, or write the ADR, and only then",
+    "re-pin — in the same commit, saying which decision moved it."
+  ],
+  "modules": {
+    "pact/modules/SPT.pact": {
+      "accounts": {
+        "why": "the design record permits exactly ONE balance-increasing writer (`credit`, gated by CREDIT and fed by the still-pure `credit-plan`). Any other DML against `accounts` is a design change needing an ADR, not a manifest edit. `debit` legitimately holds TWO update sites.",
+        "sites": [
+          [
+            "write",
+            "credit"
+          ],
+          [
+            "insert",
+            "create-account"
+          ],
+          [
+            "update",
+            "claim-awards"
+          ],
+          [
+            "update",
+            "debit"
+          ],
+          [
+            "update",
+            "debit"
+          ],
+          [
+            "update",
+            "disburse-tranche"
+          ],
+          [
+            "update",
+            "release-tranche"
+          ],
+          [
+            "update",
+            "rotate"
+          ]
+        ]
+      },
+      "proposals": {
+        "why": "Proposal records. `create-proposal` inserts; `cancel-proposal` and `close-proposal` each update twice (the row plus its active-slot bookkeeping). `close-proposal` is PERMISSIONLESS by design (the design record), so a new writer reachable from it is reachable by anyone.",
+        "sites": [
+          [
+            "insert",
+            "create-proposal"
+          ],
+          [
+            "update",
+            "cancel-proposal"
+          ],
+          [
+            "update",
+            "cancel-proposal"
+          ],
+          [
+            "update",
+            "close-proposal"
+          ],
+          [
+            "update",
+            "close-proposal"
+          ]
+        ]
+      },
+      "account-votes": {
+        "why": "How many of an account's tokens are CURRENTLY voting, per proposal. Written by `cast-vote` and released by `debit` — the pairing that makes a transfer surrender the moved tokens' vote (the design record/the design record, and the fix for a defect). A third writer breaks the release invariant silently.",
+        "sites": [
+          [
+            "write",
+            "cast-vote"
+          ],
+          [
+            "update",
+            "debit"
+          ]
+        ]
+      },
+      "vote-delegates": {
+        "why": "the design record optional dedicated voting key. Set by `set-vote-key`, cleared by `clear-vote-key`, and auto-revoked by `rotate` — that third site is the security-relevant one: rotating the account guard must not leave a stale hot key able to vote.",
+        "sites": [
+          [
+            "write",
+            "set-vote-key"
+          ],
+          [
+            "update",
+            "clear-vote-key"
+          ],
+          [
+            "update",
+            "rotate"
+          ]
+        ]
+      },
+      "tallies": {
+        "why": "🔴 THE WHOLE PRODUCT RESTS ON `tallies` HAVING EXACTLY TWO MUTATORS — `cast-vote` and the release loop inlined in `debit`. `create-proposal`'s zero-row insert is a WRITER but not a MUTATOR: it cannot overwrite, because the `proposals` insert aborts first. A third mutator silently voids the product. `cast-vote` legitimately holds two update sites (the re-vote pair, remove-old then add-current; the second plan READS what the first wrote, so the order is load-bearing).",
+        "sites": [
+          [
+            "insert",
+            "create-proposal"
+          ],
+          [
+            "update",
+            "cast-vote"
+          ],
+          [
+            "update",
+            "cast-vote"
+          ],
+          [
+            "update",
+            "debit"
+          ]
+        ]
+      },
+      "prop-index": {
+        "why": "The small active-proposal index the transfer release-loop iterates. Its writer is deliberately INLINED at each of the three lifecycle sites rather than factored into a helper (the project notes, the design record line) — so three write sites is the pinned shape, not a smell. Admin-created, never attacker-inflatable.",
+        "sites": [
+          [
+            "write",
+            "cancel-proposal"
+          ],
+          [
+            "write",
+            "close-proposal"
+          ],
+          [
+            "write",
+            "create-proposal"
+          ]
+        ]
+      },
+      "prop-count": {
+        "why": "Singleton counter for the active-proposal index. Seeded by both init paths (`init` on spokes, `init-supply` on chain 0) and moved by the three lifecycle functions that write `prop-index`. Its site set must track `prop-index`'s or the index and its length disagree.",
+        "sites": [
+          [
+            "insert",
+            "init"
+          ],
+          [
+            "insert",
+            "init-supply"
+          ],
+          [
+            "update",
+            "cancel-proposal"
+          ],
+          [
+            "update",
+            "close-proposal"
+          ],
+          [
+            "update",
+            "create-proposal"
+          ]
+        ]
+      },
+      "state": {
+        "why": "🔴 THE TABLE COLD AUDIT #14 a finding FOUND UNGUARDED, WITH A WORKING DEMONSTRATION: a planted permissionless writer zeroing `sum-pending` passed every suite and every correctness gate. `state` carries `reward-per-token`, `circulating-supply`, `rounds-applied`, `total-distributed`, `sum-pending` and `sum-debt` — the the design record exact-solvency counters, so a wrong write here does not corrupt one balance, it makes `fund-awards`'s \"funded means every claim is payable\" guarantee false for the whole chain. Two inserts (the two init paths) and six updates, every one on a value-moving path. the design record (a later change) adds FOUR more updaters and they are all snapshot lifecycle: `advance-snapshot` twice (the settle and the seal are separate writes), `schedule-snapshot` and `cancel-snapshot`. `advance-snapshot` is PERMISSIONLESS by design — a chain with no activity must still be sealable by anyone — so it is the one unauthenticated writer on this table and the reason the manifest names owning functions rather than counting. 🔴 the design record part 2 (a later change) adds ONE more updater, `set-runway`, and it is a different KIND from every other site here: the others move value or advance the snapshot lifecycle, this one moves a LIMIT. It is the only writer on this table gated at ADMIN-GOV (two devices) rather than ADMIN-OPS or permissionless, and that asymmetry is the safety property — if it ever appears under a one-device tier, a single key could shorten the runway and then declare inside it, reassembling the no-remedy state from two legal steps.",
+        "sites": [
+          [
+            "insert",
+            "init"
+          ],
+          [
+            "insert",
+            "init-supply"
+          ],
+          [
+            "update",
+            "advance-snapshot"
+          ],
+          [
+            "update",
+            "advance-snapshot"
+          ],
+          [
+            "update",
+            "apply-round"
+          ],
+          [
+            "update",
+            "cancel-snapshot"
+          ],
+          [
+            "update",
+            "claim-awards"
+          ],
+          [
+            "update",
+            "credit"
+          ],
+          [
+            "update",
+            "debit"
+          ],
+          [
+            "update",
+            "fund-awards"
+          ],
+          [
+            "update",
+            "recover-pool-surplus"
+          ],
+          [
+            "update",
+            "schedule-snapshot"
+          ],
+          [
+            "update",
+            "set-runway"
+          ]
+        ]
+      },
+      "award-rounds": {
+        "why": "Declared award rounds (the design record). `declare-round` inserts; `retract-round` is the ONLY way back and works only before a round takes effect — it zeroes the rate and rewinds `effective-at` rather than deleting, because Pact has no row deletion. A new writer here is a new way to change a round's economics after declaration.",
+        "sites": [
+          [
+            "insert",
+            "declare-round"
+          ],
+          [
+            "update",
+            "retract-round"
+          ]
+        ]
+      },
+      "round-count": {
+        "why": "Singleton: how many rounds have been declared on this chain. Seeded by both init paths and advanced by `declare-round` only — note `retract-round` deliberately does NOT appear, because a retraction never rewinds the count.",
+        "sites": [
+          [
+            "insert",
+            "init"
+          ],
+          [
+            "insert",
+            "init-supply"
+          ],
+          [
+            "update",
+            "declare-round"
+          ]
+        ]
+      },
+      "tranche-locks": {
+        "why": "the design record time-locked reserves (cliff then linear vest). Created once by `init-supply`; moved only by the permissionless `release-tranche` and the admin `disburse-tranche`. A fourth writer is a new path to 70,000+ SPT.",
+        "sites": [
+          [
+            "insert",
+            "init-supply"
+          ],
+          [
+            "update",
+            "disburse-tranche"
+          ],
+          [
+            "update",
+            "release-tranche"
+          ]
+        ]
+      },
+      "init-state": {
+        "why": "The once-only latch. Exactly two inserts, one per init path — and INSERT is the mechanism: a second init aborts on the duplicate key rather than relying on a read-then-check. An `update` or `write` appearing here would make initialisation re-runnable.",
+        "sites": [
+          [
+            "insert",
+            "init"
+          ],
+          [
+            "insert",
+            "init-supply"
+          ]
+        ]
+      },
+      "snapshots": {
+        "why": "🔴 the design record's record-date generations: `circ` is the float LATCHED at the record instant — the denominator `declare-round` enforces the rate over and the operator funds against. INSERT only in `advance-snapshot` (a generation seals exactly once; an insert on a duplicate key aborts rather than silently re-latching a float that has moved), and the `rate` field is written by exactly TWO functions: `declare-round` binds it and `retract-round` rewinds it. 🔴 BOTH SIDES OR NEITHER — the award-rounds row drives the ACCRUAL and this row drives the CORRECTION, so a rate written to one and not the other pays on the wrong denominator forever. A third writer here can re-price a sealed generation after the money was funded.",
+        "sites": [
+          [
+            "insert",
+            "advance-snapshot"
+          ],
+          [
+            "update",
+            "declare-round"
+          ],
+          [
+            "update",
+            "retract-round"
+          ]
+        ]
+      }
+    },
+    "pact/modules/SPT-launch.pact": {
+      "config": {
+        "why": "Singleton sale config (`active`, `price`). Written once by `init`, then only by the three admin operations `pause`, `resume-sale` and `set-price`. A new writer is a new way to move the price or reopen a closed sale. 🔴 the design record part 2 (a later change) adds `set-min-price`, which writes the FLOOR rather than the price. It is the only ADMIN-GOV writer on this table; `set-price`, `pause` and `resume-sale` are all ADMIN-OPS. A lowered floor followed by a lowered price is the measured reserve drain reassembled from two legal steps, which is why the two powers must not token a tier and why this row names the owner rather than counting writers.",
+        "sites": [
+          [
+            "insert",
+            "init"
+          ],
+          [
+            "update",
+            "pause"
+          ],
+          [
+            "update",
+            "resume-sale"
+          ],
+          [
+            "update",
+            "set-min-price"
+          ],
+          [
+            "update",
+            "set-price"
+          ]
+        ]
+      },
+      "init-state": {
+        "why": "The sale's once-only latch — same insert-aborts-on-duplicate mechanism as the token's. One site, one init path (the design record D1: the sale initialises on the HUB CHAIN ONLY).",
+        "sites": [
+          [
+            "insert",
+            "init"
+          ]
+        ]
+      }
+    }
+  }
+}

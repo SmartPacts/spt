@@ -1,0 +1,838 @@
+;; ===========================================================================
+;; smartpacts-governance REPL suite — LIVE-VOTE governance (the design record), now merged into
+;; SPT. Vote weight = current tokens; transfers release voted tokens from the
+;; tally; re-vote updates in place; dust cannot suppress. Proposals + tally hub-only.
+;; (Cross-chain cast-vote-xchain needs SPV -> validated on DEVNET, not here.)
+;; ===========================================================================
+(load "setup.repl")
+
+;; seed alice 3000, bob 2000, carol 500 (founder reserve = 5000)
+(begin-tx "activate launch for seeding")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(commit-tx)
+(begin-tx "seed voters via launch (alice 2500, bob 2000, carol 200)")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+       , "bob":   { "keys": ["bob-key"],   "pred": "keys-all" }
+       , "carol": { "keys": ["carol-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1250.0) (coin.TRANSFER "sender00" "bob" 1000.0) (coin.TRANSFER "sender00" "carol" 100.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1250.0)
+(coin.transfer-create "sender00" "bob"   (read-keyset 'bob)   1000.0)
+(coin.transfer-create "sender00" "carol" (read-keyset 'carol) 100.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 1250.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "alice" (read-keyset 'alice) 2500.0)
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 1000.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "bob" (read-keyset 'bob) 2000.0)
+(env-sigs [{ "key": "carol-key", "caps": [(coin.TRANSFER "carol" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 100.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "carol" (read-keyset 'carol) 200.0)
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+(commit-tx)
+
+;; --- proposal duration bounds + explicit created-at (the design record: the SAME payload is
+;; replicated to every chain, so close-at is one shared timestamp) ---
+(begin-tx "GOV: duration bounds + created-at validation")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) })
+(expect-failure "duration below 72h"
+  "duration below 72h minimum"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal "PB" "t" "d" (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) (add-time (time "2026-06-02T00:00:00Z") 1.0) 100))
+(expect-failure "duration above 14d"
+  "duration above 14d maximum"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal "PB" "t" "d" (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) (add-time (time "2026-06-02T00:00:00Z") 1.0) 2000000))
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal "P1" "Adopt plan" "desc" (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) (add-time (time "2026-06-02T00:00:00Z") 1.0) 259200)
+(expect-failure "duplicate id rejected"
+  "Error during database operation: Value already found while in Insert mode in table n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT_proposals at key \"P1\""
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal "P1" "t" "d" (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) (add-time (time "2026-06-02T00:00:00Z") 1.0) 259200))
+(commit-tx)
+
+;; --- LIVE vote: weight = current tokens ---
+(begin-tx "GOV: alice votes yes 3000, bob votes no 2000")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })
+(env-keys ["alice-key"])
+(expect "alice votes" "vote cast" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "alice" "P1" true))
+(env-keys ["bob-key"])
+(expect "bob votes" "vote cast" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "bob" "P1" false))
+(let ((r (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "P1")))
+  (expect "yes 2500" 2500.0 (at 'yes r))
+  (expect "no 2000" 2000.0 (at 'no r))
+  (expect "participation 4500" 4500.0 (+ (at 'yes r) (at 'no r)))
+ ;; quorum-met / passed DELETED with QUORUM (the design record Decision 2). What the contract can
+ ;; still say is the only thing it ever really knew: this chain's yes and no.
+  (expect "yes leads on this chain" true (> (at 'yes r) (at 'no r))))
+(commit-tx)
+
+;; --- vote-stealing + non-existent + zero-weight + excluded rejected ---
+(begin-tx "GOV: rejections")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T01:00:00Z") })
+(env-keys ["intruder-key"])
+(expect-failure "vote-stealing blocked (guard)"
+  "neither account guard nor registered vote key satisfied" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "alice" "P1" true))
+(env-keys ["ghost-key"])
+(expect-failure "non-existent account rejected"
+  "No value found in table n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT_accounts for key: ghost" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "ghost" "P1" true))
+(env-keys ["admin-key"])
+;; 🔴 RENAMED BY a later change, AND THE OLD NAME IS THE LESSON. This was titled "excluded treasury
+;; cannot vote (guard unacquirable)" and an internal review named it as coverage for
+;; `"excluded reserve cannot vote"`. IT IS NOT, AND NEVER WAS: it asserts the VOTE GUARD's
+;; message, which fires FIRST, so it stays green with the exclusion enforce DELETED — measured.
+;; The comment beside it was honest ("the guard check fires first ... 'excluded' is the
+;; backstop") while the TITLE claimed the backstop was under test. A title is what a reader and
+;; an the reviewer go by, so the title is what was wrong. The real pin is §EXCL below.
+(expect-failure "the VOTE guard alone refuses the treasury — it cannot even authenticate"
+  "neither account guard nor registered vote key satisfied"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-ACCOUNT "P1" true))
+(commit-tx)
+
+;; ===========================================================================
+;; §EXCL — a later change: "excluded reserve cannot vote" (token:2096). THE REAL PIN.
+;;
+;; 🔴 THE CHECK ABOVE STOPS AT THE FRONT DOOR. `cast-vote` opens with
+;; `(with-capability (VOTE voter) …)`, and VOTE enforces the voter's own guard — for a reserve
+;; that is a CAPABILITY GUARD over a module-internal cap, so ordinary transaction code cannot
+;; satisfy it and every call dies there. The exclusion enforce sits four checks further in and
+;; nothing in the suite had ever reached it: an internal review's sweep deleted it and 0 suites went red.
+;;
+;; TO PIN IT, THE VOTE GUARD MUST BE SATISFIED FIRST. `test-capability` grants
+;; `TREASURY-GUARD`, which is exactly what `TREASURY-G` — the account's stored guard — is built
+;; over, so `enforce-guard` passes and execution continues to the exclusion check.
+;;
+;; 🔴 THIS ROUTE IS ENGINE-INDEPENDENT ON PURPOSE. It uses REPL harness machinery, not the
+;; a defect in an earlier engine, so it keeps working after Chainweb32 and must NOT be
+;; triaged as a fork-gated probe. The ATTACKER-reachable route — a foreign module composing the
+;; same weak cap, which is how an internal review measured it — is pinned separately in
+;; a probe kept out of this repo, where the engine-dependent labelling belongs.
+;;
+;; 🔴 WHY THE BACKSTOP IS LOAD-BEARING RATHER THAN BELT-AND-BRACES: `set-vote-key`'s own
+;; comment justifies tolerating a forged VOTE-KEY-SET on a reserve with "No voting effect
+;; (cast-vote refuses an excluded reserve)". That sentence IS this enforce. With it deleted,
+;; an internal review measured an unsigned caller casting the treasury's 55,000 SPT into a live tally.
+;; ===========================================================================
+(begin-tx "§EXCL the exclusion check refuses even once the VOTE guard is satisfied")
+;; Own transaction: `test-capability` grants for the rest of the tx, and a granted reserve
+;; guard leaking into later assertions would weaken every one of them silently.
+(env-sigs [])
+(test-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-GUARD))
+;; CONTROL FIRST: prove the guard really is satisfied now, so the refusal below cannot be the
+;; VOTE guard wearing a new test name. This is the check the two mis-titled negatives skipped.
+(expect "§EXCL the treasury's own guard IS satisfied — we are past the VOTE gate" true
+  (enforce-guard (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.account-guard
+                   n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-ACCOUNT)))
+(expect "§EXCL and the treasury holds real weight, so it is not refused for having none" true
+  (> (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance
+       n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-ACCOUNT) 0.0))
+;; Snapshot the tally BEFORE the refusal, in a `let` — a top-level `defconst` evaluates in a
+;; read-only frame and cannot read a table (measured: "Operation disallowed in read-only or
+;; sys-only mode"). A literal 0.0 would also be WRONG here: this world already carries alice's
+;; live vote, and an assertion wrong about the baseline proves nothing about the delta.
+;; Own rollback-tx below because expect-failure LEAKS WRITES through commit-tx.
+(let ((before (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "P1")))
+ ;; 🔴 THE PIN. Authenticated, funded, and still refused — by the exclusion check, nothing else.
+  (expect-failure "§EXCL: an authenticated, funded excluded reserve is STILL refused"
+    "excluded reserve cannot vote"
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote
+      n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-ACCOUNT "P1" true))
+  (expect "§EXCL the tally is unchanged by the refusal — no phantom weight entered" true
+    (= (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "P1") before)))
+(rollback-tx)
+
+;; --- RE-VOTE updates in place (alice flips to no) ---
+(begin-tx "GOV: alice re-votes (flip yes->no); tally updates in place")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T02:00:00Z") })
+(env-keys ["alice-key"])
+(expect "alice re-votes" "vote cast" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "alice" "P1" false))
+(let ((r (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "P1")))
+ ;; yes loses alice's 2500 -> 0; no gains 2500 -> 4500
+  (expect "yes now 0 (alice flipped)" 0.0 (at 'yes r))
+  (expect "no now 4500" 4500.0 (at 'no r))
+  (expect "participation still 4500 (no double count)" 4500.0 (+ (at 'yes r) (at 'no r))))
+(env-keys ["alice-key"])   ; flip alice back to yes for the transfer tests
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "alice" "P1" true)
+(commit-tx)
+
+;; ===========================================================================
+;; THE INVARIANT — transfer releases the voted tokens from the tally (no double-vote).
+;; State now: alice yes 2500, bob no 2000. alice sends 1000 to carol.
+;; ===========================================================================
+(begin-tx "GOV: alice (voted yes 2500) sends 1000 to carol -> tally releases 1000")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T03:00:00Z") })
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" "carol" 1000.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "alice" "carol" 1000.0)
+(let ((r (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "P1")))
+  (expect "yes dropped by 1000 -> 1500 (alice's moved tokens released)" 1500.0 (at 'yes r)))
+(expect "alice recorded vote now 1500" 1500.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-weight "alice" "0" "P1"))
+(expect "carol received 1000 but has NOT voted (weight 0)" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-weight "carol" "0" "P1"))
+(commit-tx)
+
+(begin-tx "GOV: carol votes her 1200 (200 seed + 1000 received) — counted ONCE")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T04:00:00Z") })
+(env-keys ["carol-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "carol" "P1" true)
+(let ((r (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "P1")))
+ ;; yes = alice 1500 + carol 1200 = 2700 ; no = bob 2000
+  (expect "yes 2700 (no double count from the transfer)" 2700.0 (at 'yes r))
+  (expect "no 2000" 2000.0 (at 'no r))
+  (expect "total votes <= circulating"
+    true (<= (+ (at 'yes r) (at 'no r)) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))))
+(commit-tx)
+
+;; --- ATTACK: transfer-then-revote double-vote is CLOSED (the SA gap) ---
+;; alice sends all her 1500 to a fresh account, then tries to re-vote with 0 tokens.
+(begin-tx "GOV: transfer-then-revote double-vote blocked")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T05:00:00Z") })
+(env-data { "dave": { "keys": ["dave-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" "dave" 1500.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create "alice" "dave" (read-keyset 'dave) 1500.0)
+(let ((r (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "P1")))
+ ;; alice's full 1500 released -> yes = carol 1200 only
+  (expect "yes 1200 after alice sent everything (her vote fully released)" 1200.0 (at 'yes r)))
+(env-keys ["alice-key"])
+(expect-failure "alice cannot vote with 0 tokens" "no voting weight"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "alice" "P1" true))
+;; dave (received 1500) votes -> counted once; NO double count with alice's released vote
+(env-keys ["dave-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "dave" "P1" true)
+(let ((r (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "P1")))
+  (expect "yes = carol 1200 + dave 1500 = 2700 (no double-vote from the SA transfer gap)"
+    2700.0 (at 'yes r))
+  (expect "total votes <= circulating (final)"
+    true (<= (+ (at 'yes r) (at 'no r)) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))))
+(commit-tx)
+
+;; --- DUST cannot suppress: dust to a voter leaves their vote untouched ---
+(begin-tx "GOV: dust to dave does not change his vote")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T06:00:00Z") })
+(env-sigs [{ "key": "bob-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "bob" "dave" 0.000000000001)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "bob" "dave" 0.000000000001)
+(expect "dave's recorded vote unchanged by the dust he received" 1500.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-weight "dave" "0" "P1"))
+;; bob SENT the dust (a debit) -> his own vote releases by the dust (1e-12), still ~2000
+(let ((r (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "P1")))
+  (expect "no ~2000 (bob's tiny send released 1e-12)" 1999.999999999999 (at 'no r)))
+(commit-tx)
+
+;; --- deadline + close/cancel lifecycle ---
+(begin-tx "GOV: vote after deadline rejected")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-06T00:00:00Z") })
+(env-keys ["dave-key"])
+(expect-failure "voting closed"
+  "voting closed" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "dave" "P1" true))
+(commit-tx)
+(begin-tx "GOV: close + guards")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-06T00:00:00Z") })
+(expect "close P1" "proposal closed" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.close-proposal "P1"))
+(expect-failure "re-close rejected"
+  "only active can close" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.close-proposal "P1"))
+(commit-tx)
+(begin-tx "GOV: vote on closed rejected")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-06T00:00:00Z") })
+(env-keys ["dave-key"])
+(expect-failure "proposal not active"
+  "proposal not active" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "dave" "P1" true))
+(commit-tx)
+
+;; --- quorum NOT met: a fresh proposal with only a sub-quorum vote ---
+(begin-tx "GOV: quorum not met")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal "PQ" "Quorum test" "d" (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) (add-time (time "2026-06-02T00:00:00Z") 1.0) 259200)
+(commit-tx)
+(begin-tx "GOV: only carol (1200) votes PQ -> below 4000 quorum")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })
+(env-keys ["carol-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "carol" "PQ" true)
+(let ((r (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "PQ")))
+  (expect "participation 1200" 1200.0 (+ (at 'yes r) (at 'no r)))
+ ;; There is no on-chain quorum any more (the design record Decision 2): a thin turnout is simply a
+ ;; thin turnout, reported honestly, and the threshold lives in the charter.
+  (expect "a thin turnout is still recorded exactly" 1200.0 (+ (at 'yes r) (at 'no r))))
+(commit-tx)
+
+;; --- cancel lifecycle ---
+(begin-tx "GOV: cancel lifecycle")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal "PC" "Cancel test" "d" (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) (add-time (time "2026-06-02T00:00:00Z") 1.0) 259200)
+(expect "cancel active ok" "proposal cancelled" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cancel-proposal "PC"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })
+(env-keys ["carol-key"])
+(expect-failure "vote on cancelled rejected"
+  "proposal not active" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "carol" "PC" true))
+(env-keys ["admin-key"])
+(expect-failure "re-cancel non-active rejected"
+  "only active can cancel" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cancel-proposal "PC"))
+(commit-tx)
+
+;; --- a finding (the reviewer): tally is FROZEN at close-at — a transfer PAST the voting deadline
+;; does NOT release votes / move the tally, so get-results is final even before the admin
+;; closes the proposal. Uses a fresh holder `frank` seeded here. ---
+(begin-tx "F1 seed frank 300 + create PF; frank votes 300")
+(env-data { "frank": { "keys": ["frank-key"], "pred": "keys-all" }
+       , "sink":  { "keys": ["sink-key"],  "pred": "keys-all" } })
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-10T00:00:00Z") })
+;; seed frank 300 via launch (own tx — commit so signer state is clean before create-proposal)
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "frank" 150.0)] }])
+(coin.transfer-create "sender00" "frank" (read-keyset 'frank) 150.0)
+(env-sigs [{ "key": "frank-key", "caps": [(coin.TRANSFER "frank" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 150.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "frank" (read-keyset 'frank) 300.0)
+(commit-tx)
+(begin-tx "F1 create PF")
+(env-chain-data { "chain-id": "0", "block-time": (add-time (time "2026-06-10T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) })
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal "PF" "freeze test" "d" (add-time (time "2026-06-10T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) (add-time (time "2026-06-10T00:00:00Z") 1.0) 259200)   ; created 06-10, closes 06-13
+(commit-tx)
+(begin-tx "F1 frank votes 300 within the window")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-11T00:00:00Z") })
+(env-keys ["frank-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "frank" "PF" true)
+(let ((r (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "PF"))) (expect "PF yes 300 before close" 300.0 (at 'yes r)))
+(commit-tx)
+(begin-tx "F1 frank transfers all 300 AFTER close-at -> tally MUST stay 300 (frozen)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-14T00:00:00Z") })  ; > close-at 06-13
+(env-data { "sink": { "keys": ["sink-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "frank-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "frank" "sink" 300.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create "frank" "sink" (read-keyset 'sink) 300.0)
+(let ((r (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "PF")))
+  (expect "a finding FIX: tally frozen at close-at — post-deadline transfer did NOT release the vote"
+    300.0 (at 'yes r)))
+(commit-tx)
+
+;; --- deindex: ending a proposal removes it from the active release-loop set ---
+;; a later change bounded the lifecycle to the proposal's own clock, so the two transitions are
+;; now exercised on the side of close-at where each is legal: cancel INSIDE the window
+;; (below), close AFTER it (next tx). Both must swap-and-pop identically, since the
+;; release-loop bound depends on the index shrinking either way.
+(begin-tx "GOV: cancel removes proposal from the active index (bounded release-loop)")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal "PX" "t" "d" (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) (add-time (time "2026-06-02T00:00:00Z") 1.0) 259200)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal "PY" "t" "d" (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) (add-time (time "2026-06-02T00:00:00Z") 1.0) 259200)
+(let ((before (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-prop-count)))
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cancel-proposal "PX")
+  (expect "active-proposal count decremented on cancel" (- before 1) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-prop-count)))
+;; PY (was the tail, swapped into PX's slot) is still active + votable
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })
+(env-keys ["carol-key"])
+(expect "PY still votable after PX was swapped-and-popped" "vote cast"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "carol" "PY" true))
+(expect-failure "PX (cancelled) not votable"
+  "proposal not active" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "carol" "PX" true))
+(commit-tx)
+
+(begin-tx "GOV: close AFTER close-at deindexes the same way")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-06T00:00:00Z") })   ; PY closed 06-05
+(let ((before (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-prop-count)))
+  (expect "close PY once its deadline has passed" "proposal closed"
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.close-proposal "PY"))
+  (expect "active-proposal count decremented on close" (- before 1) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-prop-count)))
+(commit-tx)
+
+;; ===========================================================================
+;; CHAIN-LOCAL VOTING (the design record) — the same live-vote machinery on a NON-hub chain.
+;; NOTE: the REPL tokens ONE DB, so "chain 5" here tokens tables with chain 0 —
+;; this exercises the code paths (no hub enforce; vkey chain-scoping; local release;
+;; local freeze), NOT per-chain isolation. Isolation + SPV are DEVNET-only.
+;; ===========================================================================
+(begin-tx "CL: admin announces PL on chain 5 (identical payload as everywhere)")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "5", "block-time": (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) })
+(expect "replica announced off-hub" "proposal created"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal "PL" "chain-local" "d" (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) (add-time (time "2026-06-02T00:00:00Z") 1.0) 259200))
+(commit-tx)
+
+(begin-tx "CL: dave votes PL on chain 5 with his CURRENT local tokens")
+(env-chain-data { "chain-id": "5", "block-time": (time "2026-06-03T00:00:00Z") })
+(env-keys ["dave-key"])
+(expect "off-hub vote accepted (no hub enforce)" "vote cast"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "dave" "PL" true))
+(expect "vote recorded under chain-5 scope" 1500.000000000001
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-weight "dave" "5" "PL"))
+(expect "chain-0 scope untouched for PL" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-weight "dave" "0" "PL"))
+(commit-tx)
+
+(begin-tx "CL: dave's transfer on chain 5 releases his chain-5 vote (a finding core mechanics)")
+(env-chain-data { "chain-id": "5", "block-time": (time "2026-06-04T00:00:00Z") })
+(env-sigs [{ "key": "dave-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "dave" "sink" 500.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "dave" "sink" 500.0)
+(expect "chain-5 vote released by the moved 500" 1000.000000000001
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-weight "dave" "5" "PL"))
+(expect "chain-5 tally dropped in step" 1000.000000000001
+  (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "PL")))
+(expect "receiver (sink) unvoted on chain 5" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-weight "sink" "5" "PL"))
+(commit-tx)
+
+(begin-tx "CL: chain-5 tally FROZEN at close-at (post-deadline transfer releases nothing)")
+(env-chain-data { "chain-id": "5", "block-time": (time "2026-06-06T00:00:00Z") })  ; > close 06-05
+(env-sigs [{ "key": "dave-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "dave" "sink" 1000.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "dave" "sink" 1000.0)
+(expect "frozen: post-close transfer did not release the chain-5 vote" 1000.000000000001
+  (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "PL")))
+(commit-tx)
+
+;; ===========================================================================
+;; AGGREGATION (the design record) — post-close, the hub's own frozen tally is recorded into
+;; the canonical aggregate, permissionlessly. (Report-path attack boundaries are in
+;; spt-attacks-vgrief V8/V9; the 19 xchain reports are SPV — devnet-only.)
+;; ===========================================================================
+(begin-tx "RECORD: `frozen` is a close-at test, NOT a status test")
+;; This is the residue the design record 3c calls out: `status` stays "active" past close-at until
+;; SOMEBODY PAYS for close-proposal, so an off-chain summer keying on status either refuses
+;; a final result or sums a live one. Proven here on a proposal nobody has closed.
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (add-time (time "2026-06-01T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal
+  "FRZ" "freeze probe" "status must not be the freeze test"
+  (add-time (time "2026-06-01T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) (add-time (time "2026-06-01T00:00:00Z") 1.0) 259200)
+;; before close-at: not frozen
+(let ((v (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-record "FRZ")))
+  (expect "FRZ: not frozen during the window" false (at 'frozen v))
+  (expect "FRZ: status active during the window" "active" (at 'status v)))
+;; past close-at, with NO close-proposal transaction anywhere
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-10T00:00:00Z") })
+(let ((v (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-record "FRZ")))
+  (expect "FRZ: FROZEN past close-at although nobody closed it" true (at 'frozen v))
+  (expect "FRZ: and status is STILL active — the two are independent" "active" (at 'status v)))
+(commit-tx)
+
+(begin-tx "RECORD: vote-record is the product — self-describing, and frozen at close-at")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-07T00:00:00Z") })
+(env-keys ["carol-key"])   ; anyone may read; no privileged access
+;; This replaces the deleted "permissionless hub report" block. The claim is no longer
+;; "the aggregate copied the frozen tally" — there is no aggregate. It is "one read tells
+;; an the reviewer everything needed to sum this chain and prove the replica matches".
+(let ((v (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-record "P1"))
+      (r (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "P1")))
+  (expect "RECORD: the replica exists here" true (at 'exists v))
+  (expect "RECORD: yes matches the tally read" (at 'yes r) (at 'yes v))
+  (expect "RECORD: no matches the tally read"  (at 'no r)  (at 'no v))
+  (expect "RECORD: this chain is named in the row" "0" (at 'chain v))
+  (expect "RECORD: FROZEN past close-at, regardless of whether anyone paid to close"
+    true (at 'frozen v))
+  (expect "RECORD: the digest is non-empty and stable"
+    (at 'digest v) (at 'digest (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-record "P1"))))
+;; A MISSING replica must return a sentinel, not abort — this is what lets an the reviewer tell
+;; "chain 7 never got the proposal" from "chain 7 is unreachable". It aborted before the design record.
+(let ((m (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-record "NEVER-ANNOUNCED")))
+  (expect "RECORD: a missing replica reports exists:false" false (at 'exists m))
+  (expect "RECORD: a missing replica has an empty digest" "" (at 'digest m))
+  (expect "RECORD: a missing replica is not frozen" false (at 'frozen m))
+  (expect "RECORD: and carries no votes" 0.0 (+ (at 'yes m) (at 'no m))))
+;; CONTROL: the digest must actually discriminate, or the 20-chain equality check is theatre.
+;; 🔴 THIS CONTROL WAS ITSELF THEATRE UNTIL (survived both skeptics). It
+;; compared P1 against "P2" — an id NEVER CREATED, in this suite or setup.repl. `vote-record`
+;; is total by design and returns the missing-replica sentinel `""` for an unknown id, so the
+;; comparison was `<real digest> != ""`, which holds on ANY module, including one whose digest
+;; is a hard-coded constant. The control that exists to prove discrimination proved nothing.
+;; It now compares two proposals that BOTH EXIST and differ only in their content.
+(expect "RECORD: both proposals in this control actually exist" true
+  (and (at 'exists (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-record "P1"))
+       (at 'exists (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-record "PQ"))))
+(expect "RECORD: a different proposal has a different digest" false
+  (= (at 'digest (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-record "P1"))
+     (at 'digest (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-record "PQ"))))
+;; And the sentinel is still the sentinel — asserted separately rather than conflated with
+;; discrimination, which is exactly how the two got mixed up in the first place.
+(expect "RECORD: an unknown id returns the empty-digest sentinel, not a real digest" ""
+  (at 'digest (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-record "P2")))
+(commit-tx)
+
+;; ===========================================================================
+;; a later change — THE PROPOSAL LIFECYCLE IS BOUNDED BY close-at, BOTH DIRECTIONS.
+;; ---------------------------------------------------------------------------
+;; Pre-fix, `status` stayed "active" until an admin close tx landed, so BOTH admin
+;; transitions could cross the deadline and both corrupted the canonical result:
+;; * cancel AFTER close-at -> the frozen result was already public, and cancelling
+;; made enforce-reportable reject every report forever (measured: yes 4500 / no 0
+;; closed, cancelled, get-final-results pinned at 0/0).
+;; * close BEFORE close-at -> froze THIS chain's tally early, disenfranchising every
+;; remaining holder mid-window, while the truncated tally still reported into the
+;; canonical aggregate as legitimate (measured: closed 2 days early with yes 2500).
+;; Each negative asserts the STATE IS UNCHANGED, not merely that an error was raised —
+;; the claim is that the outcome survives the attempt, not that a string came back.
+;; ===========================================================================
+(begin-tx "a later change setup: PZ carries a real, quorum-passing result")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (add-time (time "2026-06-20T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal
+  "PZ" "Lifecycle" "d" (add-time (time "2026-06-20T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) (add-time (time "2026-06-20T00:00:00Z") 1.0) 259200)   ; open-at 2026-06-20T00:00:01, close-at 2026-06-23T00:00:01
+;; the design record: announce and vote are in one tx here, so the clock must cross open-at between them.
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-20T00:00:01Z") })
+(env-keys ["bob-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "bob" "PZ" true)
+(commit-tx)
+
+(begin-tx "a later change N-1: close BEFORE close-at is rejected, and voting stays open")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-21T00:00:00Z") })  ; < close-at
+(env-keys ["admin-key"])
+(expect-failure "early close rejected" "cannot close before voting has ended"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.close-proposal "PZ"))
+(expect "N-1: status untouched by the rejected close" "active"
+  (at 'status (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.proposal-details "PZ")))
+;; The real damage was disenfranchisement, so assert the franchise itself survived.
+(env-keys ["carol-key"])
+(expect "N-1: a holder can still vote — the window was NOT truncated" "vote cast"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "carol" "PZ" false))
+(rollback-tx)
+
+(begin-tx "a later change N-2: cancel AFTER close-at is rejected, and the result still reports")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-24T00:00:00Z") })  ; > close-at
+(env-keys ["admin-key"])
+(expect-failure "late cancel rejected" "cannot cancel after voting has closed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cancel-proposal "PZ"))
+(expect "N-2: status untouched by the rejected cancel" "active"
+  (at 'status (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.proposal-details "PZ")))
+;; The whole point of the fix: the OUTCOME SURVIVES the late cancel attempt. With the
+;; aggregate deleted (the design record), "survives" means the record still reads correctly and frozen.
+(env-keys ["carol-key"])   ; anyone may read
+(let ((r (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "PZ"))
+      (v (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-record "PZ")))
+  (expect "N-2: the record still carries the real tally, not a voided one" (at 'yes r) (at 'yes v))
+  (expect "N-2: and it is frozen, so an reviewer may sum it" true (at 'frozen v))
+  (expect "N-2: status was NOT flipped to cancelled" "active" (at 'status v)))
+(rollback-tx)
+
+;; --- POSITIVE CONTROLS: each transition still works on its own side of close-at.
+;; Without these the two negatives above would also pass if cancel/close were simply
+;; broken for every input, which is the failure mode a bound like this invites.
+(begin-tx "a later change N-3 CONTROL: cancel BEFORE open-at still works")
+;; Moved twice now, and for the same reason both times: a control has to sit where the
+;; transition is legal, or it fails for the NEW reason and stops controlling anything.
+;; a later change moved it inside CANCEL-WINDOW; the design record moves it before open-at
+;; (PZ: created-at, open-at T00:00:01, close-at T00:00:01).
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-20T00:00:00Z") })
+(env-keys ["admin-key"])
+(expect "cancel is legal inside the window" "proposal cancelled"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cancel-proposal "PZ"))
+(rollback-tx)
+
+(begin-tx "a later change N-4 CONTROL: close AFTER the window still works")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-24T00:00:00Z") })
+(env-keys ["admin-key"])
+(expect "close is legal at/after close-at" "proposal closed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.close-proposal "PZ"))
+(rollback-tx)
+
+;; --- the boundary itself: close-at is INCLUSIVE for close, and cancel is already shut, so
+;; exactly one transition is legal at every instant and there is no gap or overlap.
+;; the design record NOTE, corrected after measuring rather than reasoning. The close-at bound on
+;; cancel is now LOGICALLY REDUNDANT — open-at is strictly before close-at (duration >=
+;; MIN-PROPOSAL-DURATION > 0), so anything the close-at bound rejects the open-at bound
+;; would reject too — but it is NOT unreachable: it is written FIRST in cancel-proposal, so
+;; at/after close-at it is the one that fires, and deleting it would change this message.
+;; Both bounds therefore keep their own falsifying negative, and this is the close-at one.
+(begin-tx "a later change N-5: at exactly close-at, close is legal and cancel is not")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-23T00:00:01Z") })  ; == close-at
+(env-keys ["admin-key"])
+(expect-failure "cancel at the instant of close-at is rejected" "cannot cancel after voting has closed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cancel-proposal "PZ"))
+(expect "close at the instant of close-at is accepted" "proposal closed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.close-proposal "PZ"))
+(rollback-tx)
+
+
+;; ===========================================================================
+;; a later change + the design record — THE VETO IS CLOSED AT BOTH ENDS (the operator runbook §2.7).
+;; A1: close-proposal is PERMISSIONLESS (removes suppression-by-inaction).
+;; A2: cancel-proposal is bounded to BEFORE `open-at` (the design record, replacing a later change's
+;; 1-hour CANCEL-WINDOW). Identical on all 20 chains because open-at is replicated
+;; AND is in the vote-record digest, so a replica carrying a different one fails the
+;; 20-chain check rather than diverging silently.
+;;
+;; 🔴 WHY THE BOUND MOVED, because the old one still reads as reasonable: 1 hour was not
+;; chosen for review time, it was chosen to keep the admin BLIND, and it bought blindness
+;; by being too short to be useful. the design record gets blindness for free instead — cast-vote
+;; refuses before open-at, so while cancel is legal THERE IS NOTHING TO READ. The
+;; ordering below reflects that: the cancel bound is exercised BEFORE any vote exists,
+;; because under this design no vote CAN exist while cancel is legal. That is the
+;; property, not an artifact of the test.
+;; Every negative asserts STATE UNCHANGED, and each has a positive control on the other
+;; side of the bound — a bound that rejected everything would otherwise pass its negative.
+;; ===========================================================================
+(begin-tx "a later change setup: PW is ANNOUNCED (created-at 06-29, open-at 07-01T00:00:01)")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (add-time (time "2026-07-01T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal "PW" "Veto" "d" (add-time (time "2026-07-01T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) (add-time (time "2026-07-01T00:00:00Z") 1.0) 259200)  ; close-at 2026-07-04T00:00:01
+;; the design record: no vote is cast yet, and none CAN be — this is the review gap. a finding/a finding below
+;; exercise the cancel bound from inside it, which is the only place it is legal.
+(expect "the tally is empty while cancel is still legal — blind BY CONSTRUCTION" 0.0
+  (+ (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "PW")) (at 'no (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "PW"))))
+(commit-tx)
+
+(begin-tx "a later change a finding: and voting is REFUSED during the cancel window")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-07-01T00:00:00Z") })
+(env-keys ["bob-key"])
+;; This is the enforce that makes the cancel bound blind. Without it the admin could read a
+;; tally accumulated during the review gap and then cancel — the exact veto the design record closes.
+(expect-failure "no vote can be cast before open-at" "SPT voting has not opened for this proposal yet"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "bob" "PW" true))
+(expect "a finding: the tally is still empty" 0.0
+  (+ (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "PW")) (at 'no (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "PW"))))
+(rollback-tx)
+
+(begin-tx "a later change setup: PW carries a real vote, cast AFTER voting opens")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-07-01T01:00:00Z") })
+(env-keys ["bob-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "bob" "PW" true)
+(commit-tx)
+
+(begin-tx "a later change a finding: cancel AFTER the window is rejected; state untouched")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-07-01T01:00:01Z") })  ; well past open-at
+(env-keys ["admin-key"])
+(let ((yes-before (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "PW")))
+      (count-before (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-prop-count)))
+  (expect-failure "cancel once voting has opened is rejected" "SPT cannot cancel once voting has opened for this proposal"
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cancel-proposal "PW"))
+  (expect "a finding: status untouched" "active" (at 'status (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.proposal-details "PW")))
+  (expect "a finding: tally untouched" yes-before (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "PW")))
+  (expect "a finding: still in the active index" count-before (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-prop-count)))
+;; and the franchise survives — a holder can still vote after the rejected cancel
+(env-keys ["carol-key"])
+(expect "a finding: voting still open after the rejected cancel" "vote cast"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "carol" "PW" false))
+(rollback-tx)
+
+(begin-tx "a later change a finding CONTROL: cancel at the last legal instant IS accepted")
+;; the boundary is EXCLUSIVE: `open-at` itself is already too late, one second earlier is
+;; fine. Without this control a finding would also pass if cancel were simply broken.
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-07-01T00:00:00Z") })  ; open-at - 1s
+(env-keys ["admin-key"])
+(expect "cancel one second inside the window is accepted" "proposal cancelled"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cancel-proposal "PW"))
+(rollback-tx)
+
+(begin-tx "a later change a finding: at exactly open-at, cancel is already rejected")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-07-01T00:00:01Z") })  ; == open-at
+(env-keys ["admin-key"])
+(expect-failure "the window bound is exclusive" "SPT cannot cancel once voting has opened for this proposal"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cancel-proposal "PW"))
+(expect "a finding: status untouched at the boundary" "active" (at 'status (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.proposal-details "PW")))
+(rollback-tx)
+
+(begin-tx "a later change a finding: close-proposal is PERMISSIONLESS — a non-admin can close")
+;; This is the suppression-by-inaction fix. carol holds no admin authority and signs only
+;; her own key; before a later change this call died on the ADMIN keyset.
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-07-04T00:00:01Z") })  ; == close-at
+(env-sigs [{ "key": "carol-key", "caps": [] }])
+(let ((count-before (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-prop-count)))
+  (expect "a non-admin closes the proposal" "proposal closed" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.close-proposal "PW"))
+  (expect "a finding: the active index drained on the permissionless close" (- count-before 1)
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-prop-count)))
+(expect "a finding: status is closed" "closed" (at 'status (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.proposal-details "PW")))
+;; the result reads exactly as before — permissionless close is bookkeeping only, and the
+;; tally froze at close-at whether or not anyone paid for the transaction (the design record).
+(expect "a finding: the record is frozen and readable after the permissionless close" true
+  (at 'frozen (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-record "PW")))
+(expect "a finding: and its status now reflects the close" "closed"
+  (at 'status (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-record "PW")))
+(rollback-tx)
+
+(begin-tx "a later change a finding: permissionless close is still bounded by close-at")
+;; Removing the admin gate must NOT remove the a later change early-close bound — otherwise
+;; anyone could freeze a chain's tally mid-window, which is strictly worse than an admin
+;; being able to.
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-07-03T00:00:00Z") })  ; < close-at
+(env-sigs [{ "key": "carol-key", "caps": [] }])
+(let ((count-before (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-prop-count)))
+  (expect-failure "a stranger cannot close early either" "cannot close before voting has ended"
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.close-proposal "PW"))
+  (expect "a finding: status untouched" "active" (at 'status (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.proposal-details "PW")))
+  (expect "a finding: still indexed" count-before (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-prop-count)))
+(rollback-tx)
+
+(begin-tx "a later change a finding: cancel is STILL admin-only — permissionless close did not leak")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-07-01T00:00:00Z") })  ; before open-at, i.e. cancel is otherwise LEGAL here
+(env-sigs [{ "key": "carol-key", "caps": [] }])
+(expect-failure "a non-admin cannot cancel" "Keyset failure"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cancel-proposal "PW"))
+(expect "a finding: status untouched" "active" (at 'status (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.proposal-details "PW")))
+(rollback-tx)
+
+
+;; ===========================================================================
+;; a later change SWAP INTEGRITY (cold-audit a finding) — the load-bearing line of the fix.
+;;
+;; The inlined swap-and-pop moves the TAIL entry into the freed slot and rewrites that
+;; entry's `active-slot`. That rewrite had NO regression guard: deleting it from both
+;; callers left the entire committed suite green (mutation-verified ), because the
+;; only index test asserted the COUNT and "the other proposal is still votable" — and
+;; cast-vote never reads prop-index, so it passes over a corrupt index. That is exactly the
+;; blindness the original CRITICAL exploited, and it needs no attacker: routine admin
+;; closes re-create it.
+;;
+;; These assert the three things that actually matter, for BOTH transitions, with a
+;; NON-TAIL target so a swap really happens:
+;; (a) the moved proposal's recorded active-slot equals the freed slot,
+;; (b) the freed index position resolves back to that proposal,
+;; (c) the RELEASE LOOP still finds it — a transfer by its voter still releases the vote.
+;; (c) is the one that matters: the loop iterates prop-index, so a stale active-slot makes a
+;; live proposal invisible to it and the same tokens can vote twice.
+;; ===========================================================================
+(begin-tx "SWAP setup: three active proposals, votes on the one that will MOVE")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (add-time (time "2026-08-01T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal "S1" "head" "d" (add-time (time "2026-08-01T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) (add-time (time "2026-08-01T00:00:00Z") 1.0) 259200)   ; close 08-04
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal "S2" "mid"  "d" (add-time (time "2026-08-01T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) (add-time (time "2026-08-01T00:00:00Z") 1.0) 604800)   ; close 08-08
+;; S3 must OUTLIVE S1: the point is to close S1 (moving S3 into its slot) while S3 is STILL
+;; ACTIVE, so the release loop has something live to reach. Equal durations would leave S3
+;; already frozen by close-at and (c) would pass vacuously.
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal "S3" "tail" "d" (add-time (time "2026-08-01T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) (add-time (time "2026-08-01T00:00:00Z") 1.0) 604800)   ; close 08-08
+(commit-tx)
+
+(begin-tx "SWAP: closing the HEAD moves the TAIL into its slot — all three properties")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-01T01:00:00Z") })
+;; carol votes on S3, the proposal that is about to be MOVED by the swap
+(env-sigs [{ "key": "carol-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.VOTE "carol")] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "carol" "S3" true)
+(let ((s3-yes-before (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "S3")))
+      (s1-slot (at 'active-slot (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.proposal-details "S1")))
+      (n-before (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-prop-count)))
+  (expect "setup: carol's vote is in S3's tally" true (> s3-yes-before 0.0))
+ ;; close the HEAD (S1) at/after its deadline -> the tail (S3) must swap into S1's slot
+  (env-chain-data { "chain-id": "0", "block-time": (time "2026-08-04T00:00:01Z") })  ; S1 closed, S3 live
+  (env-sigs [{ "key": "carol-key", "caps": [] }])
+  (expect "permissionless close of the head" "proposal closed" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.close-proposal "S1"))
+  (expect "count decremented" (- n-before 1) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-prop-count))
+ ;; (a) the MOVED proposal's recorded slot was rewritten to the freed slot
+  (expect "a finding(a): the moved proposal's active-slot is the freed slot" s1-slot
+    (at 'active-slot (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.proposal-details "S3")))
+ ;; (b) the release loop finds it: a transfer by its voter STILL releases the vote.
+ ;; This is the real property — the loop iterates prop-index, so a stale active-slot
+ ;; would make S3 invisible and carol's tokens would stay counted while she moves them.
+  (env-data { "swapee": { "keys": ["swapee-key"], "pred": "keys-all" } })
+  (env-sigs [{ "key": "carol-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "carol" "swapee" 100.0)] }])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create "carol" "swapee" (read-keyset 'swapee) 100.0)
+  (expect "control: the moved proposal is genuinely STILL ACTIVE (else (c) is vacuous)" true
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.proposal-active? "S3"))
+  (expect "a finding(c): the release loop STILL reaches the moved proposal" (- s3-yes-before 100.0)
+    (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "S3"))))
+(commit-tx)
+
+
+(begin-tx "SWAP: the CANCEL path performs the identical swap — same three properties")
+;; Both callers carry a byte-identical copy of the inlined block, so both need the guard.
+;; Testing only close would leave the cancel copy free to rot.
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (add-time (time "2026-09-01T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) })
+
+;; the design record forces these two onto DIFFERENT schedules, and the reason is the property under
+;; test. The swap-on-cancel needs a LIVE tail proposal carrying a real vote at the moment the
+;; head is cancelled — but cancel is legal only before open-at and a vote is possible only
+;; after it, so one proposal cannot be in both states. K1 (the head being cancelled) is
+;; therefore announced with a LATER open-at than K2 (the tail that must keep its vote). Two
+;; proposals on different schedules is the ordinary case, not a contrivance.
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal "K1" "head" "d" (add-time (time "2026-09-01T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) (time "2026-09-05T00:00:00Z") 259200)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal "K2" "tail" "d" (add-time (time "2026-09-01T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) (add-time (time "2026-09-01T00:00:00Z") 1.0) 604800)
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-09-01T00:00:01Z") })  ; K2 is open
+(env-sigs [{ "key": "carol-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.VOTE "carol")] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "carol" "K2" true)
+(let ((k2-yes-before (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "K2")))
+      (k1-slot (at 'active-slot (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.proposal-details "K1")))
+      (n-before (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-prop-count)))
+  (expect "setup: carol's vote is in K2's tally" true (> k2-yes-before 0.0))
+ ;; cancel the HEAD inside its window -> the tail (K2) swaps into K1's slot
+  (env-chain-data { "chain-id": "0", "block-time": (time "2026-09-01T00:30:00Z") })
+  (env-keys ["admin-key"])
+ ;; K1 has not opened yet (open-at ), so its cancel is still legal here.
+  (expect "cancel the head before it opens" "proposal cancelled" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cancel-proposal "K1"))
+  (expect "count decremented on cancel" (- n-before 1) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-prop-count))
+  (expect "a finding(a) cancel: the moved proposal's active-slot is the freed slot" k1-slot
+    (at 'active-slot (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.proposal-details "K2")))
+  (expect "control: the moved proposal is genuinely STILL ACTIVE" true
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.proposal-active? "K2"))
+  (env-data { "kswapee": { "keys": ["kswapee-key"], "pred": "keys-all" } })
+  (env-sigs [{ "key": "carol-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "carol" "kswapee" 50.0)] }])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create "carol" "kswapee" (read-keyset 'kswapee) 50.0)
+  (expect "a finding(c) cancel: the release loop STILL reaches the moved proposal" (- k2-yes-before 50.0)
+    (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "K2"))))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; The CANCELLED-REPLICA TRAP (an internal review a finding). With `enforce-reportable` deleted
+;; along with the aggregation, nothing ON-CHAIN stops an off-chain summer adding a
+;; cancelled chain's frozen tally into a total. This pins the shape so the rule in
+;; `vote-record`'s docstring is not quietly re-derived without its last clause.
+;; ---------------------------------------------------------------------------
+(begin-tx "CANCEL-TRAP: a cancelled proposal still reads exists + frozen with real votes")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (add-time (time "2026-09-01T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal
+  "CANX" "to be cancelled" "d" (add-time (time "2026-09-01T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) (add-time (time "2026-09-01T00:00:00Z") 1.0) 259200)
+(commit-tx)
+(begin-tx "CANCEL-TRAP: seed a holder — the earlier sections moved alice's tokens away")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-09-01T00:05:00Z") })
+(env-data { "dave": { "keys": ["dave-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "dave" 500.0)] }])
+(coin.transfer-create "sender00" "dave" (read-keyset 'dave) 500.0)
+(env-sigs [{ "key": "dave-key", "caps": [(coin.TRANSFER "dave" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 500.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "dave" (read-keyset 'dave) 1000.0)
+(commit-tx)
+(begin-tx "CANCEL-TRAP: the vote lands only AFTER voting opens (the design record)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-09-01T00:10:00Z") })
+(env-sigs [{ "key": "dave-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.VOTE "dave")] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "dave" "CANX" true)
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; 🔴 the design record NARROWED THIS TRAP, AND THE NARROWING IS THE POINT — it is recorded here
+;; rather than in a report because the rule it qualifies lives in `vote-record`'s docstring.
+;;
+;; Cold an internal review a finding was: a CANCELLED proposal carrying 5,000 real votes reads
+;; exists:true, frozen:true, status:"cancelled", yes:5000.0 — so twenty cancelled replicas
+;; satisfy the four-part summing rule and an off-chain summer publishes a result the admin
+;; voided. The `status != "cancelled"` clause is what stands between them and that.
+;;
+;; UNDER the design record A CANCELLED PROPOSAL CANNOT CARRY VOTES AT ALL. `cancel-proposal` requires
+;; now < open-at and `cast-vote` requires now >= open-at, and chain time only moves forward
+;; — so any proposal that was legally cancelled was cancelled before a single vote could be
+;; cast, and its tally is necessarily 0.0/0.0. The measured a finding state is UNREACHABLE on
+;; chain. (It is still constructible in the REPL, where the clock can be moved backwards;
+;; that is a REPL affordance, not a chain behaviour, and the assertion below is written
+;; against what the chain can actually produce.)
+;;
+;; THE STATUS CLAUSE STAYS ANYWAY, and this is deliberate rather than defensive: the
+;; guarantee now rests on TIME MONOTONICITY, which is a property of consensus rather than of
+;; this module, and a summer following the four-part rule without the status clause would
+;; publish "0 votes, proposal passed" for twenty cancelled replicas instead of a voided
+;; result. Degraded, but still wrong. Do not remove the clause on the strength of this.
+;; ---------------------------------------------------------------------------
+(begin-tx "CANCEL-TRAP: a cancel once voting has opened is REFUSED — the a finding state is unreachable")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-09-01T00:20:00Z") })
+(env-keys ["admin-key"])
+(expect "setup: CANX genuinely carries a real vote" true
+  (> (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "CANX")) 0.0))
+(expect-failure "the admin cannot cancel a proposal that already has votes"
+  "SPT cannot cancel once voting has opened for this proposal"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cancel-proposal "CANX"))
+(expect "CANCEL-TRAP: status untouched by the refused cancel" "active"
+  (at 'status (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.proposal-details "CANX")))
+(rollback-tx)
+
+(begin-tx "CANCEL-TRAP: a legally cancelled proposal reads exists + frozen with a ZERO tally")
+;; CANY is announced and cancelled entirely inside its review gap — the only way a cancel
+;; can happen now. It is the shape a summer will actually meet.
+(env-chain-data { "chain-id": "0", "block-time": (add-time (time "2026-09-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) })
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal
+  "CANY" "cancelled in the review gap" "d"
+  (add-time (time "2026-09-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP))
+  (time "2026-09-06T00:00:00Z") 259200)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cancel-proposal "CANY")
+(commit-tx)
+
+(begin-tx "CANCEL-TRAP: past close-at it satisfies every part of the rule EXCEPT the status clause")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-09-20T00:00:00Z") })
+(let ((v (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-record "CANY")))
+  (expect "CANCEL-TRAP: exists" true (at 'exists v))
+  (expect "CANCEL-TRAP: frozen" true (at 'frozen v))
+ ;; the design record: zeros, not real votes — a legal cancel always precedes every vote.
+  (expect "CANCEL-TRAP: the tally is ZERO, because no vote could have been cast" 0.0
+    (+ (at 'yes v) (at 'no v)))
+ ;; …and the status clause is still the only thing telling a summer this is not a result.
+  (expect "CANCEL-TRAP: status is the ONLY signal — it must be checked" "cancelled" (at 'status v)))
+(commit-tx)
+
+(print "smartpacts-governance LIVE-VOTE suite PASSED")

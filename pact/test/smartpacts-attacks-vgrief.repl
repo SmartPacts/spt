@@ -1,0 +1,285 @@
+;; ===========================================================================
+;; smartpacts-attacks-vgrief — RED-TEAM for the LIVE-VOTE governance (the design record), under the
+;; lens: "for every state field that gates a right/payout, who else can write it,
+;; and to whose detriment?" Targets the tally + account-votes. Each block asserts
+;; the SECURE outcome. (Cross-chain tally is validated on DEVNET, not here.)
+;; ===========================================================================
+(load "setup.repl")
+
+;; seed alice 2500, bob 2000, carol 500, atk 100 (founder reserve = 5000; = 5100 > 5000?
+;; founder is 5000 -> use 2500+2000+400+100 = 5000)
+(begin-tx "activate launch for seeding")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(commit-tx)
+(begin-tx "seed holders via launch (alice 2500, bob 2000, carol 400, atk 100 = 5000)")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+       , "bob":   { "keys": ["bob-key"],   "pred": "keys-all" }
+       , "carol": { "keys": ["carol-key"], "pred": "keys-all" }
+       , "atk":   { "keys": ["atk-key"],   "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1250.0) (coin.TRANSFER "sender00" "bob" 1000.0) (coin.TRANSFER "sender00" "carol" 200.0) (coin.TRANSFER "sender00" "atk" 50.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1250.0)
+(coin.transfer-create "sender00" "bob"   (read-keyset 'bob)   1000.0)
+(coin.transfer-create "sender00" "carol" (read-keyset 'carol) 200.0)
+(coin.transfer-create "sender00" "atk"   (read-keyset 'atk)   50.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 1250.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "alice" (read-keyset 'alice) 2500.0)
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 1000.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "bob" (read-keyset 'bob) 2000.0)
+(env-sigs [{ "key": "carol-key", "caps": [(coin.TRANSFER "carol" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 200.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "carol" (read-keyset 'carol) 400.0)
+(env-sigs [{ "key": "atk-key", "caps": [(coin.TRANSFER "atk" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 50.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "atk" (read-keyset 'atk) 100.0)
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+(commit-tx)
+
+(begin-tx "open P")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal "P" "t" "d" (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) (add-time (time "2026-06-02T00:00:00Z") 1.0) 259200)
+(commit-tx)
+
+;; helper: assert Σ recorded votes <= circulating after each step
+(begin-tx "V0 baseline invariant (no votes yet)")
+(let ((r (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "P")))
+  (expect "V0: participation 0 <= circulating" true (<= (+ (at 'yes r) (at 'no r)) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))))
+(commit-tx)
+
+;; ===========================================================================
+;; V1 — DUST cannot suppress: alice votes 2500; atk dusts her; vote unchanged.
+;; ===========================================================================
+(begin-tx "V1 alice votes then gets dusted")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })
+(env-keys ["alice-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "alice" "P" true)
+(env-sigs [{ "key": "atk-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "atk" "alice" 0.000000000001)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "atk" "alice" 0.000000000001)
+(expect "V1: dust did not reduce alice's vote" 2500.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-weight "alice" "0" "P"))
+(commit-tx)
+
+;; ===========================================================================
+;; V2 — TRANSFER RELEASE: a voter's outgoing transfer releases exactly the moved
+;; portion from the tally; the receiver's tokens are unvoted. No under/over-release.
+;; ===========================================================================
+(begin-tx "V2 alice sends 500 to carol")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T02:00:00Z") })
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" "carol" 500.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "alice" "carol" 500.0)
+;; 🔴 THIS ASSERTION CHANGED SHAPE IN a later change (an internal review `a finding`) — read why before "fixing" it.
+;; It used to read `2000.0` as a LITERAL. Alice carries a 1e-12 dust from V1, so she retains
+;; 2000.000000000001 here, and the old `min(amount, w)` release shaved her vote to a flat
+;; 2000.0 — destroying 1e-12 of weight she still fully backed. That is the SAME defect V4b
+;; reproduces at 99-token scale; the literal was encoding it. The correct post-condition is
+;; the INVARIANT — her vote is released down to exactly what she retains — which is also
+;; dust-proof, so no future seeding change can silently re-encode a wrong number here.
+(expect "V2: alice's vote is released down to exactly what she RETAINS"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice")
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-weight "alice" "0" "P"))
+(expect "V2: carol (received) is unvoted" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-weight "carol" "0" "P"))
+(let ((r (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "P")))
+  (expect "V2: tally yes == alice's whole recorded weight (she is the only yes)"
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-weight "alice" "0" "P")
+    (at 'yes r))
+  (expect "V2: Σ votes <= circulating" true (<= (+ (at 'yes r) (at 'no r)) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))))
+(commit-tx)
+
+;; ===========================================================================
+;; V3 — NO DOUBLE-VOTE across a transfer (the Holder-Agreements gap): the
+;; released tokens, once re-voted by the receiver, count ONCE.
+;; ===========================================================================
+(begin-tx "V3 carol votes her 900 (400 seed + 500 received)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T03:00:00Z") })
+(env-keys ["carol-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "carol" "P" true)
+(let ((r (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "P")))
+ ;; yes = alice's retained weight + carol's 900 — NOT 2000+500 double-counted, which is the
+ ;; property this block is named for. Asserted as the SUM OF THE RECORDED WEIGHTS rather than
+ ;; a literal (it read `2900.0` until a later change): that is strictly stronger — it is the
+ ;; conservation identity between `account-votes` and `tallies`, the thing the two-mutator
+ ;; invariant exists to protect — and it cannot drift with alice's 1e-12 V1 dust.
+  (expect "V3: yes == alice's weight + carol's weight (no double-count across the transfer)"
+    (+ (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-weight "alice" "0" "P")
+       (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-weight "carol" "0" "P"))
+    (at 'yes r))
+  (expect "V3: and that total is still the intended 2900 to within the seeded dust" true
+    (and (>= (at 'yes r) 2900.0) (< (at 'yes r) 2900.000000001)))
+  (expect "V3: Σ votes <= circulating" true (<= (+ (at 'yes r) (at 'no r)) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))))
+(commit-tx)
+
+;; ===========================================================================
+;; V4 — release is bounded by the VOTED amount (over-transfer of unvoted tokens
+;; doesn't over-release). bob holds 2000, votes only after receiving; then sends.
+;; ===========================================================================
+(begin-tx "V4 bob votes 2000 then sends 2500? (only has 2000) — send 1500")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T04:00:00Z") })
+(env-keys ["bob-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "bob" "P" false)
+(env-sigs [{ "key": "bob-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "bob" "carol" 1500.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "bob" "carol" 1500.0)
+(expect "V4: bob vote released by 1500 -> 500" 500.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-weight "bob" "0" "P"))
+(let ((r (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "P")))
+  (expect "V4: no side is negative" true (and (>= (at 'yes r) 0.0) (>= (at 'no r) 0.0)))
+  (expect "V4: Σ votes <= circulating" true (<= (+ (at 'yes r) (at 'no r)) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))))
+(commit-tx)
+
+;; ===========================================================================
+;; 🔴 V4b — THE GIFT-AND-RETURN GRIEF (an internal review `a finding`, a later change R2).
+;;
+;; THE PROPERTY: a vote must be released only to the extent the voter's RETAINED
+;; balance stops backing it. Releasing on the amount MOVED, ignoring what is kept,
+;; destroys weight a voter still fully backs — and a stranger can trigger it, unsigned,
+;; by making an unwanted gift the victim then returns.
+;;
+;; WHY THIS SURVIVED EVERY EARLIER TEST, and why it is written this way: V2 and V4 both
+;; have `weight == balance`, and at that point `min(amount, w)` and the correct
+;; `w - (bal - amount)` are ALGEBRAICALLY EQUAL. Neither can go red. The defect only
+;; appears when the balance EXCEEDS the weight — the buffer this block creates.
+;; That is the whole lesson: two pinning tests agreeing does not pin a formula, it pins
+;; the one case where two formulas coincide.
+;;
+;; DUST-PROOF ON PURPOSE: alice carries a 1e-12 dust from V1, so step 3 asserts the
+;; INVARIANT (`weight == retained balance`) rather than a literal. A literal here would
+;; have been 1700.0, which is exactly the wrong answer the defect produces.
+;; ===========================================================================
+(begin-tx "V4b alice is gifted tokens and returns them — her vote must survive")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T04:30:00Z") })
+(let ((bal0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice"))
+      (w0   (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-weight "alice" "0" "P"))
+      (yes0 (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "P"))))
+ ;; --- step 1: an UNVOTED stranger gifts her tokens. Receiving never releases, so this
+ ;; is what CREATES the balance-exceeds-weight gap the defect lives in. The block builds
+ ;; its own gap rather than inheriting one: after the fix, a release leaves weight exactly
+ ;; equal to the retained balance, so no earlier step leaves a usable buffer behind.
+  (env-sigs [{ "key": "atk-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "atk" "alice" 99.0)] }])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "atk" "alice" 99.0)
+  (expect "V4b: the gift did not change alice's vote" w0
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-weight "alice" "0" "P"))
+ ;; PRECONDITION, asserted so the block cannot silently stop testing what it names:
+ ;; alice's balance must now EXCEED her weight, or the two formulas coincide and the
+ ;; steps below prove nothing (the V2/V4 trap described in the header).
+  (expect "V4b PRECONDITION: the gift left her balance above her weight, so the case is live"
+    true (> (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice") w0))
+
+ ;; --- step 2: 🔴 THE GRIEF. She returns EXACTLY the gift and is left holding exactly
+ ;; what she started with — so every token of her vote is still backed and NOTHING may
+ ;; be released. This is the assertion that goes RED against the defect (it reports
+ ;; 1901.0: `min(99, 2000)` destroyed 99 of a fully-backed vote).
+  (env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" "atk" 99.0)] }])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "alice" "atk" 99.0)
+  (expect "🔴 V4b: returning an unwanted gift destroyed NONE of alice's vote" w0
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-weight "alice" "0" "P"))
+  (expect "V4b: and she holds exactly what she started with" bal0
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice"))
+  (expect "V4b: the tally is untouched by the round trip" yes0
+    (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "P")))
+
+ ;; --- step 3: THE CONTROL, and it is load-bearing. A fix that simply released less
+ ;; would pass step 2 and break governance. A move that genuinely outruns the retained
+ ;; balance MUST still release — and the exact post-condition is that the surviving
+ ;; weight equals the retained balance.
+  (env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" "carol" 300.0)] }])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "alice" "carol" 300.0)
+  (expect "V4b CONTROL: a real reduction still releases — weight now equals the retained balance"
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice")
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-weight "alice" "0" "P"))
+  (expect "V4b: Σ votes <= circulating still holds" true
+    (let ((r (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "P")))
+      (<= (+ (at 'yes r) (at 'no r)) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating)))))
+(commit-tx)
+
+;; ===========================================================================
+;; V5 — cap boundary: no external actor can write the tally / account-votes.
+;; ===========================================================================
+(begin-tx "V5 internal caps unacquirable externally")
+(env-keys ["atk-key"])
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+;; a later change / the design record: `TALLY`, `apply-tally` and `release-votes-on-debit` are DELETED, so
+;; these three expect-failures cannot be written any more — referencing a removed member is a
+;; COMPILE-TIME abort that kills the whole file, which `expect-failure` cannot catch. the operator runbook
+;; an internal review measured why they were never enough: the cap was weak, so a foreign module composed
+;; it and set any LIVE tally to any value unsigned. The unreachability is now asserted from
+;; outside the suite by `weakcap-writers.repl-must-fail`, on exit code AND error text.
+;; What remains testable here is the surviving surface: the PURE planner still refuses to plan
+;; a mutation of a frozen tally, and it cannot write at all.
+;; "P" is still OPEN here, so the assertable property is PURITY: a stranger may call the
+;; planner — it is public precisely because it cannot write — and nothing moves. A planner
+;; that wrote would be the standalone tally writer the design record exists to remove.
+(let ((before (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "P"))))
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.plan-tally "P" 1000000.0 true)
+  (expect "a stranger's plan-tally call wrote NOTHING" before
+    (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "P"))))
+;; The `record-live-vote` case that used to sit here is GONE with the function (a later change /
+;; the design record §5): it took `weight` and `chain` as PARAMETERS while every precondition lived
+;; in the cast-vote wrapper, so a voter could record any weight, on any chain string, on a
+;; closed proposal. Naming a removed member is a COMPILE-time abort that expect-failure
+;; cannot catch — it would take this whole suite down while reading like a pass — so the
+;; assertions moved to smartpacts-wrapper-trust.repl (W-E: structural absence, plus the
+;; behavioural property "a recorded vote is always exactly the voter's current balance").
+(commit-tx)
+
+;; ===========================================================================
+;; V6 — CONSERVATION: the governance merge did not break award accounting.
+;; ===========================================================================
+;; the design record (a later change): the pool is funded BEFORE the round is declared, in its own tx.
+(begin-tx "V6 fund the pool first")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT 50.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" 50.0)
+(env-keys ["admin-key"])
+(expect "V6: circulating still 5000 through all the transfers" 5000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 50.0)
+(commit-tx)
+
+;; ---- the design record (a later change): A ROUND NEEDS A SEALED RECORD DATE ----------------------
+;; Schedule one clear of the 12h runway (2 x MIN-RETRACT-LEAD), let it land, seal it.
+;; The seal runs with NO KEYS on purpose: `advance-snapshot` is permissionless, and a
+;; chain with no activity must still be sealable by anyone.
+(begin-tx "the design record: name the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (add-time (at 'block-time (chain-data)) 43202))
+(commit-tx)
+(env-chain-data
+  { "chain-id": (at 'chain-id (chain-data))
+, "block-time": (add-time (at 'block-time (chain-data)) 43203) })
+(begin-tx "the design record: seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "V6 awards still work")
+(env-keys ["admin-key"])
+(let ((circ (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating)))
+ ;; rate = 50/5000 = 0.01; the pool's 50 covers circ*rate exactly, which is the the design record bar
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "R1" (/ 50.0 circ) (time "2026-06-06T02:00:00Z"))
+  (env-chain-data { "chain-id": "0", "block-time": (time "2026-06-06T02:00:00Z") }))  ; a later amendment
+(let ((pend (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "carol")))
+  (expect "V6: carol accrues awards on her CURRENT balance (indep. of votes)" true (> pend 0.0)))
+(commit-tx)
+
+;; ===========================================================================
+;; V7 — final Σ-votes-≤-circulating invariant after everything.
+;; ===========================================================================
+(begin-tx "V7 final invariant")
+(let ((r (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "P")))
+  (expect "V7: Σ votes <= circulating (final)"
+    true (<= (+ (at 'yes r) (at 'no r)) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating)))
+  (print (format "V7 final: yes={} no={} participation={} circulating={}"
+    [(at 'yes r) (at 'no r) (+ (at 'yes r) (at 'no r)) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating)])))
+(commit-tx)
+
+;; ===========================================================================
+;; ===========================================================================
+;; V8 / V9 — DELETED (a later change / the design record Decision 1).
+;;
+;; They probed the cross-chain aggregation: that `report-tally-hub` takes only a
+;; proposal id and reads this chain's own frozen tally (so a griefer cannot inject
+;; numbers), and that a partial aggregate can never read `passed`. Both the function
+;; and the aggregate are deleted, so neither has a surface.
+;;
+;; The V0-V7 invariant above — Σ votes <= circulating on this chain, under every
+;; grief shape — is untouched and is now the whole anti-grief claim, because the
+;; per-chain tally IS the product (the design record Decision 3).
+;; ===========================================================================
+(print "smartpacts-attacks-vgrief LIVE-VOTE RED-TEAM suite PASSED")

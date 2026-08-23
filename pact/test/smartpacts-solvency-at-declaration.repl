@@ -1,0 +1,362 @@
+;; ===========================================================================
+;; smartpacts-solvency-at-declaration — SOLVENCY AT DECLARATION (the design record, a later change).
+;;
+;; `declare-round` refuses unless this chain's award pool ALREADY covers the liability
+;; the round creates:
+;;
+;; pool balance >= floor12( declared-liability + rate * circulating ) [KDA]
+;;
+;; Both sides are KDA and the right-hand side is floored to MINIMUM-PRECISION (12 dp) —
+;; the unit is stated because a later change's HIGH was a bound that was measured, pinned at two
+;; corners and mutation-tested and still wrong, because it counted the wrong unit.
+;;
+;; WHAT THIS SUITE PINS, and why each part exists:
+;; §A the boundary in BOTH directions — refused one 1e-12 short, accepted exactly
+;; covering — with STATE ASSERTED UNCHANGED on the refusal, in its own rollback-tx.
+;; §B the bound is VACUOUS at zero float, on the record — and since a later amendment that
+;; vacuity is HARMLESS rather than covered by a cap: the design record's sealed denominator makes
+;; a zero-float round owe `rate * 0` forever, so a vacuous bar covers a vacuous debt.
+;; A check that can never fail is not a check, and this one genuinely cannot in that
+;; regime; saying so is the difference between a limitation and a surprise.
+;; §C the design record's RESIDUAL, and the reason `fund-awards` keeps its own solvency guard:
+;; the float can grow between a round's declaration and its effective-at, so the
+;; pool can still end up short. That is the ONLY route to a short pool now, and it
+;; is where the "pool underfunded" refusal is still falsifiable.
+;; §D the ordering hazard the new sequence creates: between funding and declaring, the
+;; cash reads as recoverable surplus.
+;;
+;; Every negative uses the 3-arg `expect-failure` with a string unique to this module, and
+;; every "state unchanged" negative runs in its OWN rollback-tx — `expect-failure` leaks
+;; writes through `commit-tx` (measured at a later change: 12,500 KDA moved and survived).
+;; ===========================================================================
+(load "setup.repl")
+
+;; ===========================================================================
+;; §B — VACUOUS AT ZERO FLOAT, ON THE RECORD. Run FIRST, because that is the only moment
+;; this state exists: `init-supply` mints the whole 100,000 into `excluded?` reserves, so a
+;; freshly deployed chain has circulating 0.0 until the launch sells something.
+;;
+;; With circulating 0 the bar is floor12(0 + rate*0) = 0, so `pool >= 0` passes for ANY rate
+;; on a chain that has never sold a token. That is NOT a defect to be patched — it is the
+;; same regime in which the deleted liability cap was vacuous, and the deleted rate cap was
+;; binds there. Pinned so nobody re-derives it as a missing check, and so that if a future
+;; change ever leaves the rate cap as the only survivor, this goes red.
+;; ===========================================================================
+;; ===========================================================================
+;; 🔴 the design record (a later change) CHANGED WHAT THIS SECTION MEANS, AND THE EVIDENCE the design record ASKED FOR
+;; IS MEASURED HERE RATHER THAN ARGUED.
+;;
+;; The vacuity itself SURVIVES: a generation can seal with circ 0.0 on a chain that has never
+;; sold a token, and the bar is then rate x 0 = 0 for ANY rate. What changed is that it is no
+;; longer a hazard, and the reason is one line of arithmetic: the round's TOTAL PAYOUT is
+;; rate x circ(g) = 0 as well. A vacuous bar now covers a vacuous debt.
+;;
+;; Under the design record the two came apart — the bar was measured at declaration and the DEBT kept
+;; growing until effective-at, which is the measured 150 % shortfall the design record exists to close.
+;; the design record asks whether MAX-ROUND-RATE is still load-bearing once that gap is shut. The
+;; assertions below are the input to that decision and NOT the decision: nothing is deleted
+;; here, and a later change owns the constant.
+;; ===========================================================================
+;; ---- the design record (a later change): A ROUND NEEDS A SEALED RECORD DATE ----------------------
+;; Schedule one clear of the 12h runway (2 x MIN-RETRACT-LEAD), let it land, seal it.
+;; The seal runs with NO KEYS on purpose: `advance-snapshot` is permissionless, and a
+;; chain with no activity must still be sealable by anyone.
+(begin-tx "the design record: name the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (add-time (at 'block-time (chain-data)) 43202))
+(commit-tx)
+(env-chain-data
+  { "chain-id": (at 'chain-id (chain-data))
+, "block-time": (add-time (at 'block-time (chain-data)) 43203) })
+(begin-tx "the design record: seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "B the solvency bar is ZERO at zero float: max rate, empty pool, accepted")
+(env-keys ["admin-key"])
+(expect "a fresh chain has no float — every token is in an excluded reserve" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+(expect "and the pool does not even exist yet" 0.0
+  (try 0.0 (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT)))
+(expect "the sealed float is 0 — the denominator this round is priced against" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snapshot-circulating))
+(expect "THE BAR IS STILL VACUOUS AT ZERO FLOAT — absurd rate, empty pool, accepted" "round declared"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round
+    "B-VACUOUS" 500.0 (time "2026-06-03T00:00:00Z")))
+;; 🔴 THE the design record EVIDENCE. Let the round land and measure what it actually owes.
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:01Z") })
+(expect "the round IS effective — this is not a no-op" true
+  (> (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt) 0.0))
+(expect "🔴 AND IT OWES NOTHING: a vacuous bar covering a vacuous debt" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))
+(expect "the pool still need not exist, because nothing is claimable" 0.0
+  (try 0.0 (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT)))
+;; 🔴 AND FLOAT ARRIVING AFTERWARDS IS FREE — the property the design record did NOT have. Under
+;; the design record this is where the debt appeared out of nowhere; the sealed float cannot move, so
+;; a buyer after the record instant adds nothing to what this round owes.
+(rollback-tx)
+
+;; 🔴 A SECOND BLOCK STOOD HERE AND IS DELETED (a later amendment, a later change). It asserted that one
+;; 1e-12 step over MAX-ROUND-RATE was refused at zero float — "and MAX-ROUND-RATE is what
+;; actually binds in that regime". The constant is gone, so that refusal can no longer happen
+;; and the test could no longer fail for its own reason. A negative asserting a refusal that
+;; cannot occur is not weakened coverage, it is a check that cannot fail — this project has
+;; shipped that defect before. The evidence that replaced it is `a probe kept out of this repo`, which
+;; attempts the harm rather than the bound.
+(begin-tx "seed the float via the launch: alice 2000 (circulating 2000)")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1000.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1000.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 1000.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "alice" (read-keyset 'alice) 2000.0)
+(expect "circulating 2000" 2000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+(expect "nothing owed yet" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))
+(commit-tx)
+
+;; ===========================================================================
+;; §A — THE BOUNDARY, BOTH DIRECTIONS.
+;; A round of rate 0.01 against 2,000 circulating costs exactly 20.0 KDA. Fund
+;; 19.999999999999 — one unit of MINIMUM-PRECISION short — and the declaration must be
+;; refused; add the last 1e-12 and it must be accepted. A bound that is only tested from
+;; one side is an off-by-one waiting to freeze into a module that cannot be patched.
+;; ===========================================================================
+(begin-tx "A route the funding in")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT 100.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" 100.0)
+(commit-tx)
+
+(begin-tx "A fund the pool ONE 1e-12 SHORT of what the round will cost")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 19.999999999999)
+(expect "pool is 19.999999999999 against a 20.0 round" 19.999999999999
+  (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+(commit-tx)
+
+;; OWN rollback-tx: this asserts STATE UNCHANGED after the refusal, and expect-failure's
+;; writes survive a commit-tx.
+;; 🔴 §A's NEGATIVES NEED A SEALED GENERATION, or `declare-round` answers "no record date
+;; has sealed" first and — expect-failure matching by SUBSTRING — A-1 and A-4 would go
+;; green without ever reaching the POOL check they exist to pin. One generation serves
+;; A-1 (refused, so nothing is consumed) and A-3 (which consumes it).
+;; ---- the design record (a later change): A ROUND NEEDS A SEALED RECORD DATE ----------------------
+;; Schedule one clear of the 12h runway (2 x MIN-RETRACT-LEAD), let it land, seal it.
+;; The seal runs with NO KEYS on purpose: `advance-snapshot` is permissionless, and a
+;; chain with no activity must still be sealable by anyone.
+(begin-tx "the design record: name the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (add-time (at 'block-time (chain-data)) 43202))
+(commit-tx)
+(env-chain-data
+  { "chain-id": (at 'chain-id (chain-data))
+, "block-time": (add-time (at 'block-time (chain-data)) 43203) })
+(begin-tx "the design record: seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "A-1 REFUSED one 1e-12 short — and nothing was written")
+(env-keys ["admin-key"])
+(expect-failure "a round the pool cannot cover by 1e-12 is refused"
+  "SPT award pool does not cover the liability this round declares"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round
+    "A-SHORT" 0.01 (time "2026-06-05T00:00:00Z")))
+;; The refusal runs BEFORE every write (an internal review a finding was a refused call that left a
+;; round-count row behind, which expect-failure's commit-tx leak carried into the next test).
+(expect "no round row was inserted" 0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-round-count))
+(expect "rpt untouched" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+(expect "max-rpt untouched — no future round is lurking either" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.max-rpt))
+(expect "nothing is owed" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))
+(expect "and the pool is exactly as it was" 19.999999999999
+  (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+(rollback-tx)
+
+(begin-tx "A-2 add the final 1e-12")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 0.000000000001)
+(expect "pool now exactly 20.0" 20.0
+  (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+(commit-tx)
+
+(begin-tx "A-3 ACCEPTED at exactly covering — the bound is >=, not >")
+(env-keys ["admin-key"])
+(expect "exactly covering is accepted" "round declared"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round
+    "A-EXACT" 0.01 (time "2026-06-05T00:00:00Z")))
+(expect "the round was recorded" 1 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-round-count))
+(commit-tx)
+
+
+;; ===========================================================================
+;; §C — THE RESIDUAL, AND WHY `fund-awards` KEEPS ITS GUARD.
+;;
+;; The declaration-time check provisions `rate * circulating AS AT DECLARATION`. The round's
+;; real cost is `rate * circulating WHEN IT TAKES EFFECT`. Nothing freezes the float in
+;; between, and the founder does not control all of it: `buy` can be paused, but
+;; `release-tranche` is PERMISSIONLESS by the design record and inbound cross-chain transfers are
+;; permanent. the design record names this and accepts it, because an under-funded chain loses nothing
+;; — awards accumulate forever and a top-up pays them.
+;;
+;; This is now the ONLY way the pool can be short, which makes it the only place
+;; fund-awards' "pool underfunded" branch is reachable. That branch used to be pinned in
+;; SPT.repl against an empty pool; that shape is gone, so the coverage lives
+;; here (and in smartpacts-award-fairness.repl DF-7r) rather than being quietly dropped.
+;; ===========================================================================
+(begin-tx "C bob buys 1000 SPT AFTER A-EXACT was declared and BEFORE it takes effect")
+;; 🔴 FORWARD ONLY. A-EXACT was declared at ~06-03T12:00 and takes effect on 06-05, so the
+;; window is between them. This read T12:00 until a later change — four days BEHIND the
+;; preceding section, which is a clock a real chain cannot produce.
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-04T00:00:00Z") })
+(env-data { "bob": { "keys": ["bob-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "bob" 500.0)] }])
+(coin.transfer-create "sender00" "bob" (read-keyset 'bob) 500.0)
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 500.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "bob" (read-keyset 'bob) 1000.0)
+(expect "circulating grew 2000 -> 3000 while the round was pending" 3000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+(commit-tx)
+
+;; ===========================================================================
+;; 🔴 INVERTED BY the design record (a later change). THIS BLOCK IS THE ORIGINAL DEFECT, AND IT IS CLOSED.
+;; It asserted "bob owed 10 — real money nobody provisioned", "liability is 30 against a pool
+;; of 20", and "the shortfall is exactly the un-provisioned 10". That is the measured 150 %
+;; shortfall in miniature: the float grew between declaration and effect, so the chain owed
+;; more than the bar it was funded against, and because `claim-awards` is ALL-OR-NOTHING the
+;; gap resolved as a race an honest holder could LOSE.
+;;
+;; Under the design record bob buys AFTER the record instant. He is owed nothing from THIS round, the
+;; liability equals what was funded, and the shortfall is zero. Inverted rather than deleted:
+;; this is the only place in the suite where the failure mode is written down.
+(begin-tx "C the round takes effect — and the design record leaves NO shortfall at all")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-05T00:00:01Z") })
+(expect "alice held at the record instant and is owed her full 2000 * 0.01" 20.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "alice"))
+(expect "🔴 bob bought INSIDE the window and is owed NOTHING by this round" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "bob"))
+(expect "liability is exactly what was funded — the denominator could not move" 20.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))
+(expect "🔴 THE SHORTFALL IS ZERO" 0.0
+  (- (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability)
+     (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT)))
+(commit-tx)
+
+;; 🔴 a finding IS GONE, AND ITS ABSENCE IS A FINDING, NOT A TIDY-UP. It pinned `fund-awards`'
+;; "pool underfunded" branch, and the comment above it said this was "the ONLY way the pool
+;; can be short, which makes it the only place that branch is reachable". the design record closes that
+;; way — so on this path the branch is now UNREACHABLE, and an expect-failure asserting it
+;; would be green-by-accident or red-for-the-wrong-reason.
+;; 🔴 THE ENFORCE IS NOT REMOVED FROM THE MODULE. Deleting it is a design change and a later change
+;; ships the design record alone; whether `fund-awards` retains a reachable failing branch is a question
+;; for a later change / an internal review. The same observation is recorded at
+;; smartpacts-award-fairness.repl DF-7, which was the other place it was pinned.
+(begin-tx "a finding both holders are paid, and the pool drains to exactly zero")
+(expect "alice is paid her 20" 20.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "alice"))
+(expect "bob, who arrived after the record instant, has nothing to claim" true
+  (= 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "bob")))
+(expect "🔴 the pool drained to exactly zero — funded EXACTLY, never short, never over" 0.0
+  (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+(commit-tx)
+
+;; ===========================================================================
+;; 🔴 A-4 RUNS HERE, AFTER §C, AND THE ORDER IS A CORRECTNESS REQUIREMENT.
+;;
+;; It needs a FRESH generation, and a generation cannot seal until A-EXACT is EFFECTIVE
+;; (06-05). §C needs bob to buy BEFORE that instant. Both cannot hold with A-4 first: the
+;; a later change migration left A-4 sealing at 06-05 and §C buying at 06-01, i.e. BLOCK TIME
+;; RUNNING BACKWARDS by four days.
+;;
+;; 🔴 THAT REWIND WAS NOT COSMETIC. It latched a generation `base` at an rpt the clock then
+;; dropped below, and the O(1) liability diverged from the true per-holder sum by 10.0 —
+;; the one identity the design record rests on. Measured BOTH ways before anything was touched: with
+;; a monotonic clock the two agree to 0.0 (pinned as P-6 in smartpacts-record-date.repl); rewound,
+;; they differ by exactly the affected account's accrual. Chainweb block time only advances,
+;; so the divergent state is unreachable on chain — the TIMELINE was the defect, and it is
+;; the timeline that was repaired. NO ASSERTION IN THIS FILE WAS CHANGED TO MATCH THE MODULE.
+;; ===========================================================================
+;; 🔴 A-3 consumed the generation, so A-4 needs its own — otherwise the duplicate-round
+;; refusal answers before the pool check this block is about.
+;; A-3's round is effective by now, which is what lets a second generation seal.
+;; ---- the design record (a later change): A ROUND NEEDS A SEALED RECORD DATE ----------------------
+;; Schedule one clear of the 12h runway (2 x MIN-RETRACT-LEAD), let it land, seal it.
+;; The seal runs with NO KEYS on purpose: `advance-snapshot` is permissionless, and a
+;; chain with no activity must still be sealable by anyone.
+(begin-tx "the design record: name the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (add-time (at 'block-time (chain-data)) 43202))
+(commit-tx)
+(env-chain-data
+  { "chain-id": (at 'chain-id (chain-data))
+, "block-time": (add-time (at 'block-time (chain-data)) 43203) })
+(begin-tx "the design record: seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "A-4 the pool is now fully spoken for, so a second round of any size is refused")
+(env-keys ["admin-key"])
+;; declared-liability is 20 and the pool is 20, so ANY positive rate needs more cash. This is
+;; the property that makes the check cumulative rather than per-round: rounds do not each get
+;; a fresh pool.
+(expect-failure "a second round against a fully-committed pool is refused"
+  "SPT award pool does not cover the liability this round declares"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round
+    "A-SECOND" 0.000000000001 (time "2026-06-07T00:00:00Z")))
+(expect "still exactly one round" 1 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-round-count))
+(rollback-tx)
+
+;; ===========================================================================
+;; §D — THE ORDERING HAZARD the design record CREATES, pinned so it cannot be forgotten.
+;; Funding now precedes declaring on every chain, every round. In that window the money is
+;; in the pool and nothing on chain knows it is spoken for, so `pool-surplus` reports it as
+;; fully recoverable — and a blind 20-chain sweep would strip it, after which the
+;; declaration it was for is refused by the very check that required it. recover-pool-surplus
+;; carries this in its docstring; this is the measurement behind that sentence.
+;; ===========================================================================
+(begin-tx "D route funding for the next round")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-06T01:00:00Z") })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT 30.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" 30.0)
+(commit-tx)
+
+(begin-tx "D-1 funded but not yet declared: the cash reads as fully recoverable surplus")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-06T01:00:00Z") })
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 30.0)
+(expect "pool 30" 30.0 (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+(expect "ALL 30 reads as unowed surplus — the window is real" 30.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pool-surplus))
+(commit-tx)
+
+(begin-tx "D-2 a sweep inside the window strips the provisioning")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-06T01:00:00Z") })
+;; a later change (founder ): RECOVER-SURPLUS is `@managed` on amount, so an UNSCOPED
+;; signature can no longer drive this at all — the sweep must NAME the amount it sweeps.
+;; The founder made it managed because an unscoped 2-of-3 gov signature was measured on a
+;; node, mined, moving KDA for an amount and destination it never named.
+(env-sigs [{ "key": "admin-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.RECOVER-SURPLUS 30.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.recover-pool-surplus 30.0)
+(expect "the pool is empty again" 0.0
+  (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+(commit-tx)
+
+(begin-tx "D-3 and the declaration it was for is now refused")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-06T01:00:00Z") })
+(env-keys ["admin-key"])
+(expect-failure "the swept chain can no longer declare"
+  "SPT award pool does not cover the liability this round declares"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round
+    "D-ROUND" 0.01 (time "2026-06-08T00:00:00Z")))
+(expect "still just the one round from §A" 1
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-round-count))
+(rollback-tx)
+
+(print "smartpacts-solvency-at-declaration suite PASSED")

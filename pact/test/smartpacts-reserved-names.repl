@@ -1,0 +1,71 @@
+;; ===========================================================================
+;; RESERVED ACCOUNT-NAME PREFIXES — external audit, a finding.
+;;
+;; THE DEFECT THIS PINS. `enforce-reserved` used to branch on `is-principal`, and `is-principal`
+;; is EXACT: "k:"+63 hex, "k:"+65 hex, "k:"+64 non-hex and "k:abc" are ALL false. Every one of
+;; them therefore took the unchecked branch and was accepted UNDER ANY GUARD. Measured by the
+;; the reviewer: SPT accepted `k:`+63hex under an unrelated keyset where `coin` refuses the same name.
+;;
+;; WHY IT MATTERS ON A MODULE THAT FREEZES. The result is a `k:`-prefixed SPT account that is NOT
+;; self-custodial-by-name. Every integrator applying the Kadena k:/w: convention would be wrong
+;; about SPT, permanently — and a sender reasoning "my receiver is a k: address, so the
+;; vanity-squat risk does not apply to me" would be wrong too.
+;;
+;; 🔴 THE REFUSAL MUST DISCRIMINATE, NOT MERELY REFUSE. Section B is not optional: a version that
+;; refused EVERY name would satisfy section A alone while breaking ordinary holders. This suite
+;; goes red in both directions.
+;; ===========================================================================
+(load "setup.repl")
+
+(begin-tx "A — a name claiming a reserved prefix, that is not the principal of its guard")
+(env-keys ["admin-key"])
+(env-data { "mal": { "keys": ["mallory-key"], "pred": "keys-all" } })
+;; 63 hex, one short of a real k: principal — the shape a truncation actually produces.
+(expect-failure "A-1 k:+63hex is refused, as coin refuses it"
+  "SPT reserved protocol guard violation"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-account
+    "k:b0f2a5c4e6d8091a3b5c7d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f80912a3b" (read-keyset 'mal)))
+(expect-failure "A-2 a short k: name is refused"
+  "SPT reserved protocol guard violation"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-account
+    "k:abc" (read-keyset 'mal)))
+(expect-failure "A-3 a w: name that is not a real principal is refused"
+  "SPT reserved protocol guard violation"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-account
+    "w:abc" (read-keyset 'mal)))
+(expect-failure "A-4 any other reserved prefix is refused too — the rule is the ':' shape"
+  "SPT reserved protocol guard violation"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-account
+    "c:abc" (read-keyset 'mal)))
+(rollback-tx)
+
+(begin-tx "B — POSITIVE CONTROLS: the refusal must not swallow legitimate names")
+(env-keys ["admin-key"])
+(env-data { "mal": { "keys": ["mallory-key"], "pred": "keys-all" } })
+;; An ordinary vanity name has no reserved prefix and is deliberately still allowed — squatting
+;; it remains an accepted residual, answered by using principal accounts, not by a name registry.
+(expect "B-1 an ordinary vanity name still works" "account created"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-account
+    "alice-vanity" (read-keyset 'mal)))
+;; The whole point of the reserved prefix: a WELL-FORMED principal under its OWN guard.
+(expect "B-2 a well-formed principal under its own guard still works" "account created"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-account
+    (create-principal (read-keyset 'mal)) (read-keyset 'mal)))
+(rollback-tx)
+
+(begin-tx "C — the same rule reaches the credit path, not just create-account")
+(env-keys ["admin-key"])
+(env-data { "mal": { "keys": ["mallory-key"], "pred": "keys-all" } })
+;; `enforce-reserved` is called from `credit-plan` for a NEW row, so a transfer cannot mint a
+;; malformed reserved name either. Routed through the launch reserve, which holds SPT at init.
+(expect-failure "a finding a transfer cannot create a malformed k: receiver either"
+  "SPT reserved protocol guard violation"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.credit-plan
+    "k:abc" (read-keyset 'mal) 1.0))
+(expect "a finding CONTROL: the same planner accepts a well-formed principal"
+  true
+  (!= "" (at 'balance (at 'row (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.credit-plan
+    (create-principal (read-keyset 'mal)) (read-keyset 'mal) 1.0)) )))
+(rollback-tx)
+
+(print "smartpacts-reserved-names: a reserved prefix must be a real principal; ordinary names still pass.")

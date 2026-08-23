@@ -1,0 +1,286 @@
+;; ===========================================================================
+;; smartpacts-proposal-lifecycle — ANNOUNCE, REVIEW, VOTE (the design record, a later change).
+;;
+;; A proposal is ANNOUNCED at `created-at`, REVIEWED, and OPENS for voting at `open-at`.
+;; `close-at` is `open-at + duration-seconds`. Cancellation is free until `open-at` and
+;; IMPOSSIBLE after, so blindness stops being a stopwatch (the deleted 1-hour
+;; CANCEL-WINDOW) and becomes a property of the design.
+;;
+;; WHAT THIS SUITE PINS:
+;; §A MIN-REVIEW-GAP, both sides — exactly 48h accepted, one second under refused.
+;; It FREEZES with the module, so an off-by-one here is permanent.
+;; §F the BACKDATING attack — the reason §A measures notice from `curr-time` and not
+;; from the caller-supplied `created-at`. This defect was shipped and then fixed.
+;; §B every replica must land at least 48h before the shared open-at, both sides.
+;; §C cast-vote refuses before open-at; cancel-proposal refuses after it. These two are
+;; ONE mechanism: the second is only blind because the first exists.
+;; §D close-at derives from open-at, not created-at — the semantic change to an
+;; existing field, asserted as an exact timestamp rather than a relation.
+;; §E open-at is inside the vote-record digest (the design record §3c required this if the field
+;; were ever added), and it is in the vote-rec schema.
+;;
+;; Every negative is the 3-arg `expect-failure` with a string unique to this module, and
+;; every state-unchanged negative runs in its own `rollback-tx`.
+;; ===========================================================================
+(load "setup.repl")
+
+(begin-tx "seed a holder so votes have weight")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1000.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1000.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 1000.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "alice" (read-keyset 'alice) 2000.0)
+(commit-tx)
+
+;; ===========================================================================
+;; §A — MIN-REVIEW-GAP, BOTH SIDES, MEASURED FROM THE ANNOUNCEMENT TRANSACTION.
+;;
+;; 🔴 THE OBVIOUS FORM OF THIS CHECK — the design record's own wording,
+;; (>= (diff-time open-at created-at) MIN-REVIEW-GAP)
+;; — WAS SHIPPED AND WAS WRONG. It relates two ADMIN-SUPPLIED timestamps, and `created-at`
+;; is bounded only from ABOVE, so backdating it is free. §F below is the measurement.
+;; The check now uses `curr-time`, which no caller chooses, so what is bounded is the REAL
+;; notice: voting may not open until MIN-REVIEW-GAP after the announcement lands.
+;; ===========================================================================
+(begin-tx "A-1 one second under the 48h review gap is REFUSED — nothing written")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-10T00:00:00Z") })
+(env-keys ["admin-key"])
+(expect-failure "a notice of 48h minus one second is refused"
+  "SPT voting must open at least the minimum review gap after this announcement"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal
+    "A-SHORT" "t" "d" (time "2026-06-10T00:00:00Z")
+    (add-time (time "2026-06-10T00:00:00Z") (- n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP 1.0))
+    259200))
+(expect "no proposal was indexed" 0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-prop-count))
+(rollback-tx)
+
+(begin-tx "A-2 exactly 48h is ACCEPTED — the bound is >=, not >")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-10T00:00:00Z") })
+(env-keys ["admin-key"])
+(expect "a notice of exactly MIN-REVIEW-GAP is accepted" "proposal created"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal
+    "A-EXACT" "t" "d" (time "2026-06-10T00:00:00Z")
+    (add-time (time "2026-06-10T00:00:00Z") n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)
+    259200))
+;; The constant is 48 hours. Pinned as a LITERAL as well as symbolically: A-1/A-2 are written
+;; against the constant and would both still pass if it were silently retuned, and it FREEZES
+;; — so the VALUE is part of what is being frozen, not just the shape of the comparison.
+(expect "MIN-REVIEW-GAP is 48 hours, in SECONDS, as a decimal" 172800.0
+  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)
+(rollback-tx)
+
+;; ===========================================================================
+;; 🔴 §F — THE BACKDATING ATTACK, and the reason §A is written against `curr-time`.
+;;
+;; MEASURED against the first version of this change set: `created-at` is caller
+;; data bounded only from ABOVE (`<= now`), so an admin backdates it by 48h and voting opens
+;; SIXTY SECONDS after the announcement lands. Every enforce satisfied; the gap sitting
+;; exactly on the MIN-REVIEW-GAP boundary; a real vote cast a minute later. 48 hours of paper
+;; notice, one minute of real notice — and the design record's promise is about NOTICE.
+;;
+;; It is a later change's backdating defect in a new place: there it made MIN-PROPOSAL-DURATION
+;; nominal, here it made MIN-REVIEW-GAP nominal. a later change had added a LOWER bound on
+;; created-at; the design record removed it (correctly — close-at no longer derives from created-at)
+;; and the new constant inherited the weakness the same day.
+;;
+;; What the module enforces now cannot be moved by any caller-supplied value.
+;; ===========================================================================
+(begin-tx "F backdating created-at buys paper notice, not real notice")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-12T00:00:00Z") })
+(env-keys ["admin-key"])
+;; created-at = now - 48h + 60s (legal, <= now); open-at = now + 60s.
+;; open-at - created-at is EXACTLY MIN-REVIEW-GAP, so a data-only check would ACCEPT this.
+(expect-failure "48h of PAPER notice with 60 seconds of REAL notice is refused"
+  "SPT voting must open at least the minimum review gap after this announcement"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal
+    "F-BACKDATED" "looks like 48h notice" "d"
+    (add-time (add-time (time "2026-06-12T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) 60.0)
+    (add-time (time "2026-06-12T00:00:00Z") 60.0) 259200))
+(expect "F: nothing was recorded" false (at 'exists (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-record "F-BACKDATED")))
+;; CONTROL — the SAME backdated created-at is fine when the notice is genuinely 48h. This is
+;; what makes F a test of the NOTICE and not merely a test that backdating is banned:
+;; backdating is still legal, it just cannot buy anything.
+(expect "CONTROL: a backdated created-at with REAL 48h notice is accepted" "proposal created"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal
+    "F-OK" "backdated but honestly noticed" "d"
+    (add-time (time "2026-06-12T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP))
+    (add-time (time "2026-06-12T00:00:00Z") n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP) 259200))
+(rollback-tx)
+
+;; ===========================================================================
+;; §B — EVERY REPLICA MUST LAND AT LEAST 48h BEFORE THE SHARED open-at.
+;; Because the gap is measured against each chain's OWN block time, a late replica is
+;; REFUSED rather than silently giving its holders a shorter review. That restores the
+;; per-chain skew bound CANCEL-WINDOW used to provide, in a stronger form: all 20 chains must
+;; announce before `open-at − MIN-REVIEW-GAP`, and the operator runbook has to plan replication against it.
+;; ===========================================================================
+(begin-tx "B-1 a replica landing after the replication deadline is REFUSED")
+(env-keys ["admin-key"])
+;; open-at is fixed and shared. This chain is one second past open-at − 48h.
+(env-chain-data { "chain-id": "0", "block-time": (add-time (time "2026-06-20T00:00:00Z") (+ (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP) 1.0)) })
+(expect-failure "a late replica is refused, not silently short-changed"
+  "SPT voting must open at least the minimum review gap after this announcement"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal
+    "B-LATE" "t" "d" (time "2026-06-14T00:00:00Z") (time "2026-06-20T00:00:00Z") 259200))
+(expect "nothing indexed" 0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-prop-count))
+(rollback-tx)
+
+(begin-tx "B-2 CONTROL: the same replica exactly ON the deadline is accepted")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (add-time (time "2026-06-20T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) })
+(expect "on the replication deadline it is accepted" "proposal created"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal
+    "B-OK" "t" "d" (time "2026-06-14T00:00:00Z") (time "2026-06-20T00:00:00Z") 259200))
+(rollback-tx)
+
+;; ===========================================================================
+;; §C — THE TWO HALVES OF THE MECHANISM. `cast-vote` refuses before open-at and
+;; `cancel-proposal` refuses after it, and the SECOND is only blind because the FIRST
+;; exists: delete the cast-vote check and votes accumulate during the review gap, at which
+;; point cancelling on a read tally is the near-full-information veto the design record removes.
+;; P is announced, voting opens, closes .
+;; ===========================================================================
+(begin-tx "C setup: announce P with a 4-day review gap")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-14T00:00:00Z") })
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal
+  "P" "Announce then vote" "d" (time "2026-06-14T00:00:00Z") (time "2026-06-18T00:00:00Z") 259200)
+(commit-tx)
+
+(begin-tx "a finding during the review gap: voting is REFUSED and the tally stays empty")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-17T23:59:59Z") })  ; open-at - 1s
+(env-keys ["alice-key"])
+(expect-failure "a vote one second before open-at is refused"
+  "SPT voting has not opened for this proposal yet"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "alice" "P" true))
+(let ((r (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "P")))
+  (expect "a finding: the tally is empty — there is nothing for an admin to read" 0.0
+    (+ (at 'yes r) (at 'no r))))
+(expect "a finding: and no vote was recorded for alice" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-weight "alice" "0" "P"))
+(rollback-tx)
+
+(begin-tx "a finding and in that same instant CANCEL is legal — blind BY CONSTRUCTION")
+;; This is the whole of the design record in one transaction: at the last moment cancellation is
+;; allowed, the tally is provably empty, so the cancel cannot be acting on an outcome.
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-17T23:59:59Z") })
+(env-keys ["admin-key"])
+(expect "the tally an admin could read right now is empty" 0.0
+  (+ (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "P"))
+     (at 'no (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "P"))))
+(expect "cancel is accepted right up to open-at" "proposal cancelled"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cancel-proposal "P"))
+(rollback-tx)
+
+(begin-tx "a finding at exactly open-at: voting works and cancel is already shut")
+;; Exactly one transition is legal at every instant — no gap, no overlap.
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-18T00:00:00Z") })  ; == open-at
+(env-keys ["admin-key"])
+(expect-failure "cancel at the instant voting opens is refused"
+  "SPT cannot cancel once voting has opened for this proposal"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cancel-proposal "P"))
+(expect "a finding: status untouched by the refused cancel" "active"
+  (at 'status (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.proposal-details "P")))
+(env-keys ["alice-key"])
+(expect "and a vote at the instant voting opens IS accepted" "vote cast"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "alice" "P" true))
+(rollback-tx)
+
+(begin-tx "a finding once a real vote exists, cancel is refused — state untouched")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-19T00:00:00Z") })
+(env-keys ["alice-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "alice" "P" true)
+(env-keys ["admin-key"])
+(let ((yes-before (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "P")))
+      (n-before (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-prop-count)))
+  (expect "setup: the tally is genuinely non-empty" true (> yes-before 0.0))
+  (expect-failure "an admin who can now READ the tally cannot cancel it"
+    "SPT cannot cancel once voting has opened for this proposal"
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cancel-proposal "P"))
+  (expect "a finding: tally untouched" yes-before
+    (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "P")))
+  (expect "a finding: status untouched" "active"
+    (at 'status (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.proposal-details "P")))
+  (expect "a finding: still in the active index" n-before
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-prop-count)))
+(rollback-tx)
+
+;; ===========================================================================
+;; §D — close-at DERIVES FROM open-at. This is the semantic change to an existing field,
+;; so it is asserted as an EXACT timestamp: a relation like "close-at > created-at" would
+;; hold under both derivations and prove nothing.
+;; ===========================================================================
+(begin-tx "D close-at == open-at + duration, NOT created-at + duration")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-19T00:00:00Z") })
+(let ((d (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.proposal-details "P")))
+  (expect "created-at is 2026-06-14" (time "2026-06-14T00:00:00Z") (at 'created-at d))
+  (expect "open-at is 2026-06-18" (time "2026-06-18T00:00:00Z") (at 'open-at d))
+ ;; open-at 06-18 + 72h = 06-21. The OLD derivation would have given 06-17.
+  (expect "close-at is open-at + 72h = 2026-06-21" (time "2026-06-21T00:00:00Z") (at 'close-at d))
+  (expect "and NOT created-at + 72h, which would be 2026-06-17" false
+    (= (at 'close-at d) (time "2026-06-17T00:00:00Z")))
+ ;; The voting window is now EXACTLY duration-seconds long. Under the old derivation it
+ ;; was duration minus however late the announcement landed — measured worst case
+ ;; 255,601s against a nominal 259,200s.
+  (expect "the voting window is exactly MIN-PROPOSAL-DURATION, to the second" 259200.0
+    (diff-time (at 'close-at d) (at 'open-at d))))
+(commit-tx)
+
+;; ===========================================================================
+;; §E — open-at IS IN THE DIGEST, and in the vote-rec schema. the design record §3c required this
+;; if the field were ever added; the design record is the condition firing. A replica carrying a
+;; different open-at is a DIFFERENT PROPOSAL — its holders get a different voting window
+;; and a different cancel window — so it must fail the 20-chain replica check rather than
+;; diverge silently.
+;;
+;; A literal two-replica construction is not available here: the REPL has ONE database, so
+;; the same proposal id cannot exist twice, and two different ids would differ in the
+;; digest for a reason that has nothing to do with open-at. The property is therefore
+;; established the decisive way instead — the digest is shown to MATCH the hash taken over
+;; the true open-at and to DIFFER from the same hash over a perturbed one, with everything
+;; else held identical. The real 20-chain comparison is an the operator runbook operational step.
+;; ===========================================================================
+(begin-tx "E open-at is an input to the digest")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-19T00:00:00Z") })
+(let* ((v (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-record "P"))
+       (d (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.proposal-details "P"))
+       (ca (at 'created-at d))
+       (op (at 'open-at d))
+       (cl (at 'close-at d))
+       (E (time "1970-01-01T00:00:00Z"))
+ ;; a finding (an internal review): the digest hashes EPOCH DECIMALS, not `time` values.
+       (truth     (hash ["P" "Announce then vote" "d" (diff-time ca E) (diff-time op E) (diff-time cl E)]))
+       (perturbed (hash ["P" "Announce then vote" "d" (diff-time ca E) (diff-time (add-time op 1.0) E) (diff-time cl E)]))
+ ;; 🔴 THE SUB-SECOND CASE, which is the whole of a finding. Before the fix the digest hashed
+ ;; `time` values, and MEASURED: `t` and `(add-time t 0.5)` are NOT equal as times yet
+ ;; hash to the SAME digest, character for character. `vote-record` is the deliverable —
+ ;; the design record sums 20 replicas only when every row is DIGEST-EQUAL — so a digest blind
+ ;; below one second reports agreement between replicas that are not identical, and the
+ ;; replication is an admin script, exactly where sub-second drift comes from.
+       (sub-second (hash ["P" "Announce then vote" "d" (diff-time ca E) (diff-time (add-time op 0.5) E) (diff-time cl E)]))
+       (old-style-truth      (hash ["P" "Announce then vote" "d" ca op cl]))
+       (old-style-sub-second (hash ["P" "Announce then vote" "d" ca (add-time op 0.5) cl])))
+ ;; the record carries the field at all (the vote-rec schema half of the design record §3c)
+  (expect "vote-record exposes open-at" (time "2026-06-18T00:00:00Z") (at 'open-at v))
+ ;; CONTROL first: the two candidate hashes must actually differ, or the assertion below
+ ;; is vacuous — a hash function that returned a constant would satisfy it.
+  (expect "CONTROL: perturbing open-at really does change the hash" false (= truth perturbed))
+  (expect "the digest is the hash taken over the TRUE open-at" truth (at 'digest v))
+  (expect "and a replica differing ONLY in open-at would not match it" false
+    (= (at 'digest v) perturbed))
+ ;; ---- a finding ----------------------------------------------------------------------------
+ ;; The defect, shown to still exist in the OLD shape so the fix is not asserted into being:
+  (expect "a finding: hashing `time` values IS blind below one second (the old shape)" true
+    (= old-style-truth old-style-sub-second))
+  (expect "a finding CONTROL: yet the two open-at values are genuinely different times" false
+    (= op (add-time op 0.5)))
+ ;; and the fix: the live digest separates them
+  (expect "a finding: the LIVE digest distinguishes a half-second difference" false
+    (= (at 'digest v) sub-second))
+  (expect "a finding: and it still matches the true record" truth (at 'digest v)))
+(commit-tx)
+
+(print "smartpacts-proposal-lifecycle suite PASSED")

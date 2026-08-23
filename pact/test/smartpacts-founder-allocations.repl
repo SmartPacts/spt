@@ -1,0 +1,390 @@
+;; ===========================================================================
+;; a later change — a later amendment: N founder allocations, one tranche row each.
+;;
+;; setup.repl worlds are the DEGENERATE n=1 case; THIS file is the n>1 proof:
+;; §1 the founder LIST negatives — sum under / over / empty, non-positive and
+;; over-precise amounts, duplicate accounts — each in an otherwise-VALID
+;; call, so the pinned branch is the ONLY thing refusing. Under the named
+;; mutation each init SUCCEEDS, which is what makes these revert checks
+;; (testing-rules §RED-FOR-THE-WRONG-REASON), except the distinct pin —
+;; see its note.
+;; §2 per-row beneficiary validation reaches a LATER row, not just the head.
+;; §3 happy path n=3: whole-supply re-proven with n founder rows (ledger AND
+;; event stream), one TRANCHE-LOCKED per row, identical source-constant
+;; schedule on every founder row, gas under the 150k ceiling.
+;; §4 release-tranche end to end, PER FOUNDER, INDEPENDENTLY: pre-cliff zero,
+;; mid-vest release of one founder leaves the others' bookkeeping
+;; untouched, full vest brings the reserve to EXACTLY 0.0, keyless
+;; (permissionless) releases, re-release refused, phantom key refused.
+;;
+;; Founder fixture (restated ONCE, self-checked against the defconst below):
+;; f1 k:c3c3… 5000.0 f2 k:d4d4… 3000.0 f3 k:e5e5… 2000.0
+;; ===========================================================================
+(load "setup-noinit.repl")
+
+(env-data
+  { "f1k": { "keys": ["c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"], "pred": "keys-all" }
+, "f2k": { "keys": ["d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4"], "pred": "keys-all" }
+, "f3k": { "keys": ["e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5"], "pred": "keys-all" }
+, "tk":  { "keys": ["a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"], "pred": "keys-all" }
+, "lk":  { "keys": ["b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"], "pred": "keys-all" }
+, "emptyk": { "keys": [], "pred": "keys-all" } })
+
+;; The fixture's one restated assumption, made loud: the three amounts ARE the
+;; whole founder tranche. If the defconst ever moves, this line fails before any
+;; assertion below can mislead.
+(expect "fixture self-check: 5000+3000+2000 == FOUNDER-TRANCHE"
+  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-TRANCHE
+  (+ 5000.0 (+ 3000.0 2000.0)))
+
+;; ---------------------------------------------------------------------------
+;; §1a — SUM ENFORCEMENT, both directions plus empty. Everything else valid.
+;; Under-allocation would strand reserve SPT forever (nothing else can debit
+;; FOUNDER-ACCOUNT); over-allocation makes the LAST founders' releases die on
+;; "insufficient reserve balance" after the earlier ones drain the row.
+;; ROLLED BACK, not committed: all-negative calls to the ONE-SHOT init-supply —
+;; if a check is ever weakened the init SUCCEEDS and a commit would persist the
+;; init-state singleton and cascade (the measured a later change M4/M6 shape).
+;; ---------------------------------------------------------------------------
+(begin-tx "a later change N1-N3: founder sum under, over, empty")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+(env-keys ["admin-key"])
+(expect-failure "N1: sum UNDER FOUNDER-TRANCHE is refused (5000+3000 = 8000)"
+  "SPT founder allocations must sum to FOUNDER-TRANCHE"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init-supply
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G
+    [ { "account": "k:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3", "amount": 5000.0 }
+      { "account": "k:d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4", "amount": 3000.0 } ]))
+(expect-failure "N2: sum OVER FOUNDER-TRANCHE is refused (6000+6000 = 12000)"
+  "SPT founder allocations must sum to FOUNDER-TRANCHE"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init-supply
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G
+    [ { "account": "k:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3", "amount": 6000.0 }
+      { "account": "k:d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4", "amount": 6000.0 } ]))
+(expect-failure "N3: an EMPTY founder list is refused (0 != FOUNDER-TRANCHE)"
+  "SPT founder allocations must sum to FOUNDER-TRANCHE"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init-supply
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G
+    []))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; §1b — PER-AMOUNT bounds. In every case the SUM is exactly right, so the
+;; amount branch is the ONLY thing refusing — under its mutation the init
+;; SUCCEEDS (a zero row is an inert permanent row; a negative row corrupts the
+;; reserve accounting; a 13-decimal total makes that founder's FINAL release
+;; non-unit and permanently unclaimable in a frozen module).
+;; ---------------------------------------------------------------------------
+(begin-tx "a later change N4-N6: zero, negative, over-precise founder amounts")
+(env-keys ["admin-key"])
+(expect-failure "N4: a ZERO founder amount is refused (0.0 + 10000.0 sums right)"
+  "SPT founder allocation amount must be positive"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init-supply
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G
+    [ { "account": "k:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3", "amount": 0.0 }
+      { "account": "k:d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4"
+   , "amount": n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-TRANCHE } ]))
+(expect-failure "N5: a NEGATIVE founder amount is refused (-100 + 10100 sums right)"
+  "SPT founder allocation amount must be positive"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init-supply
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G
+    [ { "account": "k:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3", "amount": -100.0 }
+      { "account": "k:d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4", "amount": 10100.0 } ]))
+(expect-failure "N6: a 13-decimal founder amount is refused (the pair still sums to exactly 10000)"
+  "SPT founder allocation amount violates precision"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init-supply
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G
+    [ { "account": "k:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3", "amount": 5000.0000000000005 }
+      { "account": "k:d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4", "amount": 4999.9999999999995 } ]))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; §1c — DUPLICATE founder accounts. Two rows would need one "founder:<acct>"
+;; key. 🔴 KNOWN MASKED PAIR, dispositioned in an internal document later change.md: the
+;; `insert` refuses the duplicate too (a database abort), so removing the named
+;; enforce turns this red on a MESSAGE MISMATCH, not on the property — the
+;; enforce is kept anyway so the one-shot ceremony refuses with a NAME instead
+;; of a database internals string.
+;; ---------------------------------------------------------------------------
+(begin-tx "a later change N7: duplicate founder accounts")
+(env-keys ["admin-key"])
+(expect-failure "N7: the same founder account twice is refused by name"
+  "SPT founder accounts must be distinct"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init-supply
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G
+    [ { "account": "k:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3", "amount": 5000.0 }
+      { "account": "k:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3", "amount": 5000.0 } ]))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; §2 — PER-ROW validation reaches a LATER row: the FIRST row is fully valid and
+;; only the SECOND is bad, so a regression that validated just the head would
+;; pass smartpacts-init-beneficiary-bounds.repl and fail HERE.
+;; FOUNDER ROWS ARE k:-ONLY (founder decision, a later change §2): N8/N9's
+;; malformed shapes are refused by that gate (it runs in the pre-write list
+;; validation), N10's k:-account-with-wrong-guard still reaches
+;; enforce-beneficiary's binding, and N11 is THE named decision test — a
+;; well-formed 2-of-2 w: multisig founder row that passes every OTHER check and
+;; must be refused; remove the k:-only gate and N11's init SUCCEEDS (red for
+;; the right reason).
+;; 🔴 N10 IN ITS OWN TX, ROLLED BACK: enforce-beneficiary runs in the lock loop
+;; AFTER init-supply's state writes, and expect-failure LEAKS the writes made
+;; before the failing enforce (this repo's measured trap) — sharing a tx made
+;; later negatives die on the leaked state row, wrong-reason. N8/N9/N11 fail in
+;; the pre-write block, but each keeps its own rolled-back tx anyway: under a
+;; weakened check the init SUCCEEDS and writes.
+;; ---------------------------------------------------------------------------
+(begin-tx "a later change N8: the bad founder row is the SECOND one — vanity")
+(env-keys ["admin-key"])
+(expect-failure "N8: a vanity account in row 2 is refused (it is not a principal at all)"
+  "beneficiary must be a k:/w: principal"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init-supply
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G
+    [ { "account": "k:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3", "amount": 5000.0 }
+      { "account": "founder-two-vanity", "amount": 5000.0 } ]))
+(rollback-tx)
+
+(begin-tx "a later change N9: the bad founder row is the SECOND one — empty keyset")
+(env-keys ["admin-key"])
+(expect-failure "N9: an empty-keyset beneficiary in row 2 is refused (vacuously satisfiable)"
+  "beneficiary must not be an empty keyset"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init-supply
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G
+    [ { "account": "k:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3", "amount": 5000.0 }
+      { "account": (create-principal (read-keyset 'emptyk)), "amount": 5000.0 } ]))
+(rollback-tx)
+
+;; 🔴 N10 IS DELETED (the design record, a later change), NOT WEAKENED. It paired row 2's account with row
+;; 1's GUARD and asserted "beneficiary guard/principal mismatch". After the design record the ceremony
+;; receives NO guard at all, so there is no pair to mismatch and that refusal cannot happen —
+;; a negative asserting a refusal that cannot occur is a test that cannot fail, which is the
+;; defect this estate has shipped before.
+;; 🔴 THE PROPERTY IT PROTECTED DID NOT DISAPPEAR, IT MOVED. Binding a principal NAME to its
+;; GUARD is now enforced where the guard first exists: `enforce-reserved` at account creation
+;; (which refuses a principal name whose guard does not derive it) and again in
+;; `enforce-beneficiary` at release, against the guard read from the account's own row.
+;; Pinned by smartpacts-tranches.repl's the design record block, not by an init-supply negative.
+
+;; 🔴 N11 IS INVERTED (the design record, a later change). It was THE named test for the single-key
+;; decision: a well-formed 2-of-2 multisig founder row had to be REFUSED, and it pinned the
+;; permanent cost "no multisig founder allocation, ever". the design record reverses that decision on a
+;; measurement — the k:-only rule closed one of two identical entrances to the same room (a
+;; `k:` address whose key nobody holds was accepted and paid out, unspendable forever: identical
+;; damage to the `w:` shape it forbade) while permanently banning every multisig founder on a
+;; module that freezes.
+;; So the assertion flips rather than disappearing: the same row must now be ACCEPTED. Deleting
+;; it outright would have left the reversal unpinned in the file that owns the founder list.
+(begin-tx "a later change N11 INVERTED: a well-formed multisig founder row is ACCEPTED (the design record)")
+(env-data
+  { "f1k": { "keys": ["c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"], "pred": "keys-all" }
+, "msig": { "keys": ["c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"
+                   ,"d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4"]
+         , "pred": "keys-2" } })
+(env-keys ["admin-key"])
+(expect "N11: a keys-2 w: founder row is accepted — founders supply any address they control"
+  "supply initialized"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init-supply
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G
+    [ { "account": "k:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3", "amount": 5000.0 }
+      { "account": (create-principal (read-keyset 'msig)), "amount": 5000.0 } ]))
+;; rolled back: init-supply is one-shot and later blocks in this file need a fresh chain
+(rollback-tx)
+
+;; Restore the §1 env-data (N11 replaced it — env-data survives rollback).
+(env-data
+  { "f1k": { "keys": ["c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"], "pred": "keys-all" }
+, "f2k": { "keys": ["d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4"], "pred": "keys-all" }
+, "f3k": { "keys": ["e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5"], "pred": "keys-all" }
+, "tk":  { "keys": ["a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"], "pred": "keys-all" }
+, "lk":  { "keys": ["b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"], "pred": "keys-all" } })
+
+;; A rejected ceremony leaves the chain FULLY uninitialized — not merely "an
+;; error fired" (the tokens-init discipline, restated for the list shape).
+(begin-tx "a later change: no state row survived the rejected ceremonies")
+;; 🔴 PROBED THROUGH `get-circulating`, NOT `get-launch-reserve` (a finding, ). The launch
+;; reserve is a defconst now and its getter reads NO state, so it can never fail — a probe
+;; built on it would report a clean chain forever, including on a half-initialized one.
+;; `get-circulating` still reads the `state` singleton, so it is the honest oracle here.
+(expect-failure "chain 0 is still uninitialized after N1-N10"
+  "No value found in table n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT_state for key: state"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; §3 — HAPPY PATH, n = 3. Gas measured against the REAL ceiling so a breach
+;; aborts instead of reporting a passing number (tokens-init discipline).
+;; ---------------------------------------------------------------------------
+(begin-tx "a later change: init-supply with three founders")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+(env-keys ["admin-key"])
+(env-gasmodel "table")
+(env-gaslimit 150000)
+(env-gas 0)
+(let* ((r (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init-supply
+            n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G
+            [ { "account": "k:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3", "amount": 5000.0 }
+              { "account": "k:d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4", "amount": 3000.0 }
+              { "account": "k:e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5", "amount": 2000.0 } ]))
+       (g (env-gas)))
+  (expect "n=3 init-supply ok" "supply initialized" r)
+  (print (format "GAS init-supply (4-reserve mint + n=3 tranche locks): {}" [g]))
+  (expect "n=3 init-supply gas under the 150k KDA-CE ceiling" true (< g 150000)))
+(env-gaslimit 999999999)
+
+;; 🔴 the design record (a later change): each founder creates their OWN account, AFTER the ceremony. On chain 0
+;; it cannot be before — `create-account` reads the `state` row that `init-supply` inserts —
+;; and it need not be: the cliff is 365 days, and until an account exists its release refuses
+;; retryably with the tokens waiting in the excluded reserve.
+(env-data
+  { "f1k": { "keys": ["c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"], "pred": "keys-all" }
+, "f2k": { "keys": ["d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4"], "pred": "keys-all" }
+, "f3k": { "keys": ["e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5"], "pred": "keys-all" } })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-account
+  "k:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3" (read-keyset 'f1k))
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-account
+  "k:d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4" (read-keyset 'f2k))
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-account
+  "k:e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5" (read-keyset 'f3k))
+
+;; THE WHOLE-SUPPLY ASSERTION, RE-PROVEN WITH n FOUNDER ROWS — on the LEDGER…
+(expect "ledger: the four reserves hold exactly TOTAL-SUPPLY"
+  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TOTAL-SUPPLY
+  (+ (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance
+       n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-ACCOUNT)
+     (+ (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance
+          n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-ACCOUNT)
+        (+ (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance
+             n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.LIQUIDITY-ACCOUNT)
+           (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance
+             n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-ACCOUNT)))))
+(expect "the founder RESERVE holds the whole tranche (n rows token ONE reserve)"
+  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-TRANCHE
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-ACCOUNT))
+(expect "circulating still 0 — nothing released yet" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+
+;; …and on the EVENT STREAM (env-events is per-transaction, so this lives here):
+;; 4 mints reconcile to TOTAL-SUPPLY, and ONE TRANCHE-LOCKED per row — founder
+;; rows first in list order, the two fixed rows after, every founder row on the
+;; SAME source-constant schedule (T+365d -> T+1460d).
+(let* ((evs (env-events true))
+       (mints (filter (lambda (e:object)
+                        (= "n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER" (at 'name e)))
+                      evs))
+       (locked (filter (lambda (e:object)
+                         (= "n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANCHE-LOCKED" (at 'name e)))
+                       evs)))
+  (expect "event stream reconciles to TOTAL-SUPPLY with n founder rows"
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TOTAL-SUPPLY
+    (fold (lambda (acc:decimal e:object) (+ acc (at 2 (at 'params e)))) 0.0 mints))
+  (expect "five TRANCHE-LOCKED events: one per founder row + the two fixed rows"
+    [ ["founder:k:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3" 5000.0]
+      ["founder:k:d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4" 3000.0]
+      ["founder:k:e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5" 2000.0]
+      [n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANCHE-TREASURY
+       n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-TRANCHE]
+      [n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANCHE-LIQUIDITY
+       n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.LIQUIDITY-TRANCHE] ]
+    (map (lambda (e:object) [(at 0 (at 'params e)) (at 2 (at 'params e))]) locked))
+  (expect "every founder row vests on the SAME source-constant calendar"
+    [ [(time "2027-06-01T00:00:00Z") (time "2030-05-31T00:00:00Z")]
+      [(time "2027-06-01T00:00:00Z") (time "2030-05-31T00:00:00Z")]
+      [(time "2027-06-01T00:00:00Z") (time "2030-05-31T00:00:00Z")] ]
+    (map (lambda (e:object) [(at 3 (at 'params e)) (at 4 (at 'params e))])
+         (filter (lambda (e:object)
+                   (= "founder:" (take 8 (at 0 (at 'params e)))))
+                 locked))))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; §4 — RELEASE, per founder, independently.
+;; ---------------------------------------------------------------------------
+(begin-tx "a later change: before the cliff nothing is releasable")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-05-31T00:00:00Z") })  ; T+364d
+(env-keys [])
+(expect "f1 releasable 0 before cliff" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.tranche-releasable
+    "founder:k:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"))
+(expect-failure "f1 release refused before cliff" "nothing releasable"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.release-tranche
+    "founder:k:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"))
+(commit-tx)
+
+(begin-tx "a later change: mid-vest, releasing ONE founder leaves the others untouched")
+;; T+730d: exactly 1/3 through the linear window ((730-365)/(1460-365) = 1/3).
+(env-chain-data { "chain-id": "0", "block-time": (time "2028-05-31T00:00:00Z") })
+(env-keys [])   ; PERMISSIONLESS — no signature anywhere in this tx
+(expect "f1 mid-vest releasable = floor-12 of 5000/3" 1666.666666666666
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.tranche-releasable
+    "founder:k:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"))
+(expect "f1 mid-vest release pays out, keyless" 1666.666666666666
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.release-tranche
+    "founder:k:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"))
+(expect "f1 holds exactly the released amount" 1666.666666666666
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance
+    "k:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"))
+;; INDEPENDENCE: the shared reserve dropped by exactly f1's release, and the
+;; OTHER founder rows' bookkeeping did not move.
+(expect "the shared reserve dropped by exactly f1's release" 8333.333333333334
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-ACCOUNT))
+(expect "f2's row is untouched: released still 0" 0.0
+  (at 'released (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-tranche
+    "founder:k:d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4")))
+(expect "f3's row is untouched: released still 0" 0.0
+  (at 'released (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-tranche
+    "founder:k:e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5")))
+(expect "f2 mid-vest releasable is 3000/3, unaffected by f1's release" 1000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.tranche-releasable
+    "founder:k:d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4"))
+(commit-tx)
+
+(begin-tx "a later change: full vest drains every founder row and the reserve to zero")
+(env-chain-data { "chain-id": "0", "block-time": (time "2030-05-31T00:00:00Z") })  ; T+1460d
+(env-keys [])   ; still keyless
+;; Mixed order on purpose: f2 first, then f1's REMAINDER (final-claim top-up to
+;; exactly total — no floor dust), then f3.
+(expect "f2 full release" 3000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.release-tranche
+    "founder:k:d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4"))
+(expect "f1 remainder tops up to exactly total" 3333.333333333334
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.release-tranche
+    "founder:k:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"))
+(expect "f3 full release" 2000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.release-tranche
+    "founder:k:e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5"))
+;; End state: each founder holds exactly its allocation, the released
+;; bookkeeping equals each row's total, the shared reserve is EXACTLY empty,
+;; and the whole tranche is circulating.
+(expect "f1 ends with exactly its allocation" 5000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance
+    "k:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"))
+(expect "f2 ends with exactly its allocation" 3000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance
+    "k:d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4"))
+(expect "f3 ends with exactly its allocation" 2000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance
+    "k:e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5"))
+(expect "released == total on f1's row" 5000.0
+  (at 'released (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-tranche
+    "founder:k:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3")))
+(expect "the shared founder reserve is EXACTLY empty — conservation end to end" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-ACCOUNT))
+(expect "the whole founder tranche is circulating"
+  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-TRANCHE
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+;; Re-release: nothing left on a fully-released row.
+(expect-failure "a fully-released founder row refuses again" "nothing releasable"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.release-tranche
+    "founder:k:d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4"))
+;; A founder-prefixed key that was NEVER a ceremony row: refused by the
+;; with-read, so the prefix dispatch cannot invent a tranche.
+(expect-failure "a phantom founder key does not exist"
+  "No value found in table"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.release-tranche
+    "founder:k:9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f"))
+(commit-tx)
+
+(print "smartpacts-founder-allocations a later amendment suite PASSED — n founder allocations, sum enforced, released independently")

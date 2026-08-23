@@ -1,0 +1,25 @@
+;; MUST-FAIL FIXTURE (a later change cold-audit finding 2; REPURPOSED by a later change).
+;; An in-place upgrade that does not state that it IS an upgrade must ABORT, not guess.
+;; `read-msg` on a missing key is the enforcement, and a load failure cannot be wrapped in
+;; expect-failure (it leaves the parser inside the module's namespace), so this is asserted
+;; from OUTSIDE on both the exit code and the error text.
+;;
+;; WHAT CHANGED (a later change): this fixture used to omit `legacy-adr015-tables`, the key that
+;; selected between "create the two the design record tables" and "create none". That key and the two
+;; historical migrations are DELETED — no chain running the pre-the design record schema can exist,
+;; because nothing is deployed anywhere and the first mainnet deploy is a fresh one.
+;; The fixture is retained rather than deleted because the property it defends is NOT about
+;; the design record: the deploy footer must refuse to GUESS which case it is in. `upgrade` is now the
+;; only such key, and getting it wrong is still an outage in both directions — a wrong `true`
+;; skips every create-table on a fresh chain, a wrong `false` aborts on an existing table.
+(load "setup.repl")
+(begin-tx "upgrade with NO upgrade key at all")
+(env-data
+  { "ns": "n_48867b242317a0216a67f8c7ca26696b5878e0e3"
+, "spt-gov-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-gov"
+, "spt-gov": { "keys": ["admin-key"], "pred": "keys-all" }
+, "spt-ops-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-ops"
+, "spt-ops": { "keys": ["admin-key"], "pred": "keys-any" } })
+(env-keys ["admin-key"])
+(load "../modules/SPT.pact")
+(commit-tx)

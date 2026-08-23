@@ -1,0 +1,264 @@
+;; ===========================================================================
+;; THE VALUE-DESCRIBING EVENTS — forgeability, per event, decided.
+;; a later change / the operator runbook an internal review a finding. Eleven at a later change; TREASURY-BENEFICIARY-SET
+;; (the design record D3, a later change) is the twelfth — probed as VE-15 below.
+;;
+;; the design record §3b gave real bodies to five GOVERNANCE events on an explicit hygiene
+;; rationale: "an emitted record … that anyone can fabricate actively misleads
+;; explorers, indexers and holders". Eleven VALUE-describing events were left
+;; weak and are forgeable by the same foreign-compose route. Measured before this
+;; suite existed, with `env-sigs []` / `env-keys []`:
+;; TRANCHE-LOCKED ["treasury" "k:attacker" 999999.0 …]
+;; AWARD-CLAIMED ["victim" 123456.0]
+;; TRANSFER_XCHAIN_RECD ["" "k:attacker" 50000.0 "3"]
+;; Two of those matter beyond hygiene: the module itself designates TRANCHE-LOCKED
+;; "the public disclosure anchor", and TRANSFER_XCHAIN_RECD is how indexers
+;; reconstruct cross-chain balances.
+;;
+;; 🔴 THE DEFECT WAS THE SILENCE, NOT THE WEAKNESS. `PROPOSAL-CLOSED` carries an
+;; explicit "deliberately weak, read the table not the stream" disposition. The
+;; other eleven carried nothing, so a reader could not tell decided-and-accepted
+;; from overlooked. Every one of them now has one or the other, and this file is
+;; where the difference is asserted rather than described.
+;;
+;; THE SPLIT, and why it is not arbitrary:
+;; SEVEN have a clean authorizing capability, so they get a real body —
+;; ROUND-DECLARED, ROUND-RETRACTED, POOL-SURPLUS-RECOVERED, FUNDING-WITHDRAWN,
+;; TRANCHE-LOCKED, TREASURY-BENEFICIARY-SET (a later change) -> ADMIN
+;; AWARD-FUNDED -> FUND-AWARDS
+;; FIVE are emitted by PERMISSIONLESS functions, so there is no holder to
+;; require and a body would be either vacuous or a LIVENESS REGRESSION —
+;; ROUND-APPLIED (apply-round), AWARD-CLAIMED (claim-awards),
+;; FUNDING-RECEIVED (receive-funding), TRANCHE-RELEASED (release-tranche),
+;; TRANSFER_XCHAIN_RECD (the cross-chain resume).
+;; Inventing an authorization for a permissionless action is exactly the weak
+;; `LIFECYCLE` cap a later change's audit rated CRITICAL — a body that asserts a
+;; precondition while READING as an authorization. So those five stay weak, on
+;; the record, and this file asserts that they ARE forgeable so nobody later
+;; mistakes silence for safety.
+;;
+;; WHY A REAL BODY COSTS NO LIVENESS: `emit-event` does NOT evaluate the defcap
+;; body — verified independently (a cap whose body is `(enforce false …)` still
+;; emits). The body is only reached by ACQUISITION, which is the attacker's route.
+;; The legitimate emitters below are therefore all still exercised as controls.
+;; ===========================================================================
+(load "setup.repl")
+
+(begin-tx "the forger — one entry point per value event")
+(env-data { "vk": { "keys": ["vforger"], "pred": "keys-all" } })
+(env-keys ["vforger"])
+(define-namespace "vfns" (read-keyset 'vk) (read-keyset 'vk))
+(namespace "vfns")
+(module vforge G
+  (defcap G () (enforce-guard (read-keyset 'vk)))
+
+ ;; --- the six that should now REFUSE ---
+  (defcap C-RD (id:string rate:decimal eff:time)
+    (compose-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.ROUND-DECLARED id rate eff)))
+  (defun f-round-declared:string (id:string rate:decimal eff:time)
+    (with-capability (C-RD id rate eff) "FORGED"))
+
+  (defcap C-RR (id:string i:integer rate:decimal eff:time)
+    (compose-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.ROUND-RETRACTED id i rate eff)))
+  (defun f-round-retracted:string (id:string i:integer rate:decimal eff:time)
+    (with-capability (C-RR id i rate eff) "FORGED"))
+
+  (defcap C-DF (a:decimal)
+    (compose-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.AWARD-FUNDED a)))
+  (defun f-award-funded:string (a:decimal) (with-capability (C-DF a) "FORGED"))
+
+  (defcap C-PS (a:decimal)
+    (compose-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-SURPLUS-RECOVERED a)))
+  (defun f-pool-surplus:string (a:decimal) (with-capability (C-PS a) "FORGED"))
+
+  (defcap C-RW (to:string a:decimal)
+    (compose-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-WITHDRAWN to a)))
+  (defun f-funding-withdrawn:string (to:string a:decimal) (with-capability (C-RW to a) "FORGED"))
+
+  (defcap C-TL (t:string b:string tot:decimal ce:time ve:time)
+    (compose-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANCHE-LOCKED t b tot ce ve)))
+  (defun f-tranche-locked:string (t:string b:string tot:decimal ce:time ve:time)
+    (with-capability (C-TL t b tot ce ve) "FORGED"))
+
+ ;; a later change / a later amendment: the DISBURSEMENT disclosure event, which replaced the D3
+ ;; beneficiary trace here. A forged one would tell an indexer that treasury tokens moved
+ ;; to an account they never reached — the single most misleading event this token could
+ ;; emit, since disbursement is the one discretionary power over 70% of supply.
+  (defcap C-TD (t:string tgt:string a:decimal d:decimal)
+    (compose-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANCHE-DISBURSED t tgt a d)))
+  (defun f-tranche-disbursed:string (t:string tgt:string a:decimal d:decimal)
+    (with-capability (C-TD t tgt a d) "FORGED"))
+
+ ;; --- the five that REMAIN forgeable, deliberately ---
+  (defcap C-RA (id:string c:string r:decimal)
+    (compose-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.ROUND-APPLIED id c r)))
+  (defun f-round-applied:string (id:string c:string r:decimal) (with-capability (C-RA id c r) "FORGED"))
+
+  (defcap C-DC (acct:string a:decimal)
+    (compose-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.AWARD-CLAIMED acct a)))
+  (defun f-award-claimed:string (acct:string a:decimal) (with-capability (C-DC acct a) "FORGED"))
+
+  (defcap C-RRV (from:string a:decimal)
+    (compose-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-RECEIVED from a)))
+  (defun f-funding-received:string (from:string a:decimal) (with-capability (C-RRV from a) "FORGED"))
+
+  (defcap C-TR (t:string b:string a:decimal rt:decimal)
+    (compose-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANCHE-RELEASED t b a rt)))
+  (defun f-tranche-released:string (t:string b:string a:decimal rt:decimal)
+    (with-capability (C-TR t b a rt) "FORGED"))
+
+ ;; --- SIBLING MODULES (an internal review a finding): the a later change sweep stopped at tokens ---
+  (defcap C-PW (to:string a:decimal)
+    (compose-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.PROCEEDS-WITHDRAWN to a)))
+  (defun f-proceeds:string (to:string a:decimal) (with-capability (C-PW to a) "FORGED"))
+
+
+  (defcap C-SP (b:string a:decimal pr:decimal)
+    (compose-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.TOKENS-PURCHASED b a pr)))
+  (defun f-tokens-purchased:string (b:string a:decimal pr:decimal)
+    (with-capability (C-SP b a pr) "FORGED"))
+
+  (defcap C-XR (s:string r:string a:decimal sc:string)
+    (compose-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER_XCHAIN_RECD s r a sc)))
+  (defun f-xchain-recd:string (s:string r:string a:decimal sc:string)
+    (with-capability (C-XR s r a sc) "FORGED"))
+)
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; PART 1 — the six with a clean holder now REFUSE. Zero signatures.
+;; Each was proven falsifying: reverting its cap to `@event true` individually
+;; makes the corresponding assertion return "FORGED".
+;; ---------------------------------------------------------------------------
+(begin-tx "VE-1..VE-6: an authorizing capability is now required")
+(env-sigs [])
+(env-keys [])
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })
+
+(expect-failure "VE-1: ROUND-DECLARED needs ADMIN" "not granted"
+  (vfns.vforge.f-round-declared "FAKE" 99.0 (time "2027-01-01T00:00:00Z")))
+(expect-failure "VE-2: ROUND-RETRACTED needs ADMIN" "not granted"
+  (vfns.vforge.f-round-retracted "FAKE" 1 0.0 (time "2027-01-01T00:00:00Z")))
+(expect-failure "VE-3: AWARD-FUNDED needs FUND-AWARDS" "not granted"
+  (vfns.vforge.f-award-funded 123456.0))
+(expect-failure "VE-4: POOL-SURPLUS-RECOVERED needs ADMIN" "not granted"
+  (vfns.vforge.f-pool-surplus 999999.0))
+(expect-failure "VE-5: FUNDING-WITHDRAWN needs ADMIN" "not granted"
+  (vfns.vforge.f-funding-withdrawn "k:attacker" 999999.0))
+;; The one the module calls "the public disclosure anchor" — the whole the design record
+;; schedule is published through this event.
+(expect-failure "VE-6: TRANCHE-LOCKED needs ADMIN" "not granted"
+  (vfns.vforge.f-tranche-locked "treasury" "k:attacker" 999999.0
+    (time "2027-01-01T00:00:00Z") (time "2030-01-01T00:00:00Z")))
+;; VE-15 (number appended when the event was added by a later change — the VE-7..14 labels
+;; below predate it and are pinned in reports, so they keep their numbers): the the design record
+;; D3 trace refuses the same way. The legitimate-emitter CONTROL cannot live in this
+;; suite — init/init-supply are one-shot and setup.repl has already spent them (one REPL
+;; database) — it lives in SPT-launch-reserve.repl §2 (init emits, params asserted)
+;; and SPT-init.repl (init-supply emits, params asserted).
+;; VE-15 (TREASURY-BENEFICIARY-SET) is DELETED with the event itself — a later amendment removed
+;; the stored beneficiary and its trace. VE-16 replaces it on the event Am.2 ADDED, and it
+;; is the more important probe of the two: the D3 trace was written once at init, whereas
+;; TRANCHE-DISBURSED is emitted every time the admin moves treasury or liquidity tokens.
+;; Its legitimate-emitter CONTROL is smartpacts-tranches.repl (params asserted after a real
+;; disbursement) — it cannot live here, because this suite's world has no ADMIN signature.
+(expect-failure "VE-16: TRANCHE-DISBURSED needs ADMIN" "not granted"
+  (vfns.vforge.f-tranche-disbursed "treasury" "k:attacker" 55000.0 55000.0))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; PART 2 — the five that stay forgeable, ASSERTED, so silence never returns.
+;; If any of these flips to a failure, somebody added a body to a permissionless
+;; emitter: triage it as a LIVENESS RISK first, not as a fix. The legitimate
+;; caller of each is unauthenticated by design.
+;; ---------------------------------------------------------------------------
+(begin-tx "VE-7..VE-11: permissionless emitters have no holder to require")
+(env-sigs [])
+(env-keys [])
+(expect "VE-7: ROUND-APPLIED forgeable — apply-round is permissionless" "FORGED"
+  (vfns.vforge.f-round-applied "FAKE" "0" 99.0))
+(expect "VE-8: AWARD-CLAIMED forgeable — claim-awards is permissionless" "FORGED"
+  (vfns.vforge.f-award-claimed "victim" 123456.0))
+(expect "VE-9: FUNDING-RECEIVED forgeable — receive-funding is permissionless" "FORGED"
+  (vfns.vforge.f-funding-received "k:attacker" 999999.0))
+(expect "VE-10: TRANCHE-RELEASED forgeable — release-tranche is permissionless" "FORGED"
+  (vfns.vforge.f-tranche-released "treasury" "k:attacker" 999999.0 999999.0))
+;; This is how indexers reconstruct cross-chain balances. It stays weak because the
+;; resume that emits it is reached through SPV, not through a signature.
+(expect "VE-11: TRANSFER_XCHAIN_RECD forgeable — the resume has no signer" "FORGED"
+  (vfns.vforge.f-xchain-recd "" "k:attacker" 50000.0 "3"))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; PART 3 — CONTROLS. Every legitimate emitter still works. Without these, the
+;; refusals above would be indistinguishable from six broken capabilities, which
+;; is the failure mode this repo has shipped twice.
+;; ---------------------------------------------------------------------------
+;; ---- the design record (a later change): A ROUND NEEDS A SEALED RECORD DATE ----------------------
+;; Schedule one clear of the 12h runway (2 x MIN-RETRACT-LEAD), let it land, seal it.
+;; The seal runs with NO KEYS on purpose: `advance-snapshot` is permissionless, and a
+;; chain with no activity must still be sealable by anyone.
+(begin-tx "the design record: name the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (add-time (at 'block-time (chain-data)) 43202))
+(commit-tx)
+(env-chain-data
+  { "chain-id": (at 'chain-id (chain-data))
+, "block-time": (add-time (at 'block-time (chain-data)) 43203) })
+(begin-tx "the design record: seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "VE-CONTROL: the ADMIN-gated emitters still emit")
+(env-sigs [])
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })
+(expect "VE-CONTROL: declare-round still works (ROUND-DECLARED)" "round declared"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round
+    "VE-R1" 0.01 (time "2026-06-04T00:00:00Z")))
+(expect "VE-CONTROL: retract-round still works (ROUND-RETRACTED)" "round retracted"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.retract-round "VE-R1"))
+(commit-tx)
+
+(begin-tx "VE-CONTROL: funding in and out still emit")
+(env-keys ["admin-key"])
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT 10.0)] }])
+(expect "VE-CONTROL: receive-funding still works (FUNDING-RECEIVED, permissionless)" "funding received"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" 10.0))
+(env-keys [])
+(env-data { "rk": { "keys": ["admin-key"], "pred": "keys-all" } })
+;; WITHDRAW-FUNDING became @managed on amount (founder, ), so the legitimate
+;; emitter must now sign SCOPED to the exact destination and amount it moves.
+(env-sigs [{ "key": "admin-key"
+        , "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.WITHDRAW-FUNDING "sender00" 5.0)] }])
+(expect "VE-CONTROL: withdraw-funding still works (FUNDING-WITHDRAWN)" "funding withdrawn"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.withdraw-funding "sender00" 5.0))
+(commit-tx)
+
+(begin-tx "VE-12/VE-13: the sibling modules (an internal review a finding)")
+(env-sigs [])
+(env-keys [])
+(expect-failure "VE-12: launch PROCEEDS-WITHDRAWN needs ADMIN" "not granted"
+  (vfns.vforge.f-proceeds "k:attacker" 999999.0))
+;; VE-14: TOKENS-PURCHASED stays weak, DELIBERATELY. `buy` is permissionless and
+;; the managed TRANSFER it installs is CONSUMED before the emit, so an internal review's suggested
+;; body would lock out the legitimate emitter. Asserted, not silently omitted.
+(expect "VE-14: TOKENS-PURCHASED forgeable — buy is permissionless" "FORGED"
+  (vfns.vforge.f-tokens-purchased "victim" 999999.0 0.000001))
+(commit-tx)
+
+(begin-tx "VE-CONTROL: a real LAUNCH purchase still emits TOKENS-PURCHASED")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(env-data { "vb": { "keys": ["vbuyer"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "vbuyer" 100.0)] }])
+(coin.transfer-create "sender00" "vbuyer" (read-keyset 'vb) 100.0)
+(env-sigs [{ "key": "vbuyer", "caps": [(coin.TRANSFER "vbuyer" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 50.0)] }])
+(expect "VE-CONTROL: the permissionless purchase still works" "tokens purchased"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "vbuyer" (read-keyset 'vb) 100.0))
+(commit-tx)
+
+(print "smartpacts-value-event-forgery suite PASSED")

@@ -1,0 +1,60 @@
+;; ===========================================================================
+;; SPT-launch EXTENSIONS — buy negatives: non-positive / sub-precision amounts,
+;; dust (cost floors to 0), oversell beyond the reserve, and missing payment cap.
+;; Builds on setup.repl; initialises + activates the sale. Buyer = sender00.
+;; ===========================================================================
+(load "setup.repl")
+
+(begin-tx "init + activate sale")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(expect "sale active" true (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.is-active))
+(commit-tx)
+
+;; --- SALE-R08: non-positive and sub-precision amounts rejected ---
+(begin-tx "SALE-R08 amount negatives")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.SALES-PROCEEDS-ACCOUNT 1.0)] }])
+(expect-failure "amount must be positive"
+  "SPT token amount must be positive" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "sender00" (read-keyset 'sender00) 0.0))
+(expect-failure "sub-precision amount rejected"
+  "amount violates minimum precision" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "sender00" (read-keyset 'sender00) 1.0000000000001))
+(commit-tx)
+
+;; --- SALE-R09: dust amount where floor(amount*price)=0 -> cost must be positive ---
+(begin-tx "SALE-R09 dust cost floors to 0")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.SALES-PROCEEDS-ACCOUNT 1.0)] }])
+;; 0.000000000001 SPT * 0.5 = 5e-13 -> floor to 12 dp = 0.0
+(expect-failure "cost must be positive"
+  "cost must be positive" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "sender00" (read-keyset 'sender00) 0.000000000001))
+(commit-tx)
+
+;; --- SALE-R10: oversell beyond the 20000 reserve rejected (reserve debit fails) ---
+;; a later change / trap 2b — MEASURED LEAK, now closed. buy takes the KDA payment FIRST
+;; and delivers the SPT SECOND, so an oversell fails on the SPT leg with the coin transfer
+;; ALREADY WRITTEN. `expect-failure` catches the abort, so that write survived commit-tx:
+;; measured sender00 1,000,000.0 -> 987,500.0 and sales proceeds 0.0 -> 12,500.0, while the
+;; assertion below read "(tx rolled back)" and passed. Nothing was rolled back — the SPT
+;; reserve was intact only because the SPT leg never ran, which is not what the line claimed.
+;; The negative now runs in its OWN rollback-tx and the state assertions committed separately,
+;; and the KDA leg is asserted too: that is the assertion that would have caught this.
+(begin-tx "SALE-R10 oversell")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.SALES-PROCEEDS-ACCOUNT 12500.0)] }])
+(expect-failure "insufficient funds (reserve has only 20000)"
+  "insufficient funds" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "sender00" (read-keyset 'sender00) 25000.0))
+(rollback-tx)
+
+(begin-tx "SALE-R10 state after the refused oversell")
+(expect "reserve still 20000" 20000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-ACCOUNT))
+(expect "and NO KDA moved: sales proceeds still 0" 0.0 (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.SALES-PROCEEDS-ACCOUNT))
+(expect "and the buyer was not charged" 1000000.0 (coin.get-balance "sender00"))
+(commit-tx)
+
+;; --- SALE-R11: buyer without the coin.TRANSFER payment cap rejected ---
+(begin-tx "SALE-R11 missing payment cap")
+(env-sigs [])
+(expect-failure "no payment capability -> rejected"
+  "Managed capability not installed: (coin.TRANSFER \"sender00\" \"m:n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch:SPT-launch-proceeds\" 50.0)" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "sender00" (read-keyset 'sender00) 100.0))
+(commit-tx)
+
+(print "SPT-launch-ext REPL suite PASSED")

@@ -1,0 +1,104 @@
+;; ===========================================================================
+;; Shared REPL environment for SPT module tests.
+;; Loads coin + fungible interfaces (root), then the 3 production modules into
+;; the `free` namespace, funds the admin (sender00), and runs init-supply (chain 0).
+;; Run test files from pact/test/ (relative load paths). admin keyset key = "admin-key".
+;; ===========================================================================
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+
+;; --- coin environment (root namespace) ---
+(begin-tx "load coin")
+(load "fixtures/fungible-v2.pact")
+(load "fixtures/fungible-xchain-v1.pact")
+(load "fixtures/gas-payer-v1.pact")
+(load "fixtures/coin.pact")
+(create-table coin.coin-table)
+(create-table coin.allocation-table)
+(commit-tx)
+
+;; --- fund the admin/funder account "sender00" with KDA ---
+(begin-tx "fund sender00")
+(env-data { "sender00": { "keys": ["admin-key"], "pred": "keys-all" } })
+(test-capability (coin.COINBASE))
+(coin.coinbase "sender00" (read-keyset "sender00") 1000000.0)
+(commit-tx)
+
+;; --- SPT namespace + the TWO admin keysets (the design record), then load the 3 modules ---
+;; 🔴 THIS WORLD DELIBERATELY MAKES BOTH TIERS SATISFIABLE BY `admin-key` ALONE, and that is a
+;; decision with a stated reason, not a shortcut. The tier split is proven in ONE dedicated
+;; place — smartpacts-admin-tiers.repl, which re-loads both modules against the REAL 3-device
+;; roster shape (keys-2 / keys-any) and puts every operation through refuse-then-succeed.
+;;
+;; WHY NOT PUT THE REAL ROSTER HERE. It would look stronger and detect strictly less. Signing
+;; with MORE keys always satisfies a WEAKER predicate, so a mutation moving an operation from
+;; the gov tier down to the ops tier still passes every suite that signed two keys — the
+;; downgrade direction, which is the one that matters, is invisible to them. Only an explicit
+;; "this REFUSES with one key" negative sees it, and those live in the dedicated suite. What
+;; the churn would buy is ~220 edited call sites and a false sense of coverage.
+;;
+;; So the 61 suites that load this file test MODULE BEHAVIOUR, on purpose, and assert nothing
+;; about thresholds. 🔴 Do not "harden" this block by giving the two keysets different keys:
+;; you would redden a hundred unrelated suites and still not pin the tier.
+(begin-tx "load SPT modules")
+(env-data
+  { "ns": "n_48867b242317a0216a67f8c7ca26696b5878e0e3"
+, "upgrade": false
+, "spt-gov-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-gov"
+, "spt-gov": { "keys": ["admin-key"], "pred": "keys-all" }
+, "spt-ops-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-ops"
+, "spt-ops": { "keys": ["admin-key"], "pred": "keys-any" }
+, "sender00": { "keys": ["admin-key"], "pred": "keys-all" } })
+(env-keys ["admin-key"])
+(define-namespace "n_48867b242317a0216a67f8c7ca26696b5878e0e3" (read-keyset 'spt-gov) (read-keyset 'spt-gov))
+(load "../modules/SPT.pact")     ; defines BOTH n_…e0e3.spt-gov and n_…e0e3.spt-ops; includes governance (the design record live-vote)
+(load "../modules/SPT-launch.pact")
+(commit-tx)
+
+;; --- initial supply on chain 0; launch reserve = SPT-launch's capability-guarded account.
+;; the design record: init-supply also fixes the tranche beneficiaries (k: principals; synthetic
+;; but valid 64-hex keys) and creates the pre-committed locks atomically. T = the env
+;; block-time (T00:00:00Z) — tranche suites compute cliff/vest bounds from it.
+;; a later amendment (a later change): the founder tranche is a LIST of allocations. This world is the
+;; DEGENERATE n=1 case (one founder, the whole FOUNDER-TRANCHE — the pre-Am.1 shape), so its
+;; founder tranche row key is "founder:k:f0f0…". n>1 end-to-end lives in smartpacts-founder-allocations.repl.
+;; The amount is the module's OWN defconst, never a restated number. ---
+(begin-tx "init-supply")
+(env-data
+  { "founder-ks":       { "keys": ["f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"], "pred": "keys-all" }
+, "treasury-ops-ks":  { "keys": ["a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"], "pred": "keys-all" }
+, "liquidity-ops-ks": { "keys": ["b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"], "pred": "keys-all" }
+, "sender00":         { "keys": ["admin-key"], "pred": "keys-all" } })  ; keep ambient — suites read it
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init-supply
+  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G
+  [ { "account": "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"
+ , "amount": n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-TRANCHE } ])
+(commit-tx)
+
+;; 🔴 the design record (a later change): THE FOUNDER CREATES THEIR OWN ACCOUNT — AND IT MUST HAPPEN *AFTER*
+;; init-supply, WHICH the design record GETS WRONG. The ADR's operational note says "collect addresses,
+;; verify each resolves to an existing SPT account on chain 0, then run init-supply". On chain 0
+;; that is IMPOSSIBLE, and it is impossible by construction rather than by oversight: creating an
+;; SPT account calls `get-rpt`, which reads the `state` row, and `init-supply` is what INSERTS
+;; that row. Measured — placing this call before init-supply aborts inside `create-account`.
+;;
+;; The real sequence is init-supply (which stores addresses only) -> founders create their
+;; accounts -> release. Nothing is lost by the reordering: the founder cliff is 365 days, so
+;; there is a year of runway, and until the account exists the tokens simply WAIT in the excluded
+;; reserve while `release-tranche` refuses retryably. That is the inverted failure mode working,
+;; not a race. Recorded as a later amendment.
+(begin-tx "the founder creates their own SPT account (the design record)")
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-account
+  "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"
+  (read-keyset 'founder-ks))
+(commit-tx)
+
+;; a later amendment (a later change): the treasury and liquidity keysets above are NO LONGER ceremony
+;; inputs — those tranches are module-held and take no beneficiary. They stay in env-data
+;; because suites use them as ORDINARY HOLDER accounts (a disbursement target must already
+;; exist, so the disburse suites create these two and pay them).
+
+;; NOTE: the launch is intentionally NOT initialized here — the launch test suites
+;; (SPT-launch{,-ext}) exercise init/pause from scratch. Suites that seed float
+;; holders via the launch (the design record float-entry path, since create-funder-allocation was
+;; removed) init+resume it themselves in their own seed tx.

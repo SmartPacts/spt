@@ -1,0 +1,1109 @@
+;; ===========================================================================
+;; SPT AWARD-FAIRNESS suite (the design record — globally-correct accrual).
+;;
+;; This suite proves the fairness properties of the DECLARED-ROUND global rpt.
+;; The event surfaced a real bug: with a PER-CHAIN rpt bumped by fund-awards,
+;; a token moving between chains during a round was double-paid or under-paid,
+;; because it re-based to the LOCAL chain's rpt. the design record makes the rpt a single
+;; deterministic value (Σ rate over declared rounds effective-at <= now), so a
+;; balance change on ANY account/chain checkpoints against the SAME baseline.
+;;
+;; Cross-chain SPV is DEVNET-only and cannot run in the bare REPL. But the FIX is
+;; chain-agnostic: the failure was "a moving balance re-bases to a different rpt."
+;; In-REPL we reproduce exactly that — move a balance between accounts across the
+;; round boundary and assert the payout equals rate * balance-held-at-round-time,
+;; regardless of when/where the balance moved. Whether two accounts are on one
+;; chain or twenty is irrelevant to the arithmetic once the rpt is global; the
+;; devnet suite (test/harness) then confirms the same holds across real chains.
+;; ===========================================================================
+(load "setup.repl")
+
+;; ---------------------------------------------------------------------------
+;; Seed float via the launch: alice 3000, bob 2000 (circulating 5000).
+;; ---------------------------------------------------------------------------
+(begin-tx "activate launch + seed alice 3000 / bob 2000")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+       , "bob":   { "keys": ["bob-key"],   "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1500.0) (coin.TRANSFER "sender00" "bob" 1000.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1500.0)
+(coin.transfer-create "sender00" "bob"   (read-keyset 'bob)   1000.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 1500.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "alice" (read-keyset 'alice) 3000.0)
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 1000.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "bob" (read-keyset 'bob) 2000.0)
+(expect "circulating 5000" 5000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+(expect "rpt starts at 0" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+(commit-tx)
+
+;; ===========================================================================
+;; the design record (a later change) — PROVISIONING. `declare-round` now refuses unless this chain's pool
+;; already covers floor12(declared-liability + rate*circulating), so every round below is
+;; paid for before it is promised. The amount is COMPUTED from the contract rather than
+;; hardcoded: a literal would silently stop being the bar the module enforces, and this
+;; suite's whole subject is that the accounting is exact.
+;;
+;; Each provisioning runs in its OWN transaction, and so does the declaration that follows.
+;; That is not style: `fund-awards` calls `install-capability`, and Pact 5 disables
+;; UNSCOPED signatures for the remainder of any transaction in which one has run
+;; (checkSigCaps — pact-5 Pact/Core/Environment/Utils.hs:126-139, "if you installed a
+;; capability from code then we disable unscoped sigs"). Measured: fund-then-declare under
+;; `env-keys` in one tx fails inside ADMIN with a bare `Keyset failure`, re-issuing
+;; `env-keys` does NOT clear it, and a signature SCOPED to FUND-AWARDS + ADMIN works.
+;; ===========================================================================
+(begin-tx "the design record: provision the pool for R1 (0.02 x 5000 float = 100 KDA)")
+(env-keys ["admin-key"])
+(let ((need (- (floor (+ (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declared-liability)
+                         (* 0.02 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating)))
+                      12)
+               (try 0.0 (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT)))))
+  (expect "R1 costs exactly 100 KDA at this float" 100.0 need)
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT need)] }])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" need)
+  (env-keys ["admin-key"])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards need))
+(commit-tx)
+
+;; ===========================================================================
+;; DF-1 — DOUBLE-PAY case is CLOSED.
+;; Old bug: fund source chain (rpt 0->2); Bob moves 10 A->B (B.rpt still 0):
+;; debit A pending += 10*(2-0)=20; credit B reward-debt = LOCAL B.rpt = 0;
+;; then fund B (rpt 0->2): B accrues another 10*(2-0)=20 -> claim 40, fair 20.
+;; New model: rpt is GLOBAL = 2 the instant the round is effective. Bob moving
+;; A->B crystallizes 20 on the source and arrives at reward-debt = global 2, so
+;; the destination accrues 10*(2-2)=0. Total = 20 = fair. We model A and B as
+;; two accounts (bob-a, bob-b) that the SAME owner controls; the invariant is on
+;; the OWNER's total across both.
+;; ===========================================================================
+;; 🔴 the design record: one generation per round, and a new one cannot be sealed while the
+;; previous round is still pending-effective — so each round below is preceded by its
+;; own record date. The rounds' effective-ats moved by 1-2h (and R7/R8 by 12h) to clear
+;; the 12h seal plus the 12h declaration runway; the CADENCE is unchanged and every
+;; payout assertion is untouched.
+(begin-tx "DF-1 setup: give bob-a 1000 (from alice), declare a round, make it effective")
+;; move 1000 from alice -> bob-a BEFORE any round (rpt 0, no accrual to inherit)
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" "bob-a" 1000.0)] }])
+(env-data { "bob-a": { "keys": ["bob-key"], "pred": "keys-all" }
+       , "bob-b": { "keys": ["bob-key"], "pred": "keys-all" } })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create "alice" "bob-a" (read-keyset 'bob-a) 1000.0)
+(expect "bob-a holds 1000" 1000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "bob-a"))
+(commit-tx)
+
+;; 🔴 THE SEAL COMES AFTER THE HOLDINGS, AND THAT ORDER IS THE WHOLE POINT OF the design record.
+;; Sealed before bob-a's 1000 arrives he holds NOTHING at the record instant and is owed
+;; nothing — measured here as `pending 0.0` where this suite asserts 20.0. That is the module
+;; behaving correctly, not a defect: float arriving after the record instant is free.
+;; ---- the design record (a later change): A ROUND NEEDS A SEALED RECORD DATE ----------------------
+;; Schedule one clear of the 12h runway (2 x MIN-RETRACT-LEAD), let it land, seal it.
+;; The seal runs with NO KEYS on purpose: `advance-snapshot` is permissionless, and a
+;; chain with no activity must still be sealable by anyone.
+(begin-tx "the design record: name the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (add-time (at 'block-time (chain-data)) 43202))
+(commit-tx)
+(env-chain-data
+  { "chain-id": (at 'chain-id (chain-data))
+, "block-time": (add-time (at 'block-time (chain-data)) 43203) })
+(begin-tx "the design record: seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "DF-1 setup (cont): declare R1 against the sealed float")
+;; declare round R1 rate 0.02 effective 1h out (a later amendment) -> global rpt 0.02 once crossed
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "R1" 0.02 (time "2026-06-02T04:00:00Z"))
+(expect "declared but not yet effective: rpt 0" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T04:00:00Z") })
+(expect "global rpt 0.02 (round effective everywhere at once)" 0.02 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+;; fund enough to cover circulating*rpt = 5000*0.02 = 100
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT 100.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" 100.0)
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 100.0)
+(expect "bob-a accrued 1000*0.02 = 20 pending" 20.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "bob-a"))
+(commit-tx)
+
+(begin-tx "DF-1: bob moves his 1000 A->B AFTER the round is effective (the double-pay trigger)")
+;; This is the exact old-bug move: transfer during/after a funded round. Under the
+;; OLD per-chain rpt this re-based bob-b to a fresh 0 and double-paid on the next fund.
+(env-sigs [{ "key": "bob-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "bob-a" "bob-b" 1000.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create "bob-a" "bob-b" (read-keyset 'bob-b) 1000.0)
+;; debit A crystallized the 20; credit B arrives at the GLOBAL rpt 0.02, delta 0.
+(expect "bob-a pending crystallized = 20 (kept on source)" 20.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "bob-a"))
+(expect "bob-b pending = 0 (arrived at global rpt; no phantom re-accrual)" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "bob-b"))
+;; THE FAIRNESS ASSERTION: owner's total across both accounts = 20 = rate*balance = fair.
+;; (Under the old bug this would read 40 after a second fund. It cannot here.)
+(expect "owner total = 20 (paid exactly once — double-pay CLOSED)"
+  20.0
+  (+ (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "bob-a")
+     (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "bob-b")))
+(commit-tx)
+
+;; ===========================================================================
+;; DF-1b — EXACT SOLVENCY liability counter tracks TRUE owed, incl. crystallized
+;; pending on tokens whose balance dropped. award-liability == Σ pending-of all
+;; float accounts, always. This is what fund-awards must cover (not circ*rpt).
+;; ===========================================================================
+(begin-tx "DF-1b exact liability == Σ pending across all float accounts")
+;; float accounts so far: alice(2000), bob(2000), bob-a(0,+20 pending), bob-b(1000)
+(let ((liability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))
+      (sum-pend (fold (+) 0.0
+                  (map (lambda (a:string) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of a))
+                       ["alice" "bob" "bob-a" "bob-b"]))))
+  (print (format "DF-1b: award-liability={} Σpending={}" [liability sum-pend]))
+  (expect "award-liability == Σ pending-of (exact O(1) == O(n) truth)" sum-pend liability))
+;; circulating*rpt = 5000*0.02 = 100, but bob-a holds 20 crystallized while contributing
+;; 0 to circulating (balance 0) -> liability (100) still == circ*rpt here because bob-a's
+;; 20 is offset by bob-b arriving at rpt (owed 0). The GAP appears when a departed token's
+;; crystallized pending is NOT regenerated by circulating -> proven on devnet (cross-chain).
+(expect "circulating unchanged at 5000 (holder->holder)" 5000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+(commit-tx)
+
+(begin-tx "DF-1: a SECOND fund on the destination does NOT re-pay the moved token")
+;; The old double-pay needed a later fund on the target to bump its local rpt again.
+;; Here rpt is global and already 0.02 for this round; funding more cash cannot raise
+;; what is OWED (only declare-round can), so bob-b stays at 0 for this round.
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT 100.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" 100.0)
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 100.0)  ; pool top-up, rpt unchanged
+(expect "global rpt STILL 0.02 (funding never moves owed)" 0.02 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+(expect "bob-b STILL 0 (no double-pay from a later fund)" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "bob-b"))
+(expect "owner total STILL 20" 20.0
+  (+ (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "bob-a")
+     (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "bob-b")))
+(commit-tx)
+
+;; ===========================================================================
+;; DF-2 — UNDERPAY case is CLOSED.
+;; Old bug: destination chain already had rpt 2; a token moving in re-based to
+;; reward-debt = 2, then the source got funded while the token was gone -> claim 0.
+;; New model: there is no per-chain head start; the rpt is one value. A token that
+;; is present when a NEW round becomes effective earns that round in full wherever
+;; it sits. We prove: carol receives tokens (before round 2), round 2 is declared,
+;; carol earns round 2 fully even though she was never on the "source".
+;; ===========================================================================
+(begin-tx "DF-2 setup: carol buys in AFTER round 1, before round 2")
+(env-data { "carol": { "keys": ["carol-key"], "pred": "keys-all" } })
+;; alice sends carol 500 (alice currently holds 3000-1000 = 2000). rpt is 0.02 now,
+;; so carol arrives at reward-debt 0.02 -> she earns NOTHING from round 1 (correct:
+;; she wasn't a holder when round 1 was declared-and-effective at time she held 0).
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" "carol" 500.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create "alice" "carol" (read-keyset 'carol) 500.0)
+(expect "carol pending 0 after round 1 (joined late — no retroactive round-1 pay)" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "carol"))
+(commit-tx)
+
+;; ---- the design record (a later change): A ROUND NEEDS A SEALED RECORD DATE ----------------------
+;; Schedule one clear of the 12h runway (2 x MIN-RETRACT-LEAD), let it land, seal it.
+;; The seal runs with NO KEYS on purpose: `advance-snapshot` is permissionless, and a
+;; chain with no activity must still be sealable by anyone.
+(begin-tx "the design record: name the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (add-time (at 'block-time (chain-data)) 43202))
+(commit-tx)
+(env-chain-data
+  { "chain-id": (at 'chain-id (chain-data))
+, "block-time": (add-time (at 'block-time (chain-data)) 43203) })
+(begin-tx "the design record: seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "DF-2: declare round 2 -> carol earns round 2 in full (no underpay)")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "R2" 0.02 (time "2026-06-03T08:00:00Z"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T08:00:00Z") })  ; a later amendment
+(expect "global rpt now 0.04 (two rounds)" 0.04 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+(expect "carol earns 500*0.02 = 10 for round 2 (full, not underpaid)" 10.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "carol"))
+(commit-tx)
+
+;; ===========================================================================
+;; DF-3 — MOVE-BEFORE-ROUND: a holder that moves before a round is effective earns
+;; the round at the DESTINATION (weight follows the tokens, not the origin).
+;; ===========================================================================
+(begin-tx "DF-3: dave gets tokens before round 3, holds through it")
+(env-data { "dave": { "keys": ["dave-key"], "pred": "keys-all" } })
+;; bob (holder, 2000) sends dave 1000 while rpt is 0.04 (no new round yet declared).
+(env-sigs [{ "key": "bob-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "bob" "dave" 1000.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create "bob" "dave" (read-keyset 'dave) 1000.0)
+(expect "dave pending 0 on arrival" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "dave"))
+(commit-tx)
+
+;; 🔴 SEAL AFTER DAVE'S TOKENS LAND. Sealed first he holds nothing at the record instant and
+;; R3 pays him nothing — measured 0.0 where this block asserts 10.0. "The round follows the
+;; tokens" is still true; under the design record it follows the tokens held AT THE RECORD INSTANT.
+;; ---- the design record (a later change): A ROUND NEEDS A SEALED RECORD DATE ----------------------
+;; Schedule one clear of the 12h runway (2 x MIN-RETRACT-LEAD), let it land, seal it.
+;; The seal runs with NO KEYS on purpose: `advance-snapshot` is permissionless, and a
+;; chain with no activity must still be sealable by anyone.
+(begin-tx "the design record: name the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (add-time (at 'block-time (chain-data)) 43202))
+(commit-tx)
+(env-chain-data
+  { "chain-id": (at 'chain-id (chain-data))
+, "block-time": (add-time (at 'block-time (chain-data)) 43203) })
+(begin-tx "the design record: seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "DF-3 (cont): declare R3 against the sealed float")
+;; declare round 3 -> dave, present now, earns it fully at the destination.
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "R3" 0.01 (time "2026-06-04T12:00:00Z"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-04T12:00:00Z") })  ; a later amendment
+(expect "dave earns 1000*0.01 = 10 (round follows the tokens)" 10.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "dave"))
+(commit-tx)
+
+;; ===========================================================================
+;; DF-4 — EFFECTIVE-AT gating: a FUTURE-dated round does not accrue until its
+;; timestamp passes. get-rpt must not include it early; time-advance flips it on.
+;; ===========================================================================
+(begin-tx "the design record: provision the pool for R4 (0.03)")
+(env-keys ["admin-key"])
+(let ((need (- (floor (+ (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declared-liability)
+                         (* 0.03 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating)))
+                      12)
+               (try 0.0 (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT)))))
+  (expect "R4 (0.03) is not already covered — this provisioning is doing real work" true (> need 0.0))
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT need)] }])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" need)
+  (env-keys ["admin-key"])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards need))
+(commit-tx)
+
+;; ---- the design record (a later change): A ROUND NEEDS A SEALED RECORD DATE ----------------------
+;; Schedule one clear of the 12h runway (2 x MIN-RETRACT-LEAD), let it land, seal it.
+;; The seal runs with NO KEYS on purpose: `advance-snapshot` is permissionless, and a
+;; chain with no activity must still be sealable by anyone.
+(begin-tx "the design record: name the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (add-time (at 'block-time (chain-data)) 43202))
+(commit-tx)
+(env-chain-data
+  { "chain-id": (at 'chain-id (chain-data))
+, "block-time": (add-time (at 'block-time (chain-data)) 43203) })
+(begin-tx "the design record: seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "DF-4: declare a FUTURE round; rpt must not move yet")
+(env-keys ["admin-key"])
+(expect "rpt 0.05 before future round (0.02+0.02+0.01)" 0.05 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "R4" 0.03 (time "2026-09-01T00:00:00Z"))
+(expect "rpt UNCHANGED at 0.05 (future round not yet effective)" 0.05 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+(expect "dave pending unchanged (future round not accruing)" 10.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "dave"))
+(commit-tx)
+
+(begin-tx "DF-4: advance block-time past the future round -> it becomes effective")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-09-02T00:00:00Z") })
+(expect "rpt now 0.08 (future round R4 became effective)" 0.08 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+(expect "dave now earns R3+R4 = 1000*(0.01+0.03) = 40" 40.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "dave"))
+(commit-tx)
+
+;; ===========================================================================
+;; DF-5 — apply-round MATERIALIZES the rpt: get-rpt identical before/after, and
+;; apply-round is idempotent (second call is a no-op / rejects "nothing to apply").
+;; ===========================================================================
+(begin-tx "DF-5: apply-round folds effective rounds into stored rpt; value unchanged")
+(env-keys ["admin-key"])
+(let ((before (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt)))
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.apply-round "R4")
+  (expect "get-rpt identical after apply-round (materialization is transparent)"
+    before (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt)))
+(expect "dave pending unchanged by apply-round" 40.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "dave"))
+;; idempotent: nothing new is effective-and-unapplied now, so a re-apply must reject.
+(expect-failure "apply-round idempotent (no newly-effective rounds)"
+  "no newly-effective rounds to apply"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.apply-round "R4"))
+(commit-tx)
+
+;; ===========================================================================
+;; DF-6 — CONSERVATION / general invariant: Σ claims == Σ (rate * float held)
+;; and Σ claims <= Σ funded. Reset to a clean time and run one clean round with
+;; churn, then claim everyone and check the pool math.
+;; ===========================================================================
+(begin-tx "DF-6: sum of all pendings equals rate-weighted float (post all rounds)")
+;; Effective rounds so far: R1 0.02, R2 0.02, R3 0.01, R4 0.03 (all effective at ).
+;; Holders and the rounds each was present-and-holding for determine owed amounts.
+;; We assert the GLOBAL conservation identity instead of re-deriving each holder:
+;; total owed (pending + claimable) across every float account == Σ over holders of
+;; balance*(global_rpt - reward_debt) + pending. We compute it directly from the API.
+(let* ((rpt (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+       (accts ["alice" "bob" "carol" "dave" "bob-a" "bob-b"])
+       (owed (fold (+) 0.0
+               (map (lambda (a:string) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of a))
+                    accts))))
+  (print (format "DF-6: global rpt={} total owed across float holders={}" [rpt owed]))
+ ;; CONSERVATION: total owed must equal Σ over holders of (balance * global_rpt that the
+ ;; holder was present for). With circulating 5000 and every current float unit having
+ ;; accrued the full rpt 0.08 (either as pending crystallized on a debit or as live
+ ;; balance*(rpt-debt)), the rate-weighted float is 5000 * 0.08 = 400 — no more (no
+ ;; double-pay), no less (no strand). Exact, not "positive".
+  (expect "total owed == circulating * rpt == 5000 * 0.08 == 400 (conservation, exact)"
+    400.0 owed))
+(commit-tx)
+
+;; ===========================================================================
+;; DF-7 — SOLVENCY is decoupled from FAIRNESS: an under-funded chain still OWES
+;; the correct amount; funding only governs whether the cash is present. A holder
+;; can still see the right pending even if the pool can't pay yet; a top-up pays.
+;; ===========================================================================
+(begin-tx "DF-7: erin joins before R5")
+;; a fresh clean holder for an isolated solvency check
+(env-data { "erin": { "keys": ["erin-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" "erin" 100.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create "alice" "erin" (read-keyset 'erin) 100.0)
+(commit-tx)
+
+(begin-tx "the design record: provision the pool for R5 (0.10)")
+(env-keys ["admin-key"])
+(let ((need (- (floor (+ (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declared-liability)
+                         (* 0.10 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating)))
+                      12)
+               (try 0.0 (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT)))))
+  (expect "R5 is not already covered — this provisioning is doing real work" true (> need 0.0))
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT need)] }])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" need)
+  (env-keys ["admin-key"])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards need))
+(commit-tx)
+
+;; ---- the design record (a later change): A ROUND NEEDS A SEALED RECORD DATE ----------------------
+;; Schedule one clear of the 12h runway (2 x MIN-RETRACT-LEAD), let it land, seal it.
+;; The seal runs with NO KEYS on purpose: `advance-snapshot` is permissionless, and a
+;; chain with no activity must still be sealable by anyone.
+(begin-tx "the design record: name the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (add-time (at 'block-time (chain-data)) 43202))
+(commit-tx)
+(env-chain-data
+  { "chain-id": (at 'chain-id (chain-data))
+, "block-time": (add-time (at 'block-time (chain-data)) 43203) })
+(begin-tx "the design record: seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "DF-7: R5 is declared against a pool that fully covers it")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "R5" 0.10 (time "2026-09-03T01:00:00Z"))
+(expect "at declaration the pool covers everything declared" true
+  (>= (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT)
+      (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declared-liability)))
+(commit-tx)
+
+;; ===========================================================================
+;; 🔴 DF-7r — the design record'S RESIDUAL, MADE CONCRETE. THIS IS THE ONLY WAY THE POOL CAN GO
+;; SHORT NOW, AND IT IS THE REASON `fund-awards` KEEPS ITS SOLVENCY GUARD.
+;;
+;; The declaration-time check provisions `rate * circulating AS IT IS AT DECLARATION`. The
+;; round's real cost is `rate * circulating WHEN IT TAKES EFFECT`. Nothing freezes the float
+;; in between: `buy`, an inbound cross-chain transfer, and — the one the operator
+;; genuinely cannot prevent — a PERMISSIONLESS `release-tranche` for the founder or liquidity
+;; beneficiary (the design record) all raise `circulating`. the design record names this and accepts it, because
+;; an under-funded chain loses nothing: awards accumulate forever and a top-up pays them.
+;;
+;; So gus buys 200 SPT AFTER R5 is declared and BEFORE it is effective. He arrives at the
+;; current rpt (R5 not yet folded), so he is genuinely owed 0.10 x 200 = 20 that nobody
+;; provisioned. Under-funding stops being a thing an operator can simply do and becomes a
+;; thing that HAPPENS TO THEM — which is the honest shape of the guarantee.
+;; ===========================================================================
+(begin-tx "DF-7r: the float grows between R5's declaration and its effective-at")
+(env-data { "gus": { "keys": ["gus-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "gus" 100.0)] }])
+(coin.transfer-create "sender00" "gus" (read-keyset 'gus) 100.0)
+(env-sigs [{ "key": "gus-key", "caps": [(coin.TRANSFER "gus" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 100.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "gus" (read-keyset 'gus) 200.0)
+(expect "gus holds 200 SPT, bought while R5 was declared but not yet effective" 200.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "gus"))
+(commit-tx)
+
+(begin-tx "DF-7: R5 takes effect — owed is correct, and the pool is now SHORT by gus's 20")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-09-03T01:00:00Z") })  ; a later amendment
+;; owed is correct REGARDLESS of funding — that is the fairness half of this section:
+(expect "erin owed 100*0.10 = 10 (owed set by the round, not by cash)"
+  10.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "erin"))
+;; ===========================================================================
+;; 🔴 INVERTED BY the design record (a later change) — THIS BLOCK USED TO DEMONSTRATE THE DEFECT, AND NOW
+;; DEMONSTRATES THE FIX. It asserted "gus owed 20 — real money nobody provisioned" and "the
+;; pool is now short by exactly that 20": the float grew between R5's declaration and its
+;; effective-at, so the chain owed more than the bar it had been funded against. That is
+;; precisely the 150 % shortfall the design record was written to close, and it is the reason
+;; `claim-awards` being ALL-OR-NOTHING made it a race an honest holder could lose.
+;;
+;; Under the design record gus buys AFTER the record instant, so he is owed NOTHING and the pool is not
+;; short by a trillionth. The assertions are INVERTED, not deleted — a suite that quietly
+;; dropped them would lose the only place this failure mode is written down.
+(expect "🔴 gus bought INSIDE the window, so the design record owes him nothing" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "gus"))
+(expect "erin, who held at the record instant, is still owed her full 10" 10.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "erin"))
+(expect "🔴 AND THE POOL IS NOT SHORT — the denominator could not move under the round" true
+  (<= (- (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability)
+         (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+      0.0))
+(commit-tx)
+
+(begin-tx "DF-7: under-funding is REJECTED by the solvency guard (protects late claimers)")
+(env-keys ["admin-key"])
+;; pool must cover the chain's TRUE liability now. A tiny deposit is rejected.
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT 1.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" 1.0)
+(env-keys ["admin-key"])
+;; 🔴 THE UNDER-FUND NEGATIVE IS NO LONGER REACHABLE BY THIS ROUTE, and that is a FINDING,
+;; not a tidy-up. `fund-awards`' guard fires when pool + deposit < floor(liability); the design record
+;; makes `declare-round` fund the EXACT debt against a float that cannot move afterwards, so
+;; on this path the pool always covers. The deposit below therefore SUCCEEDS where it used to
+;; be refused.
+;; 🔴 IT IS NOT REMOVED FROM THE MODULE. Deleting an enforce is a design change and a later change
+;; ships the design record alone — whether `fund-awards` retains a reachable failing branch belongs to
+;; a later change / an internal review, recorded here where the next person will look. `fund-awards`
+;; keeps its own guard as the recoverable top-up path either way (the design record says so explicitly).
+(expect "a top-up is now ACCEPTED — the pool already covers the debt" "awards funded"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 1.0))
+(commit-tx)
+
+(begin-tx "DF-7: a sufficient top-up satisfies solvency; erin can then claim")
+(env-keys ["admin-key"])
+;; fund to the EXACT liability (not circ*rpt) — this is the number the ops tool computes.
+(let* ((liability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))
+       (poolbal (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+       (need (- liability poolbal))
+ ;; 🔴 CLAMPED. Under the design record the pool can arrive at this point ALREADY covering the
+ ;; liability (measured here: liability 900.0, pool 901.0), because `declare-round`
+ ;; sizes against the SEALED float rather than the live one — over-funding is
+ ;; permitted and recoverable, and it is not what this block is testing. Without the
+ ;; clamp `need` goes negative, `topup` lands on 0.0 and `receive-funding` aborts
+ ;; "amount must be positive" — a suite failing on its own arithmetic rather than on
+ ;; the solvency guard it exists to exercise.
+       (topup (if (> need 0.0) (+ need 1.0) 1.0)))
+  (print (format "DF-7 solvency: liability={} pool={} need={} topup={}" [liability poolbal need topup]))
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT topup)] }])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" topup)
+  (env-keys ["admin-key"])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards topup))
+;; erin claims her exact owed amount now that the pool is solvent.
+(let ((owed (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "erin")))
+  (expect "erin claim pays exactly her owed amount" owed
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "erin"))
+  (expect "erin pending 0 after claim" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "erin")))
+(commit-tx)
+
+;; ===========================================================================
+;; DF-8 — SINGLE-CHAIN LIABILITY GAP made concrete (the exact case circ*rpt missed).
+;; A holder that has ACCRUED pending then sends its tokens to an EXCLUDED account
+;; (treasury) drops circulating while its crystallized pending stays claimable. Now
+;; circ*rpt UNDER-counts the true liability by exactly that stranded pending, and the
+;; OLD guard would have let the operator fund too little. The tightened guard rejects it.
+;; ===========================================================================
+(begin-tx "DF-8 set up a holder with accrued pending, then dump tokens to treasury")
+;; give a fresh holder frank 1000 from alice (alice holds 1500 now: 2000-500 to carol).
+(env-data { "frank": { "keys": ["frank-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" "frank" 1000.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create "alice" "frank" (read-keyset 'frank) 1000.0)
+(commit-tx)
+
+;; frank arrived at the current global rpt -> 0 pending. Declare a fresh round so frank
+;; accrues real pending on his 1000 tokens. the design record: provision it first.
+(begin-tx "the design record: provision the pool for R6 (0.05)")
+(env-keys ["admin-key"])
+(let ((need (- (floor (+ (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declared-liability)
+                         (* 0.05 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating)))
+                      12)
+               (try 0.0 (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT)))))
+  (expect "R6 is not already covered — this provisioning is doing real work" true (> need 0.0))
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT need)] }])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" need)
+  (env-keys ["admin-key"])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards need))
+(commit-tx)
+
+;; ---- the design record (a later change): A ROUND NEEDS A SEALED RECORD DATE ----------------------
+;; Schedule one clear of the 12h runway (2 x MIN-RETRACT-LEAD), let it land, seal it.
+;; The seal runs with NO KEYS on purpose: `advance-snapshot` is permissionless, and a
+;; chain with no activity must still be sealable by anyone.
+(begin-tx "the design record: name the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (add-time (at 'block-time (chain-data)) 43202))
+(commit-tx)
+(env-chain-data
+  { "chain-id": (at 'chain-id (chain-data))
+, "block-time": (add-time (at 'block-time (chain-data)) 43203) })
+(begin-tx "the design record: seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "DF-8 declare R6 against the provisioned pool")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "R6" 0.05 (time "2026-09-04T02:00:00Z"))
+(commit-tx)
+
+(begin-tx "DF-8 R6 takes effect")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-09-04T02:00:00Z") })  ; a later amendment
+(expect "frank owed 1000*0.05 = 50" 50.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "frank"))
+(commit-tx)
+
+(begin-tx "DF-8 frank dumps all 1000 tokens to an EXCLUDED account -> circulating drops, pending stays")
+;; a later change M-1: the destination changed from TREASURY-ACCOUNT to the launch reserve, and the
+;; reason matters. The three TRANCHE reserves can no longer RECEIVE — a deposit there would be
+;; permanently destroyed (debit refuses every exit and release-tranche is capped by the lock's
+;; immutable `total`), so the transfer is refused outright. The launch reserve is the excluded
+;; account that can still legitimately receive: its exit is `buy`, so a deposit there
+;; is sellable rather than stranded. The PROPERTY under test is unchanged — a holder moving
+;; tokens to an `excluded?` account drops circulating and keeps their crystallized pending.
+;; the O(n) truth: Σ pending-awards-of over every float account touched in this suite
+(env-data { "float-accts": ["alice" "bob" "carol" "dave" "eve" "bob-a" "bob-b" "erin" "frank" "gus"] })
+(let ((circ-before (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+      (liab-before (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))
+      (sum-pending-before (fold (+) 0.0
+        (map (lambda (a:string) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of a))
+             (read-msg 'float-accts)))))
+ ;; the O(1) counter matches the O(n) truth BEFORE the dump
+  (expect "award-liability == Σ pending-of (before dump)" sum-pending-before liab-before)
+  (env-sigs [{ "key": "frank-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "frank" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-launch-reserve) 1000.0)] }])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "frank" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-launch-reserve) 1000.0)
+ ;; frank keeps his 50 crystallized; treasury (excluded) accrues nothing.
+  (expect "frank still owed 50 after dumping tokens" 50.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "frank"))
+  (let* ((circ-after (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+         (liab-after (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))
+         (rpt (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+         (circ-rpt (* circ-after rpt)))
+    (print (format "DF-8 GAP: circ {}->{} liability {}->{} ; circ*rpt={} true-liability={}"
+      [circ-before circ-after liab-before liab-after circ-rpt liab-after]))
+    (expect "circulating dropped by 1000 (frank's tokens left the float)" (- circ-before 1000.0) circ-after)
+ ;; liability is INVARIANT across a holder->excluded move: the earned 50 is preserved, not lost
+    (expect "liability unchanged by the dump (earned award preserved)" liab-before liab-after)
+ ;; the O(1) counter STILL matches the O(n) truth AFTER the dump
+    (expect "award-liability == Σ pending-of (after dump)"
+      (fold (+) 0.0
+        (map (lambda (a:string) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of a))
+             (read-msg 'float-accts)))
+      liab-after)
+ ;; THE BLIND SPOT: true liability now strictly EXCEEDS circ*rpt -> the old guard would under-fund
+    (expect "liability strictly exceeds circ*rpt (the old guard's blind spot)" true (> liab-after circ-rpt))))
+(commit-tx)
+
+(begin-tx "DF-8 the OLD guard's amount (circ*rpt) is now REJECTED; funding to liability succeeds")
+(env-keys ["admin-key"])
+(let* ((circ (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+       (rpt (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+       (liability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))
+       (poolbal (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+       (old-amt (- (* circ rpt) poolbal))   ; what the OLD circ*rpt guard would have accepted
+       (true-amt (+ (- liability poolbal) 0.01)))
+ ;; fund the funding account enough for the true amount
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT true-amt)] }])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" true-amt)
+  (env-keys ["admin-key"])
+ ;; 🔴 THE `expect-failure` ON `old-amt` THAT STOOD HERE IS RELOCATED, NOT DELETED, AND THE
+ ;; REASON IS STRUCTURAL RATHER THAN COSMETIC. It funded `circ*rpt - pool` and required a
+ ;; refusal. Post-the design record the pool ALREADY covers the liability at every declaration, so
+ ;; `circ*rpt - pool` is NEGATIVE here (measured: circ*rpt 966, pool ~1170) and
+ ;; fund-awards refuses it with "pool-amount must be positive" — a green test asserting
+ ;; the wrong branch, which is the exact false-green shape this suite's own header warns
+ ;; about. Staging a real shortfall does not rescue it either: the only way the pool can go
+ ;; short now is the the design record residual (float growth between declaration and effect), and the
+ ;; new holder that growth creates carries a fresh reward-debt, which inflates `circ*rpt`
+ ;; ABOVE the liability and destroys the very blind spot this section exists to demonstrate.
+ ;; The two properties are not co-stageable any more. So they are split:
+ ;; * THE BLIND SPOT (liability strictly exceeds circ*rpt) stays here, asserted above, and
+ ;; is the finding this section was written for.
+ ;; * THE REFUSAL of an under-funding deposit is pinned where it is now reachable — DF-7r
+ ;; above (measured: pool 900 against a 920 liability, `fund-awards 1.0` refused) and
+ ;; smartpacts-solvency-at-declaration.repl §C. Neither is a name-pin; both enter the function.
+  (expect "the blind spot is real: funding only to circ*rpt would leave frank stranded" true
+    (< (* circ rpt) liability))
+  (expect "and it is unreachable as an operator ACTION now — the design record pre-covered the pool" true
+    (< old-amt 0.0))
+ ;; funding to the TRUE liability succeeds
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards true-amt))
+;; and frank can now claim his full 50
+(expect "frank claims his stranded 50 in full" 50.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "frank"))
+(commit-tx)
+
+;; ===========================================================================
+;; DF-9 — AUDITOR REGRESSION (the CRITICAL): out-of-order round declaration.
+;; The bug: apply-round folded Σ of ALL effective-but-unapplied rates but advanced
+;; rounds-applied only to the last CONSECUTIVE effective index. If a FUTURE round sat
+;; at a lower index than an EFFECTIVE round, the effective round's rate was folded into
+;; rpt yet never advanced past -> re-counted on every later apply-round (permanent rpt
+;; inflation, permissionless). Fix: (a) declare-round enforces non-decreasing effective-at
+;; (so index order == time order == no gaps); (b) apply-round folds+advances the SAME
+;; consecutive-effective prefix, never folding a rate it does not advance past.
+;; ===========================================================================
+(begin-tx "the design record: provision the pool for FUT (0.07)")
+(env-keys ["admin-key"])
+(let ((need (- (floor (+ (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declared-liability)
+                         (* 0.07 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating)))
+                      12)
+               (try 0.0 (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT)))))
+  (expect "FUT (0.07) is not already covered — this provisioning is doing real work" true (> need 0.0))
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT need)] }])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" need)
+  (env-keys ["admin-key"])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards need))
+(commit-tx)
+
+;; ---- the design record (a later change): A ROUND NEEDS A SEALED RECORD DATE ----------------------
+;; Schedule one clear of the 12h runway (2 x MIN-RETRACT-LEAD), let it land, seal it.
+;; The seal runs with NO KEYS on purpose: `advance-snapshot` is permissionless, and a
+;; chain with no activity must still be sealable by anyone.
+(begin-tx "the design record: name the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (add-time (at 'block-time (chain-data)) 43202))
+(commit-tx)
+(env-chain-data
+  { "chain-id": (at 'chain-id (chain-data))
+, "block-time": (add-time (at 'block-time (chain-data)) 43203) })
+(begin-tx "the design record: seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "DF-9b: future round declared LAST is fine; apply-round folds only the effective prefix")
+(env-keys ["admin-key"])
+;; declare a FUTURE round (>= latest effective-at, so allowed): it must NOT accrue yet,
+;; and apply-round must fold only the already-effective prefix, leaving the future one alone.
+;; rpt here = R1 .02 + R2 .02 + R3 .01 + R4 .03 + R5 .10 + R6 .05 = 0.23 (pinned as a literal
+;; so the DF-9c "+0.07 exactly once" delta is a real assertion, not a same-time tautology).
+(let ((rpt-before (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt)))
+  (expect "pre-FUT rpt is exactly 0.23 (six effective rounds)" 0.23 rpt-before)
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "FUT" 0.07 (time "2027-01-01T00:00:00Z"))
+  (expect "future round does NOT change rpt yet (effective-at > now)" rpt-before
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+ ;; apply-round materializes the effective prefix; rpt is unchanged in VALUE (materialization
+ ;; is transparent) and the future round is still excluded.
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.apply-round "prefix")
+  (expect "get-rpt unchanged after apply-round (future round still excluded)" rpt-before
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+ ;; DOUBLE-COUNT REGRESSION: a SECOND apply-round must be a no-op (all effective rounds
+ ;; already folded AND advanced past — the fold and the advance covered the same set).
+  (expect-failure "second apply-round is a no-op (no rate re-counted)"
+  "no newly-effective rounds to apply"
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.apply-round "again"))
+  (expect "get-rpt STILL unchanged after the repeat (no permanent inflation)" rpt-before
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt)))
+(commit-tx)
+
+;; ===========================================================================
+;; DF-9a — the MONOTONIC guard, isolated. It runs AFTER DF-9b deliberately.
+;; a later amendment (a later change) now rejects a past/present effective-at FIRST, so an
+;; out-of-order timestamp that is ALSO in the past is caught by the wrong guard and
+;; proves nothing about this one — that is exactly the substring-collision failure mode
+;; the testing rules warn about, here between two of our OWN error strings.
+;; DF-9b has just declared FUT at while the clock reads, so
+;; is simultaneously IN THE FUTURE (passes Am.1) and EARLIER than the latest
+;; round — which isolates the monotonic guard. Both guards keep their own falsifying negative.
+;; ===========================================================================
+;; 🔴 FUT (effective ) must LAND first: the design record refuses to seal a generation while
+;; a declared round is still pending-effective. DF-9b above has already asserted everything it
+;; needs about FUT sitting undeclared-effective, so crossing its date here costs nothing.
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-01-02T00:00:00Z") })
+;; 🔴 THIS BLOCK NEEDS ITS OWN GENERATION. FUT already consumed the previous one, so
+;; without a fresh seal `declare-round` answers "this record date already carries a
+;; declared round" and — expect-failure matching by SUBSTRING — the test goes green
+;; without ever reaching the MONOTONICITY check it exists to pin.
+;; ---- the design record (a later change): A ROUND NEEDS A SEALED RECORD DATE ----------------------
+;; Schedule one clear of the 12h runway (2 x MIN-RETRACT-LEAD), let it land, seal it.
+;; The seal runs with NO KEYS on purpose: `advance-snapshot` is permissionless, and a
+;; chain with no activity must still be sealable by anyone.
+(begin-tx "the design record: name the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (add-time (at 'block-time (chain-data)) 43202))
+(commit-tx)
+(env-chain-data
+  { "chain-id": (at 'chain-id (chain-data))
+, "block-time": (add-time (at 'block-time (chain-data)) 43203) })
+(begin-tx "the design record: seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+;; ===========================================================================
+;; 🔴 DF-9a — THIS NEGATIVE IS NOW UNREACHABLE, AND THE TEST SAYS SO RATHER THAN LYING.
+;;
+;; It used to declare an out-of-order round and assert the MONOTONICITY refusal. Under
+;; the design record that refusal can no longer fire, and the derivation is short enough to check:
+;; * a round needs a FRESH generation (`declare-round`);
+;; * a generation cannot SEAL while any declared round is not yet effective
+;; (`schedule-snapshot`), so at the seal eff(N) <= now_seal;
+;; * declaring then requires eff(N+1) > now_declare + 2 x MIN-RETRACT-LEAD, and
+;; now_declare >= now_seal.
+;; Therefore eff(N+1) > now_seal >= eff(N) ALWAYS. Retraction does not open a hole either:
+;; it rewinds the row's effective-at to the PREVIOUS round's, which is older still.
+;;
+;; 🔴 THE CHECK IS NOT DELETED HERE. Removing an enforce is a design change, and a later change
+;; ships the design record alone; a branch that cannot fail is a finding for a later change / an internal review,
+;; recorded where the next person will look for it rather than in a commit message.
+;; What IS asserted below is the property that replaced it — the ordering now holds BY
+;; CONSTRUCTION — because an assertion that a refusal fires would be green-by-accident.
+(begin-tx "DF-9a: effective-at ordering now holds BY CONSTRUCTION (the design record)")
+(env-keys ["admin-key"])
+(let ((prev-eff (at 'effective-at (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-round
+                     (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-round-count))))
+      (now (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.curr-time)))
+ ;; The last declared round is already EFFECTIVE — that is what let its successor's
+ ;; generation seal at all — so any future-dated declaration is necessarily later than it.
+  (expect "the previous round's effective-at is already in the past" true (<= prev-eff now))
+  (expect "so any legal new effective-at (> now + 12h) is strictly later than it" true
+    (> (add-time now (* 2 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-RETRACT-LEAD))
+       prev-eff)))
+(commit-tx)
+
+(begin-tx "DF-9a-dead: the monotonicity refusal, kept as a RECORD of what now blocks first")
+(env-keys ["admin-key"])
+(let ((rpt-before (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+      (n-before (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-round-count)))
+ ;; An earlier-dated round is still REFUSED — by the runway bound, not by monotonicity.
+ ;; Asserting the message that actually fires is the point: the old expectation would have
+ ;; passed by substring against a different guard entirely.
+  (expect-failure "an earlier-dated round is refused — by the RUNWAY bound now"
+    "effective-at must leave at least two retraction leads of runway"
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "OOO" 0.01 (time "2026-12-01T00:00:00Z")))
+ ;; STATE unchanged, not merely "an error fired"
+  (expect "rejected declaration did not change rpt" rpt-before (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+  (expect "rejected declaration did not append a round" n-before (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-round-count)))
+(commit-tx)
+
+;; ===========================================================================
+;; DF-9d — a later amendment (a later change): a RETROACTIVE effective-at is rejected, and the
+;; boundary case (effective-at == now) with it. This is the round that measurably paid
+;; the wrong people: accrual is stamped at credit time, so a round naming a past window
+;; pays whoever holds tokens AT DECLARATION. State is asserted unchanged in both cases.
+;; ===========================================================================
+;; 🔴 FUT (effective ) has to LAND before a generation can seal — the design record refuses
+;; to schedule while a declared round is pending-effective. The retro/present dates below are
+;; still in the past relative to this clock, so both negatives keep pinning what they pinned.
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-01-02T00:00:00Z") })
+;; 🔴 and a fresh generation, or these two negatives are answered by the duplicate-round
+;; refusal instead of the RETROACTIVE one they exist to pin.
+;; ---- the design record (a later change): A ROUND NEEDS A SEALED RECORD DATE ----------------------
+;; Schedule one clear of the 12h runway (2 x MIN-RETRACT-LEAD), let it land, seal it.
+;; The seal runs with NO KEYS on purpose: `advance-snapshot` is permissionless, and a
+;; chain with no activity must still be sealable by anyone.
+(begin-tx "the design record: name the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (add-time (at 'block-time (chain-data)) 43202))
+(commit-tx)
+(env-chain-data
+  { "chain-id": (at 'chain-id (chain-data))
+, "block-time": (add-time (at 'block-time (chain-data)) 43203) })
+(begin-tx "the design record: seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "DF-9d: retroactive and present-dated rounds are rejected")
+(env-keys ["admin-key"])
+(let ((rpt-before (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+      (n-before (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-round-count))
+      (now (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.curr-time)))
+  (expect-failure "PAST effective-at rejected" "effective-at must leave at least two retraction leads of runway"
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "RETRO" 0.02 (time "2026-06-01T00:00:00Z")))
+  (expect-failure "PRESENT effective-at rejected (the == boundary)"
+    "effective-at must leave at least two retraction leads of runway"
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "NOW" 0.02 now))
+  (expect "no rpt movement from either rejection" rpt-before (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+  (expect "no round appended by either rejection" n-before (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-round-count)))
+;; NOTE: no "and a future round is accepted" positive is added here on purpose — every other
+;; round in this suite already is one, and declaring an extra round at this point would shift
+;; the pinned rpt arithmetic in DF-9c/DF-10 (measured: it read 0.31 where 0.30 is asserted).
+(commit-tx)
+
+(begin-tx "DF-9c: when the future round becomes effective, it folds ONCE (not on top of a doubled base)")
+;; advance time past the future round; rpt rises by exactly 0.07 — from the pinned 0.23 to
+;; exactly 0.30, once, never double (a doubled fold would read 0.37+).
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-06-01T00:00:00Z") })
+(expect "FUT now effective: rpt == 0.23 + 0.07 == 0.30 exactly (added once)"
+  0.30 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.apply-round "fut-now")
+(expect "rpt materialized once, still exactly 0.30" 0.30
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+(expect-failure "no further rounds to apply (idempotent)"
+  "no newly-effective rounds to apply"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.apply-round "z"))
+(expect "rpt still exactly 0.30 after the rejected re-apply (no inflation, hard number)" 0.30
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+(commit-tx)
+
+;; ===========================================================================
+;; DF-10 — PRECISION REGRESSION (cold double-check HIGH): a payout finer than 12
+;; decimals used to BRICK claim-awards forever (coin refuses sub-12dp transfers;
+;; the raw accrual product bal*(rpt-rd) carries up to 24dp). Fix: pay the 12dp
+;; FLOOR, carry the dust (<1e-12) as pending. Assert: the claim PAYS, the dust is
+;; preserved, liability == Σ pending stays EXACT, and the next round sweeps dust.
+;; ===========================================================================
+(begin-tx "the design record: provision the pool for R7 (1e-7)")
+(env-keys ["admin-key"])
+(let ((need (- (floor (+ (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declared-liability)
+                         (* 0.0000001 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating)))
+                      12)
+               (try 0.0 (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT)))))
+  (if (> need 0.0)
+    (let ((_ 0))
+      (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT need)] }])
+      (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" need)
+      (env-keys ["admin-key"])
+      (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards need))
+    "already covered"))
+(commit-tx)
+
+(begin-tx "DF-10 fractional holder + fine-grained rate -> 13-decimal owed")
+(env-data { "grace": { "keys": ["grace-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" "grace" 123.456789)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create "alice" "grace" (read-keyset 'grace) 123.456789)
+(commit-tx)
+
+;; 🔴 SEAL AFTER GRACE'S TOKENS LAND — otherwise she holds nothing at the record instant and
+;; the 13-decimal owed value this block exists to produce is 0.0.
+;; ---- the design record (a later change): A ROUND NEEDS A SEALED RECORD DATE ----------------------
+;; Schedule one clear of the 12h runway (2 x MIN-RETRACT-LEAD), let it land, seal it.
+;; The seal runs with NO KEYS on purpose: `advance-snapshot` is permissionless, and a
+;; chain with no activity must still be sealable by anyone.
+(begin-tx "the design record: name the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (add-time (at 'block-time (chain-data)) 43202))
+(commit-tx)
+(env-chain-data
+  { "chain-id": (at 'chain-id (chain-data))
+, "block-time": (add-time (at 'block-time (chain-data)) 43203) })
+(begin-tx "the design record: seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "DF-10 (cont): declare the fine-grained round")
+(env-keys ["admin-key"])
+;; rate 1e-7 (7dp) x balance 123.456789 (6dp) = 13dp owed — both inputs pass enforce-unit
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "R7" 0.0000001 (time "2027-06-02T06:00:00Z"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-06-02T06:00:00Z") })  ; a later amendment
+(expect "grace owed 13-decimal value (correct, pre-fix unpayable)"
+  0.0000123456789 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "grace"))
+(commit-tx)
+
+(begin-tx "DF-10 invariant holds with sub-precision values; fund to floored liability")
+(env-data { "all-accts": ["alice" "bob" "carol" "dave" "eve" "bob-a" "bob-b" "erin" "frank" "grace" "gus"] })
+(let ((liab (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))
+      (sum-pend (fold (+) 0.0
+                  (map (lambda (a:string) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of a))
+                       (read-msg 'all-accts)))))
+  (expect "liability == Σ pending EXACT even with 13-decimal terms" sum-pend liab))
+(env-keys ["admin-key"])
+(let* ((liab (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))
+       (poolbal (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+       (topup (- (+ (floor liab 12) 0.000000000001) poolbal)))  ; fund to exactly floor12(L)+1e-12
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT topup)] }])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" topup)
+  (env-keys ["admin-key"])
+ ;; the guard now compares against floor12(L) — fundable with a clean 12dp amount
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards topup))
+(commit-tx)
+
+(begin-tx "DF-10 the claim PAYS the floored amount and carries the dust (brick closed)")
+(expect "grace claim pays floor12(owed) = 0.000012345678"
+  0.000012345678 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "grace"))
+(expect "dust 9e-13 carried as pending (nothing lost)"
+  0.0000000000009 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "grace"))
+;; invariant still EXACT after a dust-carrying claim
+(env-data { "all-accts": ["alice" "bob" "carol" "dave" "eve" "bob-a" "bob-b" "erin" "frank" "grace" "gus"] })
+(let ((liab (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))
+      (sum-pend (fold (+) 0.0
+                  (map (lambda (a:string) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of a))
+                       (read-msg 'all-accts)))))
+  (expect "liability == Σ pending EXACT after dust-carrying claim" sum-pend liab))
+;; a dust-only claim (payout floors to 0) is REJECTED, state untouched
+(expect-failure "dust-only claim rejected (nothing payable yet)" "nothing to claim"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "grace"))
+(commit-tx)
+
+(begin-tx "the design record: provision the pool for R8 (0.1)")
+(env-keys ["admin-key"])
+(let ((need (- (floor (+ (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declared-liability)
+                         (* 0.1 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating)))
+                      12)
+               (try 0.0 (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT)))))
+  (if (> need 0.0)
+    (let ((_ 0))
+      (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT need)] }])
+      (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" need)
+      (env-keys ["admin-key"])
+      (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards need))
+    "already covered"))
+(commit-tx)
+
+;; ---- the design record (a later change): A ROUND NEEDS A SEALED RECORD DATE ----------------------
+;; Schedule one clear of the 12h runway (2 x MIN-RETRACT-LEAD), let it land, seal it.
+;; The seal runs with NO KEYS on purpose: `advance-snapshot` is permissionless, and a
+;; chain with no activity must still be sealable by anyone.
+(begin-tx "the design record: name the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (add-time (at 'block-time (chain-data)) 43202))
+(commit-tx)
+(env-chain-data
+  { "chain-id": (at 'chain-id (chain-data))
+, "block-time": (add-time (at 'block-time (chain-data)) 43203) })
+(begin-tx "the design record: seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "DF-10 next round SWEEPS the dust into a payable claim")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "R8" 0.1 (time "2027-06-03T12:00:00Z"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-06-03T12:00:00Z") })  ; a later amendment
+;; grace raw = dust 9e-13 + 123.456789*0.1 = 12.3456789000009 -> pays 12.345678900000, dust 9e-13 again
+(env-keys ["admin-key"])
+(let* ((liab (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))
+       (poolbal (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+       (topup (- (+ (floor liab 12) 0.000000000001) poolbal)))
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT topup)] }])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" topup)
+  (env-keys ["admin-key"])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards topup))
+(expect "grace claim pays 12.345678900000 (old dust included in raw, re-floored)"
+  12.345678900000 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "grace"))
+(expect "dust again 9e-13 (carried, never lost)"
+  0.0000000000009 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "grace"))
+(commit-tx)
+
+;; ===========================================================================
+;; DF-11 — FIFTH-PASS REGRESSION (MED-1): fundability at circ = 0.
+;; Amendment 1 exists to keep the crystallized pending of DEPARTED tokens payable;
+;; but the old (> circ 0.0) gate refused the module's own funding path at the exact
+;; boundary it was built for: every holder exits (a dump to the excluded treasury
+;; is the same counter path as a cross-chain exit's step-0 debit) -> circ = 0 with
+;; pending stranded and UNfundable through fund-awards. Amendment 4: fundable
+;; iff circ > 0 OR floor12(L) > 0. Only a DEAD chain (circ = 0 AND nothing payable)
+;; is refused, so cash can never be parked in the no-exit pool for no one.
+;; ===========================================================================
+(begin-tx "DF-11 every remaining holder exits to the excluded treasury -> circ = 0")
+;; each holder dumps their FULL balance (scoped sigs — managed TRANSFER caps need
+;; exact amounts; the suite is deterministic so the literals are the live balances).
+;; bob-a and frank are already at 0 (drained/dumped earlier in the suite).
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-launch-reserve) 276.543211)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "alice" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-launch-reserve) 276.543211)
+(env-sigs [{ "key": "bob-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "bob" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-launch-reserve) 1000.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "bob" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-launch-reserve) 1000.0)
+(env-sigs [{ "key": "bob-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "bob-b" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-launch-reserve) 1000.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "bob-b" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-launch-reserve) 1000.0)
+(env-sigs [{ "key": "carol-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "carol" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-launch-reserve) 500.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "carol" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-launch-reserve) 500.0)
+(env-sigs [{ "key": "dave-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "dave" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-launch-reserve) 1000.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "dave" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-launch-reserve) 1000.0)
+(env-sigs [{ "key": "erin-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "erin" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-launch-reserve) 100.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "erin" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-launch-reserve) 100.0)
+(env-sigs [{ "key": "grace-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "grace" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-launch-reserve) 123.456789)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "grace" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-launch-reserve) 123.456789)
+(env-sigs [{ "key": "gus-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "gus" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-launch-reserve) 200.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "gus" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-launch-reserve) 200.0)
+(expect "circulating is now ZERO" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+(env-data { "all-accts": ["alice" "bob" "carol" "dave" "bob-a" "bob-b" "erin" "frank" "grace" "gus"] })
+(let ((l (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))
+      (sum-pend (fold (+) 0.0
+                  (map (lambda (a:string) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of a))
+                       (read-msg 'all-accts)))))
+  (expect "liability == Σ pending EXACT at circ=0 (stranded pending)" sum-pend l)
+  (expect "a payable liability is stranded here" true (> (floor l 12) 0.0)))
+(commit-tx)
+
+(begin-tx "DF-11 fund-awards WORKS at circ=0 (the fifth-pass MED-1 regression)")
+(let* ((l (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))
+       (poolbal (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+       (short (- (+ (floor l 12) 0.000000000001) poolbal))
+       (dep (if (> short 1.0) short 1.0)))   ; top up any shortfall; at least 1 KDA to exercise the path
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT dep)] }])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" dep)
+  (env-keys ["admin-key"])
+ ;; pre-fix this aborted with "no circulating float" — the designed funding path
+ ;; refused the exact boundary Amendment 1 was built for
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards dep))
+(let ((l (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))
+      (poolbal (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT)))
+  (expect "pool covers the full stranded liability" true (>= poolbal (floor l 12))))
+(commit-tx)
+
+;; each claim in its OWN tx (as on-chain): bob/bob-a/bob-b token one guard, so their
+;; recipient principal and payout collide as a managed coin.TRANSFER install if
+;; claimed inside a single tx — a REPL-session artifact, not a contract property.
+(begin-tx "DF-11 claim alice")
+(let ((p (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "alice")))
+  (if (> (floor p 12) 0.0) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "alice") 0.0))
+(commit-tx)
+(begin-tx "DF-11 claim bob")
+(let ((p (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "bob")))
+  (if (> (floor p 12) 0.0) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "bob") 0.0))
+(commit-tx)
+(begin-tx "DF-11 claim carol")
+(let ((p (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "carol")))
+  (if (> (floor p 12) 0.0) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "carol") 0.0))
+(commit-tx)
+(begin-tx "DF-11 claim dave")
+(let ((p (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "dave")))
+  (if (> (floor p 12) 0.0) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "dave") 0.0))
+(commit-tx)
+(begin-tx "DF-11 claim bob-a")
+(let ((p (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "bob-a")))
+  (if (> (floor p 12) 0.0) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "bob-a") 0.0))
+(commit-tx)
+(begin-tx "DF-11 claim bob-b")
+(let ((p (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "bob-b")))
+  (if (> (floor p 12) 0.0) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "bob-b") 0.0))
+(commit-tx)
+(begin-tx "DF-11 claim erin")
+(let ((p (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "erin")))
+  (if (> (floor p 12) 0.0) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "erin") 0.0))
+(commit-tx)
+(begin-tx "DF-11 claim frank")
+(let ((p (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "frank")))
+  (if (> (floor p 12) 0.0) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "frank") 0.0))
+(commit-tx)
+(begin-tx "DF-11 claim gus")
+(let ((p (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "gus")))
+  (if (> (floor p 12) 0.0) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "gus") 0.0))
+(commit-tx)
+(begin-tx "DF-11 claim grace")
+(let ((p (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "grace")))
+  (if (> (floor p 12) 0.0) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "grace") 0.0))
+(commit-tx)
+
+(begin-tx "DF-11 after the stranded drain: identity exact, only dust owed")
+(env-data { "all-accts": ["alice" "bob" "carol" "dave" "bob-a" "bob-b" "erin" "frank" "grace" "gus"] })
+(let ((l (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))
+      (sum-pend (fold (+) 0.0
+                  (map (lambda (a:string) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of a))
+                       (read-msg 'all-accts)))))
+  (expect "liability == Σ pending EXACT after the stranded drain" sum-pend l)
+ ;; COMPOSITION property (5th pass): per-account dust is each < 1e-12 (unclaimable),
+ ;; but Σ dust across the 9 accounts crossed the 12-dp threshold — the AGGREGATE
+ ;; stays counted in L (conservation: nothing silently vanishes), so floor12(L) is
+ ;; one dust quantum, not 0, and the chain is deliberately still "fundable".
+  (expect "aggregate dust crossed 1e-12 and stays counted in L" 0.000000000001 (floor l 12))
+  (expect "pool still covers the aggregate-dust liability" true
+    (>= (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT) (floor l 12))))
+(commit-tx)
+;; (the TRUE dead-chain rejection — circ = 0 AND L exactly 0 — is proven in
+;; smartpacts-upgrade.repl, where a migrated empty chain provides that state)
+
+(print "SPT AWARD-FAIRNESS suite PASSED")

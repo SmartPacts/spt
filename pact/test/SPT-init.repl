@@ -1,0 +1,262 @@
+;; ===========================================================================
+;; SPT INIT-PATH guards (clean, uninitialized state via setup-noinit).
+;; Covers TOK-R03 (init-supply off chain 0), TOK-R04 (non-admin init-supply),
+;; init-on-chain-0 forbidden, double-init rejection, and the the design record tranche mint.
+;; ===========================================================================
+(load "setup-noinit.repl")
+
+;; Shared tranche beneficiaries (k: principals w/ synthetic-but-valid 64-hex keys).
+(env-data
+  { "founder-ks":       { "keys": ["f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"], "pred": "keys-all" }
+, "treasury-ops-ks":  { "keys": ["a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"], "pred": "keys-all" }
+, "liquidity-ops-ks": { "keys": ["b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"], "pred": "keys-all" } })
+
+;; --- TOK-R03: init-supply on a non-0 chain is rejected ---
+(begin-tx "init-supply off chain 0 rejected")
+(env-chain-data { "chain-id": "1", "block-time": (time "2026-06-01T00:00:00Z") })
+(env-keys ["admin-key"])
+(expect-failure "Supply init only on chain 0"
+  "Supply init only on chain 0"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init-supply
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G
+    [ { "account": "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"
+   , "amount": n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-TRANCHE } ]))
+;; an internal review L3-F1 (a later change): ROLLED BACK like the D3 block below — all-negative call to the
+;; ONE-SHOT init-supply; under a weakened check it SUCCEEDS and a commit persists the
+;; init-state singleton, cascading into :241's happy path with the real report dropped.
+(rollback-tx)
+
+;; --- TOK-R04: non-admin init-supply is rejected (keyset gate) ---
+(begin-tx "non-admin init-supply rejected")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+(env-keys ["intruder-key"])
+(expect-failure "Keyset failure"
+  "Keyset failure (keys-all): [admin-ke...]"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init-supply
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G
+    [ { "account": "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"
+   , "amount": n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-TRANCHE } ]))
+;; an internal review L3-F1 (a later change): rolled back — same reason as the block above.
+(rollback-tx)
+
+;; --- init (non-supply) is forbidden on chain 0 ---
+(begin-tx "init on chain 0 forbidden")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+(env-keys ["admin-key"])
+;; a later change: this was a TWO-argument expect-failure (doc + expr), which matches ANY failure.
+;; When init gained its launch-guard parameter the call became an ARITY error and this negative
+;; kept passing while asserting nothing about the chain-0 branch it is named for. Pinned to
+;; the exact message, and the call is now well-formed so the branch is really reached.
+(expect-failure "init on chain 0 is rejected by the chain check, not by an arity error"
+  "Use init-supply on chain 0"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G))
+;; an internal review L3-F1 (a later change): rolled back — all-negative call to the one-shot `init`.
+(rollback-tx)
+
+;; --- a later change / the operator runbook finding 11: init binds the launch reserve NAME to its GUARD -------------
+;; Before this, `init` took the account name as a bare string with no check of any kind, so a
+;; typo on one of 20 chains permanently mis-classified an account there (excluded? gates
+;; voting rights, award accrual AND circulating-supply) with nothing able to write it
+;; afterwards. Every one of these must fail for the SPECIFIC reason, on chain 1 (a chain where
+;; init is legal), and the chain must be left UNINITIALIZED so the typo cannot take hold.
+;;
+;; 🔴 a later change / a later amendment D6: the first three now fail on the PIN, not on the guard binding,
+;; because `enforce-launch-reserve` refuses any name but LAUNCH-RESERVE-PIN before it ever reaches
+;; `validate-principal`. THE MESSAGES WERE REPOINTED, NOT LEFT ALONE: the old string is not a
+;; substring of the new one, so leaving them would have gone red rather than silently passing —
+;; but the reverse case is this repo's standing trap and the reason each is stated in full.
+;; The FOURTH negative is the one that keeps `validate-principal` honest: right name, foreign
+;; guard. It is the only proof that the pin did not make the guard binding dead code.
+(begin-tx "init rejects a mistyped launch reserve account, and leaves the chain uninitialized")
+(env-chain-data { "chain-id": "1", "block-time": (time "2026-06-01T00:00:00Z") })
+(env-keys ["admin-key"])
+;; 🔴 THREE NEGATIVES WERE DELETED HERE, AND THEIR ABSENCE IS THE POINT (a finding, ).
+;; They passed a mistyped principal, an unrelated k: principal and a vanity name, and each
+;; asserted "…is not the pinned SPT-launch reserve principal". The account is no longer a
+;; PARAMETER — `init` takes only the guard, and the name is the LAUNCH-RESERVE-PIN defconst — so
+;; a wrong launch reserve account is now UNREPRESENTABLE rather than rejected. That is strictly
+;; stronger than a test, and this module's own rule is that a branch which cannot fail must not
+;; carry a negative pretending it can.
+;; What REMAINS falsifiable is the guard half, and it is below.
+;; the right NAME with the WRONG guard is rejected too — the pair is what is checked, and this
+;; is the negative that proves the pin did NOT retire validate-principal: the guard is what
+;; `credit` stores as the authority over 20,000 SPT, so binding it still has a job.
+(expect-failure "the correct name with a foreign guard is rejected"
+  "launch reserve guard does not derive the pinned SPT-launch reserve principal"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-G))
+;; STATE UNCHANGED — not merely "an error fired". A rejected init must leave NO state behind,
+;; or the chain is half-initialized and enforce-not-initialized would block the correct call.
+;; 🔴 PROBED THROUGH `get-circulating`, NOT `get-launch-reserve` (a finding, ). The launch
+;; reserve is a defconst now and its getter reads NO state, so it can never fail — a probe
+;; built on it would report a clean chain forever, including on a half-initialized one.
+;; `get-circulating` still reads the `state` singleton, so it is the honest oracle here.
+(expect-failure "chain 1 has no state row after the rejected inits"
+  "No value found in table n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT_state for key: state"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+;; 🔴 ROLLED BACK for the same reason as the D3 block below — see the long note there. Both
+;; blocks are ALL-NEGATIVE calls to the ONE-SHOT `init`, so weakening any check makes one
+;; SUCCEED and `commit-tx` would persist the init-state singleton, killing the chain-0
+;; `init-supply` at :233 with "module already initialized" and DROPPING the buffered report of
+;; the assertion that actually regressed. MEASURED (a later change M6, deleting `validate-principal`):
+;; with `commit-tx` the only output was the cascade; with this rollback the failing negative
+;; names itself. Two blocks, two boundaries — a tx boundary cannot be shared.
+(rollback-tx)
+
+;; --- the design record D3's TREASURY-BENEFICIARY block is DELETED (a later amendment / a later change) -------
+;; It tested `init`'s 3rd and 4th arguments — the the design record D4 `treasury-beneficiary` and its
+;; guard. Both arguments, the stored field, its validator, its event and its getter are gone:
+;; the treasury and liquidity tranches are module-held now, so there is no external name to
+;; configure, mistype or disenfranchise anyone with. DELETED, NOT REPOINTED, and recorded in
+;; an internal document later change.md §D4: repointing negatives at a feature that no longer exists is
+;; how a suite keeps a green row for a property nobody implements. What survives of D3 is the
+;; LAUNCH-RESERVE half above, which is untouched and still proves the name<->guard binding.
+
+;; The matching-pair POSITIVE for `init` lives in SPT-launch-reserve.repl, not here: the
+;; REPL keeps ONE database for all chain-ids, so a successful `init` writes the same
+;; init-state singleton this file's later chain-0 init-supply needs to find empty.
+
+;; --- happy path: init-supply on chain 0 succeeds; the design record mint + locks ---
+(begin-tx "init-supply chain 0 ok")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+(env-keys ["admin-key"])
+;; GAS — init-supply is the heaviest transaction in the module (4-row mint + tranche
+;; locks + 8 events incl. TREASURY-BENEFICIARY-SET) and it is the one path that cannot be retried, so its cost against
+;; the 150k KDA-CE ceiling is measured HERE rather than in the gas suite kept out of this repo: that
+;; suite loads setup.repl, which has already spent the one-shot init. The gas limit is
+;; set to the real ceiling, so a breach aborts the transaction instead of being reported
+;; as a passing number. Gas is read from a let* binding evaluated immediately after the
+;; call, before any assertion, so the harness around it is not being measured.
+;; a later amendment: this measures the DEGENERATE n=1 founder list (3 lock rows total — the
+;; pre-Am.1 shape); the n=3 cost is measured in smartpacts-founder-allocations.repl the same way.
+(env-gasmodel "table")
+(env-gaslimit 150000)
+(env-gas 0)
+(let* ((r (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init-supply
+            n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G
+            [ { "account": "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"
+           , "amount": n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-TRANCHE } ]))
+       (g (env-gas)))
+  (expect "init-supply ok" "supply initialized" r)
+  (print (format "GAS init-supply (4-reserve mint + n=1 tranche locks + 8 events): {}" [g]))
+  (expect "init-supply gas under the 150k KDA-CE ceiling" true (< g 150000)))
+(env-gaslimit 999999999)  ; keep the table model on, but never bind later txs
+(expect "treasury 55k" 55000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-ACCOUNT))
+(expect "founder 10k"  10000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-ACCOUNT))
+(expect "liquidity 15k" 15000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.LIQUIDITY-ACCOUNT))
+(expect "launch reserve 20k" 20000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-ACCOUNT))
+(expect "circulating 0" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+
+;; --- a later change: the MINT must be visible on the fungible-v2 event stream ---------------
+;; The whole point is reconciliation: an indexer that rebuilds balances from events alone
+;; must arrive at the same numbers the four `expect`s above read from the ledger. So these
+;; assert the EVENTS, not that init-supply merely returned. `env-events` is per-transaction
+;; (it reads empty after commit-tx — measured), hence the assertions live in THIS tx.
+;; Shape `TRANSFER "" account amount` is coin's own mint convention, read from coin-v5
+;; (`coinbase`, `remediate`, `release-allocation`) — not assumed from this suite.
+;; init-supply mints exactly once, ever: if these events are missing on mainnet, no
+;; upgrade can add them, which is why they are asserted field-by-field.
+;; a later amendment (a later change): the TREASURY-BENEFICIARY-SET assertions that stood here are
+;; DELETED with the event and the field they traced — there is no configured beneficiary on
+;; any chain any more. The mint assertions are untouched and are the ones that matter.
+(let* ((evs (env-events true))   ; captured ONCE — env-events true clears the queue
+       (mints (filter (lambda (e:object)
+                       (= "n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER"
+                          (at 'name e)))
+                     evs)))
+  (expect "one TRANSFER per reserve — four, no more, no fewer" 4 (length mints))
+ ;; sender field, per event: "" is the mint marker. A two-sided event here would make an
+ ;; indexer debit an account that never held the supply.
+  (expect "every mint carries the empty-sender MINT marker" ["" "" "" ""]
+    (map (lambda (e:object) (at 0 (at 'params e))) mints))
+ ;; receiver + amount, per event, in emission order — against the module's OWN constants,
+ ;; so a changed tranche split cannot leave this test asserting stale numbers.
+  (expect "each mint names its reserve and its exact tranche amount"
+    [ [n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-ACCOUNT  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-TRANCHE]
+      [n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-ACCOUNT   n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-TRANCHE]
+      [n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.LIQUIDITY-ACCOUNT n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.LIQUIDITY-TRANCHE]
+      [n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-ACCOUNT  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.LAUNCH-TRANCHE] ]
+    (map (lambda (e:object) [(at 1 (at 'params e)) (at 2 (at 'params e))]) mints))
+ ;; THE reconciliation property: supply reconstructed from the event stream == TOTAL-SUPPLY.
+  (expect "event stream reconciles to TOTAL-SUPPLY"
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TOTAL-SUPPLY
+    (fold (lambda (acc:decimal e:object) (+ acc (at 2 (at 'params e)))) 0.0 mints)))
+(commit-tx)
+
+;; --- double init-supply rejected ---
+(begin-tx "double init-supply rejected")
+(env-keys ["admin-key"])
+(expect-failure "module already initialized"
+  "module already initialized"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init-supply
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G
+    [ { "account": "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"
+   , "amount": n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-TRANCHE } ]))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; TOK-R24 — fund-awards with circulating-supply = 0 is rejected.
+;; the design record (Module 1, fund-awards) states it "Enforces `circulating-supply > 0`".
+;; The guard rejects funding at zero float, which would otherwise bump rpt and
+;; strand the funded KDA in the pool (a future holder's reward-debt would init to
+;; the bumped rpt, so it could never be claimed).
+;; ---------------------------------------------------------------------------
+(begin-tx "TOK-R24: fund-awards at circulating 0 rejected (no float)")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT 100.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" 100.0)
+(env-keys ["admin-key"])
+(expect "circulating is 0" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+(expect-failure "no circulating float"
+  "nothing fundable: no circulating float and no payable liability on this chain"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 100.0))
+(expect "rpt unchanged at zero float" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; TOK-R24b: DEAD CHAIN with a round ALREADY EFFECTIVE (rpt > 0, circ = 0, L = 0).
+;; RELOCATED HERE BY a later change from smartpacts-upgrade.repl §7, which was deleted with the
+;; historical migrations. The assertion has nothing to do with migration — it needed a
+;; chain with zero float and an effective round, and that suite happened to have one.
+;; It is NOT the same case as TOK-R24 above: there rpt is 0, so the guard is trivially
+;; satisfied. Here a round IS effective and the guard must still refuse, on liability
+;; rather than on rate. (The circ=0-WITH-stranded-pending POSITIVE case is DF-11 in the
+;; fairness suite, whose aggregate-dust edge keeps its L above 0 — so this is the only
+;; place the true L=0 dead-chain state is exercised.)
+;; ---------------------------------------------------------------------------
+;; 🔴 The the design record seal moves block-time forward 12h, so it runs from an EARLIER clock:
+;; every date below is asserted against this suite's own calendar.
+(env-chain-data { "chain-id": "0", "block-time": (time "2030-05-31T00:00:00Z") })
+;; ---- the design record (a later change): A ROUND NEEDS A SEALED RECORD DATE ----------------------
+;; Schedule one clear of the 12h runway (2 x MIN-RETRACT-LEAD), let it land, seal it.
+;; The seal runs with NO KEYS on purpose: `advance-snapshot` is permissionless, and a
+;; chain with no activity must still be sealable by anyone.
+(begin-tx "the design record: name the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (add-time (at 'block-time (chain-data)) 43202))
+(commit-tx)
+(env-chain-data
+  { "chain-id": (at 'chain-id (chain-data))
+, "block-time": (add-time (at 'block-time (chain-data)) 43203) })
+(begin-tx "the design record: seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "TOK-R24b: dead chain (rpt>0, circ=0, L=0) refused by fund-awards")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (time "2030-06-01T00:00:00Z") })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "DEAD-1" 0.02 (time "2030-06-02T00:00:00Z"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2030-06-02T00:00:00Z") })
+(expect "the round IS effective — rpt is non-zero" 0.02
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+(expect "circ is still 0" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+(expect "liability is exactly 0" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))
+(expect-failure "funding a dead chain is refused even with a live rate"
+  "nothing fundable: no circulating float and no payable liability on this chain"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 1.0))
+(commit-tx)
+
+
+(print "SPT-init REPL suite PASSED")

@@ -1,0 +1,1124 @@
+;; ===========================================================================
+;; the design record — THE TWO ADMIN KEYSET TIERS. Branch-complete, per Hard Rule 11.
+;;
+;; <ns>.spt-gov keys-2 of 3 — irreversible, or moves value out
+;; <ns>.spt-ops keys-any of 3 — reversible day-to-day operation
+;;
+;; 🔴 WHY THIS FILE EXISTS SEPARATELY FROM THE OTHER 61 SUITES. `setup.repl` deliberately makes
+;; both tiers satisfiable by one key, because putting the real roster there would look stronger
+;; and detect strictly less: SIGNING WITH MORE KEYS ALWAYS SATISFIES A WEAKER PREDICATE, so a
+;; mutation moving an operation from gov DOWN to ops still passes every suite that signed two
+;; keys. The downgrade direction — the only one that loses a signature — is invisible to them.
+;; It is visible only to an explicit "this REFUSES with one key" negative, and every one of
+;; those lives here.
+;;
+;; 🔴 THE SHAPE OF EVERY CASE BELOW, and why "succeeds under the right key" is only half a test:
+;; WRONG authority -> refused, pinned to the tier's own engine text
+;; RIGHT authority -> either succeeds, or fails on a DIFFERENT, NAMED message that could
+;; only be reached AFTER the keyset gate
+;; The second half is what distinguishes "the tier refused it" from "it was broken anyway".
+;; A refusal with no control is compatible with the function being dead.
+;;
+;; 🔴 THE TIERS ARE TELLABLE APART ONLY BECAUSE THEIR PREDICATES DIFFER. `enforce-keyset` raises
+;; the engine's message and it names the predicate — "Keyset failure (keys-2)" for gov,
+;; "Keyset failure (keys-any)" for ops. The key LISTS are identical (the same three devices), so
+;; the predicate is the sole discriminator. Give both tiers the same predicate and every
+;; assertion in this file silently stops asserting WHICH tier refused, while staying green.
+;;
+;; 🔴 AND `keys-1` IS NOT A PACT PREDICATE. the design record specifies `keys-1` throughout; measured
+;; against the 5.4 engine source, the natives are keys-all / keys-2 / keys-any only, and
+;; `keys-any` is `atLeast 1`. `keys-1` parses as a CUSTOM predicate — a module defun that does
+;; not exist — and the failure is LATE: define-keyset accepts it, describe-keyset prints it back,
+;; and it aborts at the first enforce-keyset. A keys-1 ops tier would have deployed clean and
+;; bricked every ops operation on a frozen module. This suite uses the correct spelling; the
+;; finding is a later amendment.
+;; ===========================================================================
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+
+(begin-tx "load coin")
+(load "fixtures/fungible-v2.pact")
+(load "fixtures/fungible-xchain-v1.pact")
+(load "fixtures/coin.pact")
+(create-table coin.coin-table)
+(create-table coin.allocation-table)
+(commit-tx)
+
+(begin-tx "fund sender00")
+(env-data { "sender00": { "keys": ["dev-a"], "pred": "keys-all" } })
+(test-capability (coin.COINBASE))
+(coin.coinbase "sender00" (read-keyset "sender00") 1000000.0)
+(commit-tx)
+
+;; --- THE REAL ROSTER SHAPE: three independent devices, two predicates -----------------------
+;; Names mirror ops/mainnet-config.json's roster (a / b / c) so the mapping from this
+;; suite to the ceremony is direct. The KEYS here are test strings, not the real pubkeys — the
+;; property under test is the PREDICATE and the tier wiring, neither of which depends on the
+;; key values. The namespace is still derived from spt-gov, exactly as on mainnet.
+(begin-tx "load SPT modules under the two-tier roster")
+(env-data
+  { "ns": "n_48867b242317a0216a67f8c7ca26696b5878e0e3"
+, "upgrade": false
+, "spt-gov-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-gov"
+, "spt-gov": { "keys": ["dev-a", "dev-b", "dev-c"], "pred": "keys-2" }
+, "spt-ops-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-ops"
+, "spt-ops": { "keys": ["dev-a", "dev-b", "dev-c"], "pred": "keys-any" }
+, "sender00": { "keys": ["dev-a"], "pred": "keys-all" } })
+(env-keys ["dev-a", "dev-b", "dev-c"])
+(define-namespace "n_48867b242317a0216a67f8c7ca26696b5878e0e3" (read-keyset 'spt-gov) (read-keyset 'spt-gov))
+(load "../modules/SPT.pact")
+(load "../modules/SPT-launch.pact")
+(commit-tx)
+
+;; --- the deploy really did define two DISTINCT keysets, with the predicates claimed ----------
+;; Without this, every assertion below could be satisfied by one keyset under two names.
+(begin-tx "T-0 both keysets exist and carry the intended predicates")
+;; MEASURED: `describe-keyset` returns a GUARD (not an object), and formatting it renders
+;; "KeySet {keys: [...],pred: <pred>}". `(at 'pred ...)` is a type error — recorded because it
+;; is the obvious wrong guess and this file is where someone will make it again.
+(expect "spt-gov is keys-2" true
+  (contains "pred: keys-2"
+    (format "{}" [(describe-keyset "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-gov")])))
+(expect "spt-ops is keys-any (1-of-N — the design record's `keys-1` does not exist)" true
+  (contains "pred: keys-any"
+    (format "{}" [(describe-keyset "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-ops")])))
+(commit-tx)
+
+;; ===========================================================================
+;; PART A — THE GOV TIER. One device is NOT enough. Two are.
+;; Each case: refuse under a single roster key, then the same call under two.
+;; 🔴 "a single roster key" IS the ops signer — spt-ops is keys-any over these same three
+;; devices, so `dev-c` alone satisfies ops completely. Every refusal below is therefore
+;; literally the design record's requirement that THE OPS KEY IS REFUSED on a gov operation.
+;; ===========================================================================
+
+(begin-tx "A-1 init-supply — GOV")
+(env-data
+  { "founder-ks": { "keys": ["f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"], "pred": "keys-all" }
+, "sender00": { "keys": ["dev-a"], "pred": "keys-all" } })
+(env-keys ["dev-c"])
+(expect-failure "A-1 GOV REFUSES one device on init-supply"
+  "Keyset failure (keys-2)"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init-supply
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G
+    [ { "account": (create-principal (read-keyset 'founder-ks))
+   , "amount": n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-TRANCHE } ]))
+(rollback-tx)
+
+(begin-tx "A-1 CONTROL init-supply succeeds on two devices")
+(env-data
+  { "founder-ks": { "keys": ["f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"], "pred": "keys-all" }
+, "sender00": { "keys": ["dev-a"], "pred": "keys-all" } })
+(env-keys ["dev-b", "dev-c"])
+(expect "A-1 CONTROL: two devices pass ADMIN-GOV" "supply initialized"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init-supply
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G
+    [ { "account": (create-principal (read-keyset 'founder-ks))
+   , "amount": n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-TRANCHE } ]))
+(commit-tx)
+
+(begin-tx "A-2 launch.init — GOV")
+(env-keys ["dev-c"])
+(expect-failure "A-2 GOV REFUSES one device on launch.init"
+  "Keyset failure (keys-2)"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5))
+(rollback-tx)
+
+(begin-tx "A-2 CONTROL launch.init succeeds on two devices")
+(env-keys ["dev-a", "dev-b"])
+(expect "A-2 CONTROL: two devices pass ADMIN-GOV" "sale initialized"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5))
+(commit-tx)
+
+(begin-tx "A-3 withdraw-funding — GOV")
+;; 🔴 a later change: `WITHDRAW-FUNDING` is `@managed` on `amount` (founder, ), so BOTH sides of
+;; this pair now carry the clist entry. Without it the refusal is "Managed capability not installed"
+;; for one device AND for two, which would make the negative pass while asserting nothing about the
+;; TIER — the "still refuses / no longer discriminates" defect D-2b exists for.
+(env-sigs [{ "key": "dev-c", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.WITHDRAW-FUNDING "sender00" 1.0)] }])
+(expect-failure "A-3 GOV REFUSES one device on withdraw-funding"
+  "Keyset failure (keys-2)"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.withdraw-funding "sender00" 1.0))
+;; CONTROL: two devices pass the tier and reach the FUNDS check — a different, named failure
+;; that is only reachable after the keyset gate. This is the strongest available control for an
+;; operation whose success would require funding the funding account first.
+(env-sigs [ { "key": "dev-a", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.WITHDRAW-FUNDING "sender00" 1.0)] }
+            { "key": "dev-c",   "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.WITHDRAW-FUNDING "sender00" 1.0)] } ])
+(expect-failure "A-3 CONTROL: two devices pass ADMIN-GOV and reach the funds check"
+  "Insufficient funds"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.withdraw-funding "sender00" 1.0))
+(rollback-tx)
+
+(begin-tx "A-4 recover-pool-surplus — GOV")
+;; 🔴 a later change: `RECOVER-SURPLUS` is `@managed` on `amount` (founder, ) — same reason as
+;; A-3. Both sides carry the clist entry so the refusal below is the TIER and not the install.
+(env-sigs [{ "key": "dev-c", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.RECOVER-SURPLUS 1.0)] }])
+(expect-failure "A-4 GOV REFUSES one device on recover-pool-surplus"
+  "Keyset failure (keys-2)"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.recover-pool-surplus 1.0))
+(env-sigs [ { "key": "dev-b",  "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.RECOVER-SURPLUS 1.0)] }
+            { "key": "dev-c", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.RECOVER-SURPLUS 1.0)] } ])
+(expect-failure "A-4 CONTROL: two devices pass ADMIN-GOV and reach the surplus check"
+  "amount exceeds the award pool's unowed surplus"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.recover-pool-surplus 1.0))
+(rollback-tx)
+
+(begin-tx "A-5 disburse-tranche — GOV")
+;; 🔴 a later change: `DISBURSE` is `@managed`, so BOTH sides of this pair now carry the clist entry.
+;; Without it the refusal is "Managed capability not installed" for one device AND for two,
+;; which would make the negative pass while asserting nothing about the TIER.
+(env-sigs [{ "key": "dev-c", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "treasury" "sender00" 1.0)] }])
+(expect-failure "A-5 GOV REFUSES one device on disburse-tranche"
+  "Keyset failure (keys-2)"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche "treasury" "sender00" 1.0))
+;; CONTROL: two devices pass the tier and reach the VESTING check — nothing has vested at T0,
+;; which is a different, named failure only reachable after the keyset gate.
+(env-sigs [ { "key": "dev-a", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "treasury" "sender00" 1.0)] }
+            { "key": "dev-b",    "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "treasury" "sender00" 1.0)] } ])
+(expect-failure "A-5 CONTROL: two devices pass ADMIN-GOV and reach the vesting check"
+  "SPT disbursement exceeds the vested available amount"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche "treasury" "sender00" 1.0))
+(rollback-tx)
+
+(begin-tx "A-6 launch.withdraw-proceeds — GOV")
+;; 🔴 a later change: `WITHDRAW-PROCEEDS` is `@managed` on `amount` (founder, ) — same reason as
+;; A-3. Both sides carry the clist entry so the refusal below is the TIER and not the install.
+(env-sigs [{ "key": "dev-c", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.WITHDRAW-PROCEEDS "sender00" 1.0)] }])
+(expect-failure "A-6 GOV REFUSES one device on withdraw-proceeds"
+  "Keyset failure (keys-2)"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.withdraw-proceeds "sender00" 1.0))
+(env-sigs [ { "key": "dev-b",  "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.WITHDRAW-PROCEEDS "sender00" 1.0)] }
+            { "key": "dev-c", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.WITHDRAW-PROCEEDS "sender00" 1.0)] } ])
+(expect-failure "A-6 CONTROL: two devices pass ADMIN-GOV and reach the funds check"
+  "Insufficient funds"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.withdraw-proceeds "sender00" 1.0))
+(rollback-tx)
+
+;; token.init is the 20-spoke initializer — chain 0 refuses it outright, so its tier is proven
+;; on a spoke, where the operation is legal.
+(begin-tx "A-7 token.init on a spoke — GOV")
+(env-chain-data { "chain-id": "1", "block-time": (time "2026-06-01T00:00:00Z") })
+(env-keys ["dev-c"])
+(expect-failure "A-7 GOV REFUSES one device on init"
+  "Keyset failure (keys-2)"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G))
+;; CONTROL: two devices pass the tier and reach the ONE-SHOT check (this world already ran
+;; init-supply), a different named failure only reachable after the keyset gate.
+(env-keys ["dev-a", "dev-c"])
+(expect-failure "A-7 CONTROL: two devices pass ADMIN-GOV and reach the one-shot check"
+  "module already initialized"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G))
+(rollback-tx)
+
+;; ===========================================================================
+;; PART B — THE OPS TIER. ONE device is enough, and a stranger is not.
+;; The refusal pins "(keys-any)": if any of these operations were wired to the gov cap by
+;; mistake, the message would read "(keys-2)" and the assertion would go red.
+;; ===========================================================================
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+
+(begin-tx "B-1 set-price — GOV (a later change moved it from OPS)")
+(env-keys ["stranger"])
+(expect-failure "B-1 GOV REFUSES a stranger on set-price"
+  "Keyset failure (keys-2)"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-price 0.75))
+;; 🔴 INVERTED BY a later change. This assertion used to read "ONE device is enough for ADMIN-OPS" and
+;; PASSED — it pinned the placement an internal review measured as the first link in a one-device
+;; extraction chain. One device is now REFUSED, and the two-device control below is what proves
+;; the operation still works at all rather than having been broken into silence.
+(env-keys ["dev-c"])
+(expect-failure "B-1 ONE device is now REFUSED on set-price"
+  "Keyset failure (keys-2)"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-price 0.75))
+(env-keys ["dev-a" "dev-b"])
+(expect "B-1 CONTROL: TWO devices set the price" "price updated"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-price 0.75))
+(rollback-tx)
+
+(begin-tx "B-2 pause / resume-sale — OPS")
+(env-keys ["stranger"])
+(expect-failure "B-2 OPS REFUSES a stranger on pause"
+  "Keyset failure (keys-any)"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.pause))
+(expect-failure "B-2 OPS REFUSES a stranger on resume-sale"
+  "Keyset failure (keys-any)"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale))
+(env-keys ["dev-b"])
+(expect "B-2 CONTROL: ONE device pauses" "sale paused"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.pause))
+(expect "B-2 CONTROL: ONE device resumes" "sale resumed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale))
+(rollback-tx)
+
+(begin-tx "B-3 create-proposal / cancel-proposal — OPS")
+(env-keys ["stranger"])
+(expect-failure "B-3 OPS REFUSES a stranger on create-proposal"
+  "Keyset failure (keys-any)"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal
+    "T1" "t" "d" (time "2026-06-01T00:00:00Z")
+    (add-time (time "2026-06-01T00:00:00Z") n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)
+    259200))
+(env-keys ["dev-c"])
+(expect "B-3 CONTROL: ONE device creates a proposal" "proposal created"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal
+    "T1" "t" "d" (time "2026-06-01T00:00:00Z")
+    (add-time (time "2026-06-01T00:00:00Z") n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)
+    259200))
+(env-keys ["stranger"])
+(expect-failure "B-3 OPS REFUSES a stranger on cancel-proposal"
+  "Keyset failure (keys-any)"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cancel-proposal "T1"))
+(env-keys ["dev-a"])
+(expect "B-3 CONTROL: ONE device cancels a proposal" "proposal cancelled"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cancel-proposal "T1"))
+(rollback-tx)
+
+(begin-tx "B-4 schedule-snapshot / cancel-snapshot — OPS (a later amendment)")
+;; 🔴 THESE TWO ARE NOT IN the design record'S LIST AND COULD NOT HAVE BEEN — the design record created them three
+;; days after the design record was accepted. They are placed at OPS by the design record's own rule (no value
+;; moves, no limit changes, reversible by the same tier alone) and the placement is recorded as
+;; Amendment 2 rather than made silently, because the tiers FREEZE.
+(env-keys ["stranger"])
+(expect-failure "B-4 OPS REFUSES a stranger on schedule-snapshot"
+  "Keyset failure (keys-any)"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot (time "2026-06-02T00:00:00Z")))
+(env-keys ["dev-b"])
+(expect "B-4 CONTROL: ONE device schedules a record date" "record date scheduled"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot (time "2026-06-02T00:00:00Z")))
+(env-keys ["stranger"])
+(expect-failure "B-4 OPS REFUSES a stranger on cancel-snapshot"
+  "Keyset failure (keys-any)"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cancel-snapshot))
+;; 🔴 THE PLACEMENT'S OWN JUSTIFICATION, ASSERTED: the griefing surface schedule-snapshot opens
+;; at one device is accepted ONLY because the SAME single device can clear it. If cancellation
+;; ever needed the gov tier, one key could create a stall it could not clear and the OPS
+;; placement would be wrong. This line is what would go red if that changed.
+(env-keys ["dev-c"])
+(expect "B-4 CONTROL: the SAME one-device tier clears the stall it can create" "record date cancelled"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cancel-snapshot))
+(rollback-tx)
+
+(begin-tx "B-5 fund-awards — GOV (a later change moved it from OPS)")
+(env-keys ["stranger"])
+(expect-failure "B-5 GOV REFUSES a stranger on fund-awards"
+  "Keyset failure (keys-2)"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 10.0))
+;; fund-awards carries its OWN capability (FUND-AWARDS), not ADMIN-OPS, so this case also pins
+;; that the separate cap was moved to the ops keyset rather than left on the retired one.
+;; CONTROL: one device passes FUND-AWARDS and reaches the fundability check — a different,
+;; named failure only reachable after the keyset gate.
+;; 🔴 INVERTED BY a later change. This read "ONE device passes FUND-AWARDS" and PASSED — pinning the
+;; placement that let a single device move KDA out of funding. One device is now REFUSED; the
+;; two-device control then reaches the LATER, named fundability check, which is what proves the
+;; operation still works rather than having been broken into silence.
+(env-keys ["dev-c"])
+(expect-failure "B-5 ONE device is now REFUSED on fund-awards"
+  "Keyset failure (keys-2)"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 10.0))
+(env-keys ["dev-a" "dev-b"])
+(expect-failure "B-5 CONTROL: TWO devices pass FUND-AWARDS and reach the fundability check"
+  "nothing fundable"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 10.0))
+(rollback-tx)
+
+(begin-tx "B-6 declare-round — GOV (a later change); retract-round STAYS OPS")
+(env-keys ["stranger"])
+(expect-failure "B-6 GOV REFUSES a stranger on declare-round"
+  "Keyset failure (keys-2)"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "R1" 0.001 (time "2026-06-03T00:00:00Z")))
+(expect-failure "B-6 OPS REFUSES a stranger on retract-round"
+  "Keyset failure (keys-any)"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.retract-round "R1"))
+;; 🔴 THE ASYMMETRY IS THE POINT AND IT IS DELIBERATE (a later change). Declaring a round CREATES an
+;; obligation — value out — so it needs two devices. Retracting REDUCES that obligation, so it
+;; stays at one: a safety brake must never be harder to reach than the thing it stops. If these
+;; two ever carry the same tier, one of them is wrong.
+(env-keys ["dev-c"])
+(expect-failure "B-6 ONE device is now REFUSED on declare-round"
+  "Keyset failure (keys-2)"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "R1" 0.001 (time "2026-06-03T00:00:00Z")))
+;; CONTROL: TWO devices pass the tier and are stopped by a LATER, named check — the design record's
+;; record-date requirement. A different message is the proof it got past the keyset, and it is
+;; what shows declare-round still WORKS rather than having been broken into silence.
+(env-keys ["dev-a" "dev-b"])
+(expect-failure "B-6 CONTROL: TWO devices pass ADMIN-GOV and reach the record-date check"
+  "no record date has sealed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "R1" 0.001 (time "2026-06-03T00:00:00Z")))
+(rollback-tx)
+
+
+;; ===========================================================================
+;; PART C — the design record PART 2's SETTABLE LIMITS. Operating within a limit is OPS;
+;; MOVING the limit is GOV. This is the pair the whole design rests on.
+;;
+;; 🔴 the design record states it directly: "A settable limit is only as good as its tier. If a setter
+;; were reachable from spt-ops, the whole design collapses to 'one device can do anything' —
+;; the tier assignment is the safety property, and it needs a named negative proving the ops
+;; key is REFUSED on each setter." These are those negatives.
+;;
+;; 🔴 AND THE DOWNGRADE IS THE DIRECTION THAT HIDES. Moving a setter from gov to ops loses a
+;; signature and nothing else changes, so it stays green in every suite that signs two keys.
+;; Each case below refuses ONE device; that is the only shape that sees it.
+;; ===========================================================================
+
+(begin-tx "a finding set-runway — GOV, while schedule-snapshot stays OPS")
+;; The pair, side by side, on the SAME single device. This is the property in one block:
+;; one key may operate under the runway; one key may not move it.
+(env-keys ["dev-c"])
+(expect-failure "a finding GOV REFUSES one device on set-runway"
+  "Keyset failure (keys-2)"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.set-runway 86400))
+;; CONTROL that the same one device is NOT simply powerless here — it still performs an ops
+;; operation, so the refusal above is the TIER, not a dead key.
+;; 🔴 THE CONTRAST MOVED (a later change). It used to be `declare-round`, which was ops; declaring a
+;; round creates an obligation and is now gov, so it can no longer play the "operate under the
+;; limit" half of this pair. `schedule-snapshot` names a record date and moves no value, so it
+;; is the honest ops half now. Do NOT restore declare-round here to make the pair look neater.
+(expect "a finding CONTROL: the same ONE device still performs an OPS operation" "record date scheduled"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot (time "2026-06-05T00:00:00Z")))
+(env-keys ["dev-b", "dev-c"])
+(expect "a finding CONTROL: two devices move the runway" "runway updated"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.set-runway 86400))
+(expect "a finding and it took effect" 86400
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-runway))
+(rollback-tx)
+
+(begin-tx "a finding the runway's HARD MINIMUM holds against the governance tier itself")
+;; 🔴 THE FLOOR IS NOT AN ADMIN CHECK — two devices do not buy their way under it. MIN-RUNWAY is
+;; a defconst and freezes, so this refusal is the one thing on this branch that survives every
+;; key, every tier and the freeze. After the design record part 1 deleted the rate caps it is the ONLY
+;; remedy for a wrong rate the pool already covers.
+(env-keys ["dev-a", "dev-b"])
+(expect-failure "a finding even TWO devices cannot lower the runway past MIN-RUNWAY"
+  "SPT runway must be at least"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.set-runway 60))
+;; the exact boundary is ACCEPTED — without this the refusal above would also pass if the
+;; setter rejected everything
+(expect "a finding CONTROL: exactly MIN-RUNWAY is accepted" "runway updated"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.set-runway
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-RUNWAY))
+;; and one second under it is not — the boundary is a real edge, not a rounded claim
+(expect-failure "a finding one second below MIN-RUNWAY is refused"
+  "SPT runway must be at least"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.set-runway
+    (- n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-RUNWAY 1)))
+(rollback-tx)
+
+(begin-tx "C-2b a later change: the runway has an UPPER bound — add-time wraps silently")
+;; 🔴 A runway of 1e13 seconds does not error: `add-time` WRAPS, landing ~267,000 years in the
+;; PAST, which makes a past effective-at declarable with retract-round's window already expired.
+;; The MIN-RUNWAY floor never saw it because the value is enormous, not small — a bound that only
+;; checks one direction is half a bound.
+(env-keys ["dev-a" "dev-b"])
+(expect-failure "C-2b: an absurd runway is REFUSED rather than silently wrapping"
+  "runway must be at most"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.set-runway 10000000000000))
+;; CONTROL: the bound refuses the absurd value, it does not disable the setter.
+(expect "C-2b CONTROL: an ordinary runway still sets" "runway updated"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.set-runway 172800))
+(rollback-tx)
+
+(begin-tx "a finding set-min-price AND set-price are BOTH gov (a later change)")
+;; 🔴 THIS BLOCK NO LONGER PROVES AN OPERATE-vs-MOVE PAIR, AND SAYING SO IS THE POINT. It used
+;; to: `set-min-price` was gov and `set-price` was ops, so one device could price within the
+;; floor but not move it. The founder moved `set-price` to gov as well, on the
+;; grounds that the sale is a one-time launch and the second device therefore costs nothing.
+;; So BOTH halves now refuse one device, and the floor's job changed from an authority boundary
+;; into a FAT-FINGER guard. Asserting a contrast that no longer exists would be worse than
+;; asserting none — do not "restore" the pair here; the price pair is gone by decision.
+(env-keys ["dev-c"])
+(expect-failure "a finding GOV REFUSES one device on set-min-price"
+  "Keyset failure (keys-2)"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-min-price 0.001))
+(expect-failure "a finding GOV also REFUSES one device on set-price now"
+  "Keyset failure (keys-2)"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-price 0.5))
+(env-keys ["dev-a", "dev-b"])
+(expect "a finding CONTROL: two devices move the floor" "price floor updated"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-min-price 0.001))
+(expect "a finding and it took effect" 0.001
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.get-min-price))
+;; only NOW is the low price legal — and it took two devices for BOTH steps.
+(expect "a finding two devices can price under the NEW floor" "price updated"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-price 0.001))
+(rollback-tx)
+
+(begin-tx "a finding the price floor's HARD MINIMUM holds against the governance tier itself")
+;; MIN-PRICE-FLOOR freezes. It is an ACCIDENT GUARD, not a solvency guarantee — at the floor
+;; the whole reserve costs 0.02 KDA — but it is what makes the measured 1e-12 drain unreachable
+;; by any key at any tier, forever.
+(env-keys ["dev-a", "dev-c"])
+(expect-failure "a finding even TWO devices cannot set the floor below MIN-PRICE-FLOOR"
+  "SPT price floor must be at least"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-min-price 0.0000001))
+(expect-failure "a finding the measured 1e-12 exploit floor is refused at every tier"
+  "SPT price floor must be at least"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-min-price 0.000000000001))
+;; 🔴 C-4b PINS THE FOUNDER'S DECISION, and it is the only assertion here that can
+;; see it. The two probes above are 1e-7 and 1e-12 — both sit below the OLD floor (1e-6) and the
+;; NEW one (1e-5) alike, so both stay green whichever value ships and neither distinguishes them.
+;; The CONTROL below reads the constant symbolically, so it adapts silently too. Without this
+;; line the floor could be quietly returned to 1e-6 — or to anything under 1e-5 — with the whole
+;; suite still green, which is the "a check that cannot fail" shape this project keeps finding.
+;; 1e-6 is chosen deliberately as the probe: it is the value that WAS the floor, so this
+;; assertion goes RED against the previous implementation and not merely against a silly number.
+(expect-failure "C-4b the OLD 1e-6 floor is now REFUSED — the founder raised it to 1e-5"
+  "SPT price floor must be at least"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-min-price 0.000001))
+(expect "a finding CONTROL: exactly MIN-PRICE-FLOOR is accepted" "price floor updated"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-min-price
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.MIN-PRICE-FLOOR))
+(rollback-tx)
+
+(begin-tx "a finding a setter is locked while the sale is active, exactly like set-price")
+(env-keys ["dev-a", "dev-b"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(expect-failure "a finding the floor cannot move mid-sale"
+  "SPT price floor is locked while the sale is active"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-min-price 0.02))
+;; CONTROL: closed again, the same call succeeds — so a finding pins the ACTIVE check, not the tier
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.pause)
+(expect "a finding CONTROL: with the sale closed the same call succeeds" "price floor updated"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-min-price 0.02))
+(rollback-tx)
+
+(begin-tx "a finding the consumers HONOUR the setting — not just the default")
+;; 🔴 WITHOUT THIS BLOCK THE WHOLE OF PART 2 IS UNPINNED. a finding proves `set-runway` writes and
+;; `get-runway` reads back; neither proves that anything USES the value. The seeded runway equals
+;; MIN-RUNWAY, so a consumer that kept the old hardcoded `(* 2 MIN-RETRACT-LEAD)` would agree
+;; with the settable value in every test that never changes it — green forever, settability dead.
+;; That is the "a check that cannot fail" shape, and it is only visible by RAISING the runway and
+;; showing a date that was legal a moment ago is now refused.
+(env-keys ["dev-a", "dev-b"])
+;; baseline: 24h out is comfortably legal at the 12h default
+(expect "a finding baseline: a 24h record date is legal at the default runway" "record date scheduled"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot (time "2026-06-02T00:00:00Z")))
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cancel-snapshot)
+;; now demand two days of notice
+(expect "a finding raise the runway to 48h" "runway updated"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.set-runway 172800))
+;; the SAME 24h date is now refused — this is the line that proves schedule-snapshot reads state
+(expect-failure "a finding the same 24h record date is now REFUSED"
+  "SPT record date must leave at least two retraction leads of runway"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot (time "2026-06-02T00:00:00Z")))
+;; and a date beyond the new runway is accepted, so the refusal is the runway and not a jam
+(expect "a finding a 72h record date is accepted under the raised runway" "record date scheduled"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot (time "2026-06-04T00:00:00Z")))
+(rollback-tx)
+
+(begin-tx "C-7a declare-round at the DEFAULT runway: a 24h round is legal")
+;; 🔴 the design record NAMES ONE CONSUMER; THERE ARE TWO. `declare-round` enforces the same runway and
+;; needs its own proof, for the same reason a finding exists. Its runway check sits BEHIND the the design record
+;; record-date gate, so reaching it needs a sealed generation first — which is exactly why it
+;; would have been easy to leave unpinned.
+;; 🔴 SPLIT INTO TWO ROLLED-BACK TRANSACTIONS ON PURPOSE: a generation carries at most one
+;; declared round, so a single block cannot declare the same date twice. Measured — the second
+;; attempt failed with "this record date already carries a declared round", which would have
+;; passed an `expect-failure` looking only for "a refusal" while proving nothing about runways.
+(env-keys ["dev-a", "dev-b"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot (time "2026-06-02T00:00:00Z"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:01Z") })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(expect "C-7a a generation sealed, so declare-round's runway check is reachable" 1
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot-gen))
+;; The funding bar is VACUOUS here because this world has zero circulating float — rate x 0 = 0
+;; owed — which is a later amendment's Z-1 finding, not an accident of this suite. So the round is
+;; ACCEPTED, and that acceptance is the baseline C-7b overturns.
+(expect "C-7a a 24h round is accepted at the 12h default runway" "round declared"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "C7" 0.001 (time "2026-06-03T00:00:00Z")))
+(rollback-tx)
+
+(begin-tx "C-7b raise the runway and the SAME round is refused")
+;; 🔴 RESET THE CLOCK. `env-chain-data` is REPL-global, not transaction-scoped, so C-7a's
+;; advance to T00:00:01Z is still in force here and scheduling for would be
+;; scheduling into the past. Measured — that is exactly how this block failed first time.
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+(env-keys ["dev-a", "dev-b"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot (time "2026-06-02T00:00:00Z"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:01Z") })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(expect "C-7b raise the runway to 48h" "runway updated"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.set-runway 172800))
+;; identical call to C-7a's, identical state, one value changed. It is now refused ON THE RUNWAY.
+;; 🔴 This is the line that proves declare-round READS the setting rather than the old constant:
+;; leave `(* 2 MIN-RETRACT-LEAD)` inline there and C-7a stays green while this goes red.
+(expect-failure "C-7b the same 24h round is now refused ON THE RUNWAY"
+  "award round effective-at must leave at least two retraction leads of runway"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "C7" 0.001 (time "2026-06-03T00:00:00Z")))
+;; and a date beyond the new runway is accepted, so the refusal is the runway, not a jam
+(expect "C-7b a 72h round is accepted under the raised runway" "round declared"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "C7" 0.001 (time "2026-06-05T00:00:00Z")))
+(rollback-tx)
+
+;; ===========================================================================
+;; PART D — a finding (an internal review): A TIER IS NOT A DISBURSEMENT SCOPE.
+;;
+;; Everything above proves WHO may act. This proves WHAT ONE SIGNATURE CARRIES, which is a
+;; different property and the one a finding is about: `ADMIN-GOV` is argument-free, so a signature
+;; scoped to it authorizes every gov operation in the same transaction.
+;;
+;; 🔴 THE SIGNER USES A LEDGER, AND THE DEVICE RENDERS THE CLIST. That is why this is a real
+;; finding and not bookkeeping: under `ADMIN-GOV` the device shows a tier name while the same
+;; signature also authorizes 70 % of supply leaving; under `DISBURSE` it shows the tranche, the
+;; destination and the amount.
+;; ===========================================================================
+
+(begin-tx "D-1 a finding REPRODUCED: an (ADMIN-GOV)-scoped signature still carries the whole tier")
+;; The control that makes D-2 mean something: this exact clist IS sufficient for a routine gov
+;; operation. Without it, D-2's refusal would be compatible with the signature being useless.
+(env-sigs [ { "key": "dev-a", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.ADMIN-GOV)] }
+            { "key": "dev-b",    "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.ADMIN-GOV)] } ])
+(expect "D-1 an (ADMIN-GOV) clist drives a routine gov operation" "runway updated"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.set-runway 86400))
+(rollback-tx)
+
+(begin-tx "D-2 THE FIX: the SAME signature can no longer disburse")
+;; 🔴 THIS IS THE LINE a finding ASKED FOR. Same clist as D-1, which just drove `set-runway`.
+;; Before the fix it also drove a 70,000-SPT disbursement in the same transaction.
+(env-sigs [ { "key": "dev-a", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.ADMIN-GOV)] }
+            { "key": "dev-b",    "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.ADMIN-GOV)] } ])
+;; 🔴 a later change CHANGED WHICH REFUSAL ANSWERS, AND IT IS A STRONGER ONE. This asserted
+;; "Keyset failure (keys-2)": the clist named ADMIN-GOV, so DISBURSE's own `enforce-keyset`
+;; was unsatisfied. Now `DISBURSE` is `@managed`, so the call never reaches the keyset at all —
+;; an ADMIN-GOV clist installs no DISBURSE budget, and the refusal is "Managed capability not
+;; installed". a finding's property is unchanged and now holds one step earlier.
+(expect-failure "D-2 an (ADMIN-GOV) clist is REFUSED on disburse-tranche"
+  "Managed capability not installed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche "treasury" "sender00" 1.0))
+(rollback-tx)
+
+;; ===========================================================================
+;; 🔴 D-2b — THE DISCRIMINATOR D-2 STOPPED BEING, AND WHY THIS BLOCK EXISTS.
+;;
+;; a later change re-aimed D-2 from "Keyset failure (keys-2)" to "Managed capability not installed"
+;; because that is genuinely the refusal that now answers. Each re-aimed negative was checked
+;; to still REFUSE. 🔴 THAT IS THE WRONG QUESTION. "Managed capability not installed" is raised
+;; by the INSTALL IDENTITY, before the defcap body runs at all — so it is raised identically
+;; whether the body enforces GOV-KS directly or composes the tier. D-2 kept refusing and
+;; stopped DISCRIMINATING, and nothing else in 54 suites covered the difference.
+;;
+;; MEASURED (cold delta re-check of a later change, reproduced here before writing this):
+;; mutate DISBURSE's body to `(compose-capability (ADMIN-GOV))` — the exact shape token:866
+;; names as wrong — and the ONLY gates that move are the frozen fixture, the baseline hash and
+;; the byte count. ZERO behavioural suites go red. All three are mechanical consequences of the
+;; source changing, and all three are re-pinned as a matter of routine after ANY module edit,
+;; so the regression would land fully green.
+;;
+;; 🔴 THE HARM IS a finding's, ON THE ONE DISCRETIONARY POWER OVER 70 % OF SUPPLY. `spt-gov` is
+;; keys-2, so two devices sign. Under the composed shape, ONE device carrying only the bare
+;; `(ADMIN-GOV)` — its screen showing no tranche, no destination, no amount — combines with a
+;; co-signature naming the real `(DISBURSE …)` and the whole tranche moves. Measured: 15,000.0
+;; under the mutation, `Keyset failure (keys-2)` on the shipping module.
+;;
+;; So this block pins the MIXED-CLIST case, which is the one that distinguishes the two shapes.
+;; Both poles were measured, so it is a proven discriminator and not another message that
+;; happens to appear: RED under the composed body, GREEN as shipped.
+;; 🔴 The ALL-CAPS warning against composing lives in a `;` comment, which the design record STRIPS — the
+;; deployed artifact carries no trace of it. This assertion is the only thing that survives.
+;; ===========================================================================
+(begin-tx "D-2b a MIXED clist — one device on the bare tier, one on the real DISBURSE")
+(env-sigs [ { "key": "dev-a", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.ADMIN-GOV)] }
+       , { "key": "dev-b",    "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "liquidity" "sender00" 15000.0)] } ])
+(expect-failure "D-2b the bare-tier co-signature CANNOT complete a scoped disbursement"
+  "Keyset failure (keys-2)"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche "liquidity" "sender00" 15000.0))
+;; `sender00` has no SPT row at all here, which is itself the state assertion: a completed
+;; disbursement would have CREATED one. `try` supplies the absent-row default rather than
+;; letting the read abort and mask the check.
+(expect "D-2b and nothing moved — the destination has no row at all" 0.0
+  (try 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "sender00")))
+(rollback-tx)
+
+(begin-tx "D-3 a correctly-scoped DISBURSE signature still works — the BRICK check")
+;; 🔴 AUDIT #7 a finding's SHAPE, CHECKED DELIBERATELY. An operation that stops working is a defect,
+;; not a trade-off, and this module freezes. The call must reach its own later check — the
+;; the design record vesting bound, nothing has vested at T+0 — which is only reachable past the gate.
+(env-sigs [ { "key": "dev-a", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "treasury" "sender00" 1.0)] }
+            { "key": "dev-b",    "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "treasury" "sender00" 1.0)] } ])
+(expect-failure "D-3 a matching DISBURSE clist PASSES the gate and reaches the vesting check"
+  "SPT disbursement exceeds the vested available amount"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche "treasury" "sender00" 1.0))
+(rollback-tx)
+
+(begin-tx "D-4 the scope BINDS THE ARGUMENTS, not just the operation")
+;; A signature for a 1.0 disbursement must not carry a 70,000 one. Without this, `DISBURSE`
+;; would be an argument-free grant wearing arguments — a finding with extra steps.
+(env-sigs [ { "key": "dev-a", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "treasury" "sender00" 1.0)] }
+            { "key": "dev-b",    "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "treasury" "sender00" 1.0)] } ])
+;; 🔴 THIS IS THE LINE a later change EXISTS FOR, AND ITS REFUSAL IS NOW THE METER RATHER THAN AN
+;; IDENTITY MISMATCH. Before, a 70,000 call under a 1.0 clist failed because the two were
+;; DIFFERENT capabilities. Now the amount is the managed resource, so the manager itself
+;; names the overspend — which is what makes the number on the device a LIMIT.
+(expect-failure "D-4 a DISBURSE clist for 1.0 is REFUSED for 70000.0"
+  "DISBURSE exceeded: 70000.0 requested of 1.0 managed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche "treasury" "sender00" 70000.0))
+;; and the TARGET is bound too — same amount, different destination
+;; The TARGET is part of the INSTALL IDENTITY (which excludes the managed `amount`), so a
+;; clist entry for one destination installs nothing for another — refused before the keyset.
+(expect-failure "D-4 a DISBURSE clist for sender00 is REFUSED for another target"
+  "Managed capability not installed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche "treasury" "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0" 1.0))
+(rollback-tx)
+
+;; ===========================================================================
+;; 🔴 D-5 IS INVERTED BY a later change, AND THE INVERSION IS THE PRICE OF THE FIX — NOT A REGRESSION.
+;;
+;; It asserted "an UNSCOPED gov signature still reaches the vesting check", on the reasoning
+;; that `ops/deploy/runbook.ts` signs with an empty clist and breaking that would brick a path
+;; that cannot be retried. Making `DISBURSE` `@managed` (a later change) DELIBERATELY breaks it: a
+;; managed capability must be INSTALLED, and only a signature naming it installs one.
+;;
+;; 🔴 WHY THAT IS SAFE, CHECKED RATHER THAN ASSUMED. The ceremony concern was real but does not
+;; apply here: `disburse-tranche` is a POST-deploy operation (the operator runbook:117), never part of the
+;; deploy transaction, and the other three value-movers ALREADY required scoped signatures
+;; because `coin.TRANSFER` is managed and meters them the same way. So the unscoped path this
+;; test protected was never load-bearing for `disburse-tranche` specifically.
+;;
+;; INVERTED rather than deleted: this is the only place in the suite that records the cost, and
+;; the operating consequence — every disbursement must now be signed SCOPED — is what the operator runbook and
+;; the runbook were updated for. If this ever goes green again, the meter is gone.
+;; ===========================================================================
+(begin-tx "D-5 an UNSCOPED signature can NO LONGER disburse — a later change's deliberate cost")
+(env-sigs [ { "key": "dev-a", "caps": [] } { "key": "dev-b", "caps": [] } ])
+(expect-failure "D-5 an UNSCOPED gov signature is REFUSED — the budget must be installed"
+  "Managed capability not installed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche "treasury" "sender00" 1.0))
+;; CONTROL, so D-5 cannot pass merely because the call is broken: the SAME two devices with the
+;; clist entry reach the vesting check, which is the refusal D-5 used to assert.
+(env-sigs [ { "key": "dev-a", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "treasury" "sender00" 1.0)] }
+            { "key": "dev-b",    "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "treasury" "sender00" 1.0)] } ])
+(expect-failure "D-5 CONTROL: the same signature WITH the clist entry reaches the vesting check"
+  "SPT disbursement exceeds the vested available amount"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche "treasury" "sender00" 1.0))
+(rollback-tx)
+
+;; ===========================================================================
+;; PART E — a finding's RESIDUAL (a later change). THE OTHER THREE VALUE-MOVERS.
+;;
+;; §D scoped `disburse-tranche`. It left `withdraw-funding`, `recover-pool-surplus` and
+;; `launch.withdraw-proceeds` on the argument-free tier, recorded as a disposition for cold
+;; an internal review. a later change closes it instead: the module FREEZES, so deferring resolves either to
+;; never, or to bytes moving after the audit that cleared them.
+;;
+;; 🔴 REPRODUCED BEFORE ANYTHING WAS CHANGED (comment-only /tmp copy of this
+;; branch). The same clist that drove `set-runway` to success in D-1 also PASSED THE GATE on
+;; `withdraw-funding` ("Insufficient funds") and on `recover-pool-surplus` ("amount exceeds
+;; the award pool's unowed surplus"); one `SPT-launch.ADMIN-GOV` clist drove
+;; `set-min-price` to "price floor updated" AND passed the gate on `withdraw-proceeds`.
+;; Reaching a function's OWN later check is the proof the keyset gate let the signature in.
+;;
+;; A `SPT.ADMIN-GOV` clist is REFUSED by the launch module — capabilities are
+;; module-qualified, so one signature never reached across modules. E-7 pins that too, because
+;; it bounds the finding and a future reader should not have to re-measure it.
+;; ===========================================================================
+
+(begin-tx "E-1 an (ADMIN-GOV) clist is now REFUSED on withdraw-funding")
+(env-sigs [ { "key": "dev-a", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.ADMIN-GOV)] }
+            { "key": "dev-b",    "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.ADMIN-GOV)] } ])
+
+;; 🔴 a later change CHANGED WHICH REFUSAL ANSWERS, AND IT IS A STRONGER ONE — the same re-aim D-2 took.
+;; This asserted "Keyset failure (keys-2)": the clist named ADMIN-GOV, so WITHDRAW-FUNDING's own
+;; `enforce-keyset` was unsatisfied. Now the cap is `@managed`, so the call never reaches the
+;; keyset — an ADMIN-GOV clist installs no WITHDRAW-FUNDING budget. a finding's property is unchanged
+;; and holds one step earlier. 🔴 The cost of the re-aim is that this line no longer discriminates
+;; WHICH keyset the body enforces (the install identity is checked before the body runs); E-10
+;; carries that discrimination now, with a one-device clist that DOES install.
+(expect-failure "E-1 an (ADMIN-GOV) clist is REFUSED on withdraw-funding"
+  "Managed capability not installed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.withdraw-funding "sender00" 1.0))
+(rollback-tx)
+
+(begin-tx "E-2 a matching WITHDRAW-FUNDING clist PASSES the gate — the BRICK check")
+(env-sigs [ { "key": "dev-a", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.WITHDRAW-FUNDING "sender00" 1.0)] }
+            { "key": "dev-b",    "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.WITHDRAW-FUNDING "sender00" 1.0)] } ])
+(expect-failure "E-2 a matching WITHDRAW-FUNDING clist reaches the funds check"
+  "Insufficient funds"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.withdraw-funding "sender00" 1.0))
+(rollback-tx)
+
+(begin-tx "E-3 the WITHDRAW-FUNDING scope binds BOTH arguments")
+(env-sigs [ { "key": "dev-a", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.WITHDRAW-FUNDING "sender00" 1.0)] }
+            { "key": "dev-b",    "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.WITHDRAW-FUNDING "sender00" 1.0)] } ])
+
+;; 🔴 THE REFUSAL IS NOW THE METER RATHER THAN AN IDENTITY MISMATCH (same shape as D-4).
+;; Before, a 1,000,000 call under a 1.0 clist failed because the two were DIFFERENT capabilities.
+;; Now `amount` is the managed resource, so the manager itself names the overspend — which is what
+;; makes the number the signer's device renders a LIMIT rather than a label.
+(expect-failure "E-3 a clist for 1.0 is REFUSED for 1000000.0"
+  "WITHDRAW-FUNDING exceeded: 1000000.0 requested of 1.0 managed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.withdraw-funding "sender00" 1000000.0))
+(rollback-tx)
+(begin-tx "E-3b and the destination is bound too")
+(env-sigs [ { "key": "dev-a", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.WITHDRAW-FUNDING "sender00" 1.0)] }
+            { "key": "dev-b",    "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.WITHDRAW-FUNDING "sender00" 1.0)] } ])
+;; The destination is part of the INSTALL IDENTITY (which excludes the managed `amount`), so a
+;; clist entry for one destination installs nothing for another — refused before the keyset.
+(expect-failure "E-3b a clist for sender00 is REFUSED for another destination"
+  "Managed capability not installed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.withdraw-funding "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0" 1.0))
+(rollback-tx)
+
+(begin-tx "E-4 an (ADMIN-GOV) clist is now REFUSED on recover-pool-surplus")
+(env-sigs [ { "key": "dev-a", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.ADMIN-GOV)] }
+            { "key": "dev-b",    "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.ADMIN-GOV)] } ])
+;; 🔴 Re-aimed by a later change for the reason spelled out at E-1: `RECOVER-SURPLUS` is `@managed`, so an
+;; ADMIN-GOV clist installs no budget and the refusal lands before the defcap body. E-10b carries
+;; the keyset discrimination this line gave up.
+(expect-failure "E-4 an (ADMIN-GOV) clist is REFUSED on recover-pool-surplus"
+  "Managed capability not installed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.recover-pool-surplus 1.0))
+(rollback-tx)
+
+(begin-tx "E-5 a matching RECOVER-SURPLUS clist PASSES the gate — the BRICK check")
+(env-sigs [ { "key": "dev-a", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.RECOVER-SURPLUS 1.0)] }
+            { "key": "dev-b",    "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.RECOVER-SURPLUS 1.0)] } ])
+(expect-failure "E-5 a matching RECOVER-SURPLUS clist reaches the surplus check"
+  "amount exceeds the award pool's unowed surplus"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.recover-pool-surplus 1.0))
+(rollback-tx)
+
+(begin-tx "E-6 the RECOVER-SURPLUS scope binds the amount")
+;; The only argument this function has. Without this the cap would be an argument-free grant
+;; wearing an argument — a finding with extra steps, which is the shape D-4 exists to prevent.
+(env-sigs [ { "key": "dev-a", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.RECOVER-SURPLUS 1.0)] }
+            { "key": "dev-b",    "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.RECOVER-SURPLUS 1.0)] } ])
+;; 🔴 The refusal is now the METER (a later change) — the manager names both numbers. RECOVER-SURPLUS's
+;; install identity is EMPTY (amount is its only parameter), so there is one approved total per
+;; transaction and this is that total being enforced.
+(expect-failure "E-6 a clist for 1.0 is REFUSED for 1000000.0"
+  "RECOVER-SURPLUS exceeded: 1000000.0 requested of 1.0 managed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.recover-pool-surplus 1000000.0))
+(rollback-tx)
+
+(begin-tx "E-7 the LAUNCH tier clist no longer carries withdraw-proceeds")
+;; CONTROL FIRST: this exact clist still drives the launch module's OTHER gov operation, so
+;; E-7's refusal cannot be confused with the signature being useless. `set-min-price` needs the
+;; sale paused, which is this world's state at PART E.
+(env-sigs [ { "key": "dev-a", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.ADMIN-GOV)] }
+            { "key": "dev-b",    "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.ADMIN-GOV)] } ])
+(expect "E-7 CONTROL: a launch (ADMIN-GOV) clist still drives set-min-price" "price floor updated"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-min-price 0.02))
+(rollback-tx)
+(begin-tx "E-7b the SAME clist can no longer withdraw proceeds")
+(env-sigs [ { "key": "dev-a", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.ADMIN-GOV)] }
+            { "key": "dev-b",    "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.ADMIN-GOV)] } ])
+;; 🔴 Re-aimed by a later change for the reason spelled out at E-1. E-10c carries the keyset discrimination.
+(expect-failure "E-7b a launch (ADMIN-GOV) clist is REFUSED on withdraw-proceeds"
+  "Managed capability not installed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.withdraw-proceeds "sender00" 1.0))
+(rollback-tx)
+
+(begin-tx "E-8 a matching WITHDRAW-PROCEEDS clist PASSES the gate — the BRICK check")
+(env-sigs [ { "key": "dev-a", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.WITHDRAW-PROCEEDS "sender00" 1.0)] }
+            { "key": "dev-b",    "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.WITHDRAW-PROCEEDS "sender00" 1.0)] } ])
+(expect-failure "E-8 a matching WITHDRAW-PROCEEDS clist reaches the funds check"
+  "Insufficient funds"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.withdraw-proceeds "sender00" 1.0))
+(rollback-tx)
+(begin-tx "E-8b and it binds both arguments")
+(env-sigs [ { "key": "dev-a", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.WITHDRAW-PROCEEDS "sender00" 1.0)] }
+            { "key": "dev-b",    "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.WITHDRAW-PROCEEDS "sender00" 1.0)] } ])
+;; 🔴 The refusal is now the METER (a later change) — the manager names both numbers.
+(expect-failure "E-8b a WITHDRAW-PROCEEDS clist for 1.0 is REFUSED for 1000000.0"
+  "WITHDRAW-PROCEEDS exceeded: 1000000.0 requested of 1.0 managed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.withdraw-proceeds "sender00" 1000000.0))
+(rollback-tx)
+
+;; ===========================================================================
+;; 🔴 E-9 IS INVERTED BY a later change, AND THE INVERSION IS THE PRICE OF THE FIX — NOT A REGRESSION.
+;;
+;; It asserted "UNSCOPED gov signatures still drive all three — the ceremony signs unscoped", and
+;; it PASSED: an empty clist reached each function's OWN later check, which is precisely what "the
+;; keyset gate let the signature in" means. That assertion is now FALSE, deliberately.
+;;
+;; 🔴 WHY THE FOUNDER MADE ALL THREE `@managed` ON : an UNSCOPED 2-of-3 signature moved
+;; KDA for an amount and a destination it never named — measured on a node, mined, not inferred
+;; from a `/local`. A managed capability must be INSTALLED, and only a signature naming it installs
+;; one, so the unscoped path is gone BY DESIGN and the number on the device is now a real limit.
+;;
+;; INVERTED rather than deleted: this is the only place in the suite that records the cost, and the
+;; operating consequence — every withdrawal must now be signed SCOPED, so `ops/deploy/runbook.ts`
+;; and the A-series runbooks that sign with an empty clist must be updated — is what a future reader
+;; needs. If any line below ever goes green again, the meter is gone.
+;;
+;; THE BRICK CONTROLS ARE E-2, E-5 AND E-8, immediately above: same world, same rolled-back state,
+;; the same three calls with a MATCHING clist each reaching its own later check. So E-9 cannot be
+;; passing merely because these three functions are broken.
+;; ===========================================================================
+(begin-tx "E-9 an UNSCOPED signature can NO LONGER drive any of the three — a later change's deliberate cost")
+(env-sigs [ { "key": "dev-a", "caps": [] } { "key": "dev-b", "caps": [] } ])
+(expect-failure "E-9a an UNSCOPED gov signature is REFUSED on withdraw-funding — the budget must be installed"
+  "Managed capability not installed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.withdraw-funding "sender00" 1.0))
+(expect-failure "E-9b an UNSCOPED gov signature is REFUSED on recover-pool-surplus — the budget must be installed"
+  "Managed capability not installed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.recover-pool-surplus 1.0))
+(expect-failure "E-9c an UNSCOPED gov signature is REFUSED on withdraw-proceeds — the budget must be installed"
+  "Managed capability not installed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.withdraw-proceeds "sender00" 1.0))
+(rollback-tx)
+
+(begin-tx "E-10 ONE DEVICE IS STILL REFUSED — the tier survived the parameterisation")
+;; 🔴 THE FAILURE MODE THIS CATCHES: enforcing the wrong keyset inside a new capability would
+;; scope the signature perfectly and silently drop the two-device requirement. A-3/A-4/A-6
+;; prove one device is refused under the OLD shape; these prove it under the new one.
+;; 🔴 a later change: EVERY LINE HERE CARRIES ITS CLIST ENTRY, and that is what makes this block the one
+;; that still discriminates. All three caps are `@managed` now, so an unscoped `env-keys` one-device
+;; signature is refused by the INSTALL — before any defcap body runs — and the refusal would be
+;; identical whether the body enforced GOV-KS, OPS-KS or nothing at all. With the entries installed
+;; the call reaches the body, so the message below names the PREDICATE and a downgrade to spt-ops
+;; goes red here. This is the only block in PART E that sees it.
+(env-sigs [ { "key": "dev-c"
+         , "caps": [ (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.WITHDRAW-FUNDING "sender00" 1.0)
+                   , (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.RECOVER-SURPLUS 1.0)
+                   , (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.WITHDRAW-PROCEEDS "sender00" 1.0) ] } ])
+(expect-failure "E-10a one device is REFUSED on withdraw-funding"
+  "Keyset failure (keys-2)"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.withdraw-funding "sender00" 1.0))
+(expect-failure "E-10b one device is REFUSED on recover-pool-surplus"
+  "Keyset failure (keys-2)"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.recover-pool-surplus 1.0))
+(expect-failure "E-10c one device is REFUSED on withdraw-proceeds"
+  "Keyset failure (keys-2)"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.withdraw-proceeds "sender00" 1.0))
+(rollback-tx)
+
+(begin-tx "E-11 an OPS-tier clist carries none of the three")
+;; The tier boundary, restated at the new caps: `spt-ops` is one device by design, so if any of
+;; these had landed on OPS-KS the parameterisation would have been a downgrade wearing a fix.
+(env-sigs [ { "key": "dev-c", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.ADMIN-OPS)] } ])
+;; 🔴 Re-aimed by a later change: with the caps `@managed`, an ADMIN-OPS clist installs no budget, so the
+;; refusal lands at the install identity rather than at GOV-KS. The property this block names — an
+;; ops-tier signature carries none of the three — still holds and now holds one step earlier. The
+;; TIER discrimination it used to provide lives in E-10, which signs the entries and reaches the body.
+(expect-failure "E-11a an ADMIN-OPS clist is REFUSED on withdraw-funding"
+  "Managed capability not installed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.withdraw-funding "sender00" 1.0))
+(expect-failure "E-11b an ADMIN-OPS clist is REFUSED on recover-pool-surplus"
+  "Managed capability not installed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.recover-pool-surplus 1.0))
+(rollback-tx)
+
+;; ===========================================================================
+;; PART F — a later change: THE AMOUNT IS A REAL SPENDING LIMIT. THIS IS P-160'S PIN.
+;;
+;; 🔴 THE DEFECT THIS REPLACES, from an internal review and reproduced before the fix: `DISBURSE`
+;; bound its arguments but NOT the number of acquisitions. ONE clist entry naming 100.0 drove
+;; 150 calls in a single transaction and moved the WHOLE 15,000 SPT liquidity tranche. A
+;; different tranche, a different destination and a different amount were each already refused
+;; — the IDENTICAL call repeated was unlimited, because a non-@managed cap re-acquires freely.
+;;
+;; That made the founder-facing promise FALSE as written ("a signature for one of these cannot
+;; be used ... for a different amount"): 100.0 approved, 15,000.0 moved. P-160 STAYS and this
+;; section is what makes it true. If §F goes green with `@managed amount DISBURSE-mgr` removed
+;; from the module, the promise is unpinned again — mutation-checked, see the commit.
+;;
+;; 🔴 IT IS A BUDGET, NOT A ONE-SHOT, AND a finding PROVES THAT DELIBERATELY. The install identity
+;; EXCLUDES the managed parameter, so the identity is (tranche, target) and `amount` is the
+;; metered resource: one approved budget per tranche AND destination, spendable across as many
+;; calls as the operator likes, never exceeded in TOTAL. "One-shot" is the wrong mental model
+;; and a finding exists so nobody re-derives it from a finding's refusal.
+;; ===========================================================================
+(begin-tx "F setup — a vested liquidity tranche and a real destination")
+(env-chain-data { "chain-id": "0", "block-time": (time "2028-05-31T00:00:00Z") })  ; liquidity vest-end
+(env-data { "mm": { "keys": ["b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"], "pred": "keys-all" } })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-account
+  "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" (read-keyset 'mm))
+(expect "F the whole liquidity tranche has vested, so nothing below is limited by the CALENDAR"
+  15000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.tranche-available "liquidity"))
+(commit-tx)
+
+(begin-tx "a finding 🔴 THE AUDIT-15 REPRODUCTION: one 100.0 entry can no longer move 15,000")
+;; This is the exact shape that moved the whole tranche before a later change, kept verbatim as the
+;; regression guard. It must now abort on the SECOND call.
+(env-chain-data { "chain-id": "0", "block-time": (time "2028-05-31T00:00:00Z") })
+(env-sigs [ { "key": "dev-a", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "liquidity" "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" 100.0)] }
+            { "key": "dev-b",    "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "liquidity" "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" 100.0)] } ])
+(expect-failure "a finding the 150-call loop under ONE 100.0 clist entry is REFUSED"
+  "DISBURSE exceeded: 100.0 requested of 0.0 managed"
+  (map (lambda (i:integer)
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche
+      "liquidity" "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" 100.0))
+    (enumerate 1 150)))
+(rollback-tx)
+
+(begin-tx "a finding the budget is SPENDABLE IN PARTS — it is not one-shot")
+;; 🔴 WITHOUT THIS, a finding's refusal would be equally consistent with a one-call-only cap, and a
+;; future reader would "simplify" the manager away to a boolean. Two partial disbursements
+;; summing to exactly the approved budget must BOTH succeed.
+(env-chain-data { "chain-id": "0", "block-time": (time "2028-05-31T00:00:00Z") })
+(env-sigs [ { "key": "dev-a", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "liquidity" "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" 1000.0)] }
+            { "key": "dev-b",    "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "liquidity" "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" 1000.0)] } ])
+(expect "a finding part one of an approved 1000.0 budget" 600.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche
+    "liquidity" "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" 600.0))
+(expect "a finding part two spends the REST of the same budget" 400.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche
+    "liquidity" "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" 400.0))
+(expect "a finding the destination holds exactly the approved total, no more and no less" 1000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance
+    "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"))
+;; ...and the budget is now EXHAUSTED. Even one pico-SPT more is refused, though 14,000 SPT
+;; remain vested and available — so this refusal is the METER, not the calendar.
+(expect "a finding 14,000 SPT are still vested and available, so the calendar is NOT what refuses next"
+  14000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.tranche-available "liquidity"))
+(expect-failure "a finding one pico-SPT past the exhausted budget is REFUSED BY THE METER"
+  "DISBURSE exceeded: 0.000000000001 requested of 0.0 managed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche
+    "liquidity" "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" 0.000000000001))
+(rollback-tx)
+
+(begin-tx "a finding a single call ABOVE the approved budget is refused, naming both numbers")
+(env-chain-data { "chain-id": "0", "block-time": (time "2028-05-31T00:00:00Z") })
+(env-sigs [ { "key": "dev-a", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "liquidity" "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" 100.0)] }
+            { "key": "dev-b",    "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "liquidity" "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" 100.0)] } ])
+(expect-failure "a finding 150.0 requested against a 100.0 budget is refused by the manager"
+  "DISBURSE exceeded: 150.0 requested of 100.0 managed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche
+    "liquidity" "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" 150.0))
+;; STATE UNCHANGED — the reserve did not move under the refusal (own rollback-tx, and the
+;; assertion is here because expect-failure LEAKS WRITES through commit-tx).
+(expect "a finding the liquidity reserve is untouched by the refused overspend" 15000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.LIQUIDITY-ACCOUNT))
+(rollback-tx)
+
+(begin-tx "a finding the budget is PER DESTINATION — one entry does not fund another target")
+;; The install identity is (tranche, target). This is what stops an approved 1,000 to the market
+;; maker from also paying 1,000 to somebody else in the same transaction.
+(env-chain-data { "chain-id": "0", "block-time": (time "2028-05-31T00:00:00Z") })
+(env-data { "other": { "keys": ["c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7"], "pred": "keys-all" } })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-account
+  "k:c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7" (read-keyset 'other))
+(env-sigs [ { "key": "dev-a", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "liquidity" "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" 1000.0)] }
+            { "key": "dev-b",    "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "liquidity" "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" 1000.0)] } ])
+(expect-failure "a finding a budget for one destination installs nothing for another"
+  "Managed capability not installed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche
+    "liquidity" "k:c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7" 1.0))
+(rollback-tx)
+
+;; ===========================================================================
+;; 🔴 PART G — ONE OPS DEVICE AND THE WHOLE SALE RESERVE. The most consequential thing the
+;; exhaustive review found, and it is NOT about the freeze, the fork, or any mistake of the
+;; founder's. It survived both adversarial verifiers and I reproduced it independently.
+;;
+;; MEASURED: ONE signature from any ONE of the three devices (spt-ops is `keys-any`), plus the
+;; buyer's own key, in a SINGLE transaction — pause -> set-price to the floor -> resume -> buy:
+;; reserve 20,000 SPT, worth 10,000 KDA at the intended 0.5 price
+;; taken 20,000 SPT for 200 KDA -> a 9,800 KDA shortfall
+;; Atomic, so there is no instant at which an operator could observe it and intervene.
+;;
+;; 🔴 THE TIER IS NOT THE DEFECT. the design record's rule — operating WITHIN a limit is `spt-ops`,
+;; CHANGING a limit is `spt-gov` — is correctly implemented: `set-price` operates within
+;; `min-price`, `set-min-price` changes it and needs two devices. The defect is that the LIMIT
+;; defaults to a value that makes it vacuous: `launch.init` HARDCODES
+;; `"min-price": MIN-PRICE-INITIAL` (0.01), so the founder cannot choose the floor at setup, and
+;; until someone calls `set-min-price` the ops tier's freedom is the whole reserve.
+;;
+;; G-1 records the residual as it stands TODAY. It is a MEASUREMENT, not an endorsement — the
+;; reserve really is reachable by one device at the default floor, and writing that down is how
+;; it stops being a surprise.
+;; G-2 pins the PROTECTION, and it is what must never regress: with the floor raised by two gov
+;; devices, the identical attack is refused before it starts. Zero code, and it survives the
+;; freeze (`set-min-price` carries no FROZEN-MODULE clause — see the frozen-invariant suite).
+;;
+;; 🔴 G-2 IS THE ASSERTION. If it ever goes green while G-1 also passes at a RAISED floor, the
+;; floor has stopped binding and the reserve is open again.
+;; ===========================================================================
+(begin-tx "G-1 the residual: at the DEFAULT floor, one ops device reaches the whole reserve")
+(env-keys ["dev-a", "dev-b"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.pause)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-min-price
+  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.MIN-PRICE-INITIAL)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-price 0.5)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(commit-tx)
+(begin-tx "G-1 THE RESIDUAL IS CLOSED — one device cannot cut the price at all")
+;; 🔴 INVERTED BY a later change, AND THIS IS THE ONE THAT MATTERED. It read "🔴 G-1 RESIDUAL: one ops
+;; device sets the price to the vacuous default floor" and it PASSED — the suite pinned the
+;; defect as expected behaviour, which is exactly how an internal review was able to walk the whole
+;; 20,000-SPT reserve out for 200 KDA with a single device. A test that asserts a weakness keeps
+;; it alive; the same shape was found in the freeze drill (a later change L4-01) and repaired the same way.
+;; It is closed TWICE over now, and both halves are asserted, because either alone would do it:
+;; (a) `set-price` is gov, so one device cannot move the price at all; and
+;; (b) `init` seeds the floor AT the price, so there is no vacuous default to cut to.
+(env-keys ["dev-c"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.pause)
+(expect-failure "🔴 G-1 (a) one device is REFUSED on set-price — the first link of the chain is gone"
+  "Keyset failure (keys-2)"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-price
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.MIN-PRICE-INITIAL))
+;; CONTROL: the reserve is still there, so the refusal is the tier and not a broken fixture.
+(expect "G-1 and the reserve is untouched" 20000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-ACCOUNT))
+(rollback-tx)
+
+(begin-tx "G-2 THE PROTECTION: two gov devices raise the floor under the operating price")
+(env-keys ["dev-a", "dev-b"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.pause)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-min-price 0.45)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(commit-tx)
+(begin-tx "G-2 the raised floor refuses the cut — TWO devices, so it is the FLOOR being tested")
+;; 🔴 TWO devices deliberately (a later change). One device is now refused by the TIER, which would make
+;; this assertion pass for the wrong reason and stop testing the floor at all — the "still
+;; refuses / no longer discriminates" defect this repo keeps paying for. Signing with two keys
+;; gets past the tier so the FLOOR is what does the refusing, which is the property G-2 exists
+;; for. The one-device refusal is asserted separately in G-1.
+(env-keys ["dev-a" "dev-b"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.pause)
+(expect-failure "🔴 G-2 even TWO devices cannot cut the price under the raised floor"
+  "price below"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-price 0.01))
+(expect "G-2 and the reserve is untouched" 20000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-ACCOUNT))
+;; CONTROL: the floor bounds the tier, it does not disable it — a price AT or above the raised
+;; floor still settles. 🔴 TWO devices now, because a later change moved `set-price` to gov; before that
+;; this line read "one device may still price at or above the floor".
+(expect "G-2 CONTROL: two devices may still price at or above the floor" "price updated"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-price 0.5))
+(rollback-tx)
+
+;; ---- H EVENT-CAP TIERS: the one property no runtime check can report ----------------------
+;; 🔴 THIS CASE EXISTS BECAUSE THE ARTIFACT SHIPPED A WRONG ONE FOR MONTHS AND EVERY GATE
+;; STAYED GREEN. `ROUND-DECLARED` required ADMIN-OPS while its only emitter, `declare-round`,
+;; acquires ADMIN-GOV. Nothing failed, and nothing could have: measured on 5.4, `emit-event`
+;; does NOT evaluate a defcap body — it only checks the cap belongs to this module — so the
+;; event lands whatever tier the body names. The body is load-bearing on the OTHER route, where
+;; the cap is ACQUIRED rather than emitted, and there it decides who may mint the event.
+;;
+;; 🔴 SO THE MISMATCH IS INVISIBLE AT RUNTIME AND IT FREEZES WITH THE MODULE. The only way
+;; it can go red is a test that acquires the cap under each tier and asserts WHICH ONE WORKS.
+;; `smartpacts-value-event-forgery.repl` VE-1 already proves a stranger cannot forge it, but a
+;; stranger holds NEITHER tier, so that assertion passes under either body — it proves refusal,
+;; not discrimination, which is the distinction this repo keeps paying for.
+;;
+;; PROVEN FALSIFYING (both directions, same world as below): against a copy of the
+;; module carrying the OLD `(require-capability (ADMIN-OPS))` body, H-1 ACQUIRES and H-2 FAILS —
+;; exactly inverted. A mutation in either direction turns this pair red.
+(begin-tx "H-1 ROUND-DECLARED is NOT reachable from the ops tier")
+;; Two devices only so module admin (keys-2) can be acquired at all — this is about which
+;; capability is GRANTED on the stack, never about which keyset could be satisfied.
+(env-keys ["dev-a" "dev-b"])
+(acquire-module-admin n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT)
+(expect-failure "🔴 H-1 holding ADMIN-OPS does not let you mint a ROUND-DECLARED event"
+  "not granted"
+  (with-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.ADMIN-OPS)
+    (with-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.ROUND-DECLARED "r1" 0.1 (time "2026-07-01T00:00:00Z")) true)))
+(commit-tx)
+
+(begin-tx "H-2 CONTROL: the tier the emitter actually acquires DOES reach it")
+;; Without this control H-1 is compatible with the cap being unreachable from everywhere, which
+;; would be a bricked event rather than a tiered one.
+(env-keys ["dev-a" "dev-b"])
+(acquire-module-admin n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT)
+(expect "H-2 holding ADMIN-GOV mints it — so H-1 is the TIER refusing, not a dead cap" true
+  (with-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.ADMIN-GOV)
+    (with-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.ROUND-DECLARED "r1" 0.1 (time "2026-07-01T00:00:00Z")) true)))
+(commit-tx)
+
+(print "the design record tiers: every gov operation refuses one device; every ops operation accepts one and refuses a stranger; ROUND-DECLARED is pinned to gov")

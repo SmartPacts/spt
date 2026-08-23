@@ -1,0 +1,331 @@
+;; ===========================================================================
+;; smartpacts-pool-surplus — a later change: the award pool must never be a one-way
+;; door, because module freeze is one.
+;; ---------------------------------------------------------------------------
+;; THE DEFECT (pre-existing, MEDIUM). POOL-ACCOUNT had exactly ONE exit —
+;; claim-awards, which pays only floor12(owed) — so any KDA in it beyond the
+;; liability was stuck. The only way out was acquire-module-admin via GOVERNANCE,
+;; and GOVERNANCE opens with (enforce (not FROZEN-MODULE)). Setting FROZEN-MODULE
+;; and redeploying therefore DESTROYS the recovery path forever. Measured before
+;; the fix: 5,000 KDA funded against a 10 KDA liability left 4,990 KDA that the
+;; admin could still sweep pre-freeze and could not touch after it.
+;;
+;; Over-funding is not the only way in, which is why the fix is a recovery path
+;; rather than a bound on fund-awards:
+;; * coin credits an EXISTING account without consulting its guard, so ANY third
+;; party can push KDA into POOL-ACCOUNT and the module cannot refuse it;
+;; * claim-awards floors to 12 decimals, so sub-1e-12 dust settles there.
+;; A deposit bound addresses none of those. recover-pool-surplus addresses all three.
+;;
+;; THE PROPERTY UNDER TEST, and the reason PS-9 is the important one: the recovery
+;; must work on a FROZEN module. That is asserted against a module actually compiled
+;; with FROZEN-MODULE=true (fixtures/frozen-SPT.pact, generated + drift-checked by
+;; run-tests.sh), not argued from the source. Every rejection also asserts the pool
+;; balance is UNCHANGED — the claim is that no KDA moved, not that an error was raised.
+;; ===========================================================================
+(load "setup.repl")
+
+(begin-tx "seed float: alice 3000, bob 2000 => circulating 5000")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(env-data { "alice":   { "keys": ["alice-key"],   "pred": "keys-all" }
+       , "bob":     { "keys": ["bob-key"],     "pred": "keys-all" }
+       , "mallory": { "keys": ["mallory-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1500.0) (coin.TRANSFER "sender00" "bob" 1000.0) (coin.TRANSFER "sender00" "mallory" 100.0)] }])
+(coin.transfer-create "sender00" "alice"   (read-keyset 'alice)   1500.0)
+(coin.transfer-create "sender00" "bob"     (read-keyset 'bob)     1000.0)
+(coin.transfer-create "sender00" "mallory" (read-keyset 'mallory) 100.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 1500.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "alice" (read-keyset 'alice) 3000.0)
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 1000.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "bob" (read-keyset 'bob) 2000.0)
+(expect "seed: circulating 5000" 5000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; PS-1 — the reviewer's measured over-funding, reproduced. fund-awards still
+;; ACCEPTS it: the fix is recovery, not prevention (see the header).
+;; ---------------------------------------------------------------------------
+(begin-tx "PS-1a route 5000 KDA of funding in")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT 5000.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" 5000.0)
+(commit-tx)
+
+;; the design record (a later change): the round cannot be declared until the pool already covers it, so the
+;; first 10 KDA goes in BEFORE the declaration. The over-funding PS-1 is about happens after.
+(begin-tx "the design record: fund the 10 KDA this round will cost, before declaring it")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 10.0)
+(commit-tx)
+
+;; 🔴 THE SEAL MOVES BLOCK-TIME FORWARD 12h, so it is done from an EARLIER clock rather
+;; than by pushing R1's effective-at out — every assertion below is dated against 06-02
+;; and the point of this suite is the surplus arithmetic, not the calendar.
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-05-31T00:00:00Z") })
+;; ---- the design record (a later change): A ROUND NEEDS A SEALED RECORD DATE ----------------------
+;; Schedule one clear of the 12h runway (2 x MIN-RETRACT-LEAD), let it land, seal it.
+;; The seal runs with NO KEYS on purpose: `advance-snapshot` is permissionless, and a
+;; chain with no activity must still be sealable by anyone.
+(begin-tx "the design record: name the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (add-time (at 'block-time (chain-data)) 43202))
+(commit-tx)
+(env-chain-data
+  { "chain-id": (at 'chain-id (chain-data))
+, "block-time": (add-time (at 'block-time (chain-data)) 43203) })
+(begin-tx "the design record: seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "declare a 0.002 KDA/token round => liability exactly 10 KDA")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "R1" 0.002 (time "2026-06-02T00:00:00Z"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })  ; a later amendment
+(expect "liability is 10 KDA" 10.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))
+;; With no undeclared-future round, the declared measure equals the current one.
+(expect "declared-liability == award-liability when nothing is pending" 10.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declared-liability))
+(commit-tx)
+
+;; NOTE ON TX HYGIENE (this suite found it the hard way): once a MANAGED capability has
+;; been installed in a transaction, a mid-transaction (env-keys ...) no longer resets the
+;; signer set, and the next unscoped enforce-keyset fails with a bare "Keyset failure"
+;; that looks like a module bug and is not. Give every signer context its own tx — which
+;; is also how these calls actually arrive on chain: one admin operation per transaction.
+(begin-tx "PS-1 over-fund to 5000 against a 10 liability; surplus is 4990")
+(env-keys ["admin-key"])
+;; 4990, not 5000: the design record required the round's own 10 KDA to be in the pool before the
+;; declaration above, and it came out of this same 5000 KDA of funding. The pool total,
+;; the liability and the surplus are all unchanged — only the split between the two
+;; deposits moved, which is exactly what "fund first, then declare" means in practice.
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 4990.0)
+(expect "PS-1: pool holds 5000" 5000.0
+  (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+(expect "PS-1: 4990 of it is owed to nobody" 4990.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pool-surplus))
+(commit-tx)
+
+;; 🔴 a later change (founder ): RECOVER-SURPLUS / WITHDRAW-FUNDING are `@managed` on
+;; amount. An UNSCOPED signature can no longer drive them at all — the signature must NAME the
+;; capability with the exact amount (and destination) of the call. The founder made them managed
+;; because an unscoped 2-of-3 gov signature was measured on a node, mined, moving KDA for an
+;; amount and a destination it never named. Every signing line below is scoped accordingly.
+;; ---------------------------------------------------------------------------
+;; PS-2..PS-4 — branch-complete negatives on recover-pool-surplus.
+;; Each is its own tx ended with rollback-tx: expect-failure does NOT roll back
+;; partial writes and commit-tx would persist the leak (pact-traps).
+;; ---------------------------------------------------------------------------
+(begin-tx "PS-2 non-admin recovery rejected, pool untouched")
+;; 🔴 SCOPED ON PURPOSE (a later change). Since RECOVER-SURPLUS became @managed, an unscoped
+;; mallory signature fails with "Managed capability not installed" — which would leave this
+;; negative GREEN for the wrong reason, proving nothing about the admin gate. Mallory names
+;; the capability in full, so the call reaches `enforce-keyset GOV-KS` and is refused there.
+(env-sigs [{ "key": "mallory-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.RECOVER-SURPLUS 100.0)] }])
+(expect-failure "recovery is admin-gated" "Keyset failure"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.recover-pool-surplus 100.0))
+(expect "PS-2: not one KDA left the pool" 5000.0
+  (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+(rollback-tx)
+
+(begin-tx "PS-3 non-positive amount rejected, pool untouched")
+;; The expected string is the DISTINGUISHABLE one. coin's own guard reads "transfer
+;; amount must be positive", so asserting the shorter "amount must be positive" here
+;; would pass even with the module's own check deleted — the test would be measuring
+;; coin, not us. Proven: that is exactly what happened before the string was changed.
+(env-sigs [{ "key": "admin-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.RECOVER-SURPLUS 0.0)] }])
+(expect-failure "zero rejected" "recovery amount must be positive"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.recover-pool-surplus 0.0))
+(env-sigs [{ "key": "admin-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.RECOVER-SURPLUS -100.0)] }])
+(expect-failure "negative rejected" "recovery amount must be positive"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.recover-pool-surplus -100.0))
+(expect "PS-3: not one KDA left the pool" 5000.0
+  (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+(rollback-tx)
+
+(begin-tx "PS-4 the bound is the LIABILITY, not the balance: 4991 rejected, 4990 is the max")
+(env-sigs [{ "key": "admin-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.RECOVER-SURPLUS 4991.0)] }])
+(expect-failure "one KDA past the surplus is rejected" "amount exceeds the award pool's unowed surplus"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.recover-pool-surplus 4991.0))
+;; the whole balance is emphatically NOT recoverable — that would drain owed awards
+(env-sigs [{ "key": "admin-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.RECOVER-SURPLUS 5000.0)] }])
+(expect-failure "draining the whole pool is rejected" "amount exceeds the award pool's unowed surplus"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.recover-pool-surplus 5000.0))
+(expect "PS-4: not one KDA left the pool" 5000.0
+  (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; PS-5 POSITIVE CONTROL — mandatory. Without it every rejection above could be
+;; passing because the function is broken for all inputs.
+;; ---------------------------------------------------------------------------
+(begin-tx "PS-5 CONTROL: recovering exactly the surplus leaves the pool at the liability")
+(env-sigs [{ "key": "admin-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.RECOVER-SURPLUS 4990.0)] }])
+(let ((rev-before (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT)))
+  (expect "recovery succeeds" "pool surplus recovered"
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.recover-pool-surplus 4990.0))
+  (expect "PS-5: the KDA landed in funding, it did not leave the module" (+ rev-before 4990.0)
+    (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT)))
+(expect "PS-5: pool now holds exactly the liability" 10.0
+  (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+(expect "PS-5: nothing is owed to nobody any more" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pool-surplus))
+(commit-tx)
+
+(begin-tx "PS-6 THE SAFETY PROPERTY: every award is still fully payable after recovery")
+(expect "alice is paid in full" 6.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "alice"))
+(expect "bob is paid in full" 4.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "bob"))
+(expect "PS-6: the pool drained to exactly zero — the bound was exact, not approximate" 0.0
+  (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+(commit-tx)
+
+(begin-tx "PS-7 with no surplus left, any recovery is rejected")
+(env-sigs [{ "key": "admin-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.RECOVER-SURPLUS 0.000000000001)] }])
+(expect-failure "an empty pool has no surplus" "amount exceeds the award pool's unowed surplus"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.recover-pool-surplus 0.000000000001))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; PS-8 — cash PRE-FUNDED for a round whose effective-at has not arrived is NOT
+;; surplus. This is why the bound is declared-liability and not award-liability:
+;; the design record explicitly allows declare-now / fund-during-the-window / accrue-later,
+;; and a naive bound would let the admin withdraw money already spoken for and
+;; leave holders' claims reverting on an under-funded pool.
+;; ---------------------------------------------------------------------------
+(begin-tx "PS-8 route the pre-funding funding in")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT 10.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" 10.0)
+(commit-tx)
+
+;; 🔴 PS-8 IS NOW ALSO THE PROOF OF THE the design record ORDERING HAZARD, and the two halves must be
+;; read together. the design record forces the pre-funding to happen BEFORE the declaration, so between
+;; those two transactions the money is in the pool and NOTHING ON CHAIN KNOWS IT IS SPOKEN
+;; FOR: `pool-surplus` reads the full 10 as recoverable. A blind 20-chain
+;; `recover-pool-surplus` sweep in that window strips the funding, and the declaration that
+;; follows is then REFUSED by the very check that put the money there first. That window used
+;; to be an accident; it is now on every chain, every round, by design — which is why
+;; recover-pool-surplus's own docstring was rewritten to say so.
+(begin-tx "PS-8a the funding window: pre-funded-but-undeclared cash DOES read as surplus")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 10.0)
+(expect "PS-8a: pool pre-funded to 10" 10.0
+  (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+(expect "PS-8a: and while the round is UNDECLARED all 10 reads as recoverable surplus" 10.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pool-surplus))
+(commit-tx)
+
+;; R1 is effective by now (the clock is past 06-02), so a new generation may be sealed:
+;; 🔴 the design record refuses to schedule while a declared round is still pending-effective.
+;; ---- the design record (a later change): A ROUND NEEDS A SEALED RECORD DATE ----------------------
+;; Schedule one clear of the 12h runway (2 x MIN-RETRACT-LEAD), let it land, seal it.
+;; The seal runs with NO KEYS on purpose: `advance-snapshot` is permissionless, and a
+;; chain with no activity must still be sealable by anyone.
+(begin-tx "the design record: name the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (add-time (at 'block-time (chain-data)) 43202))
+(commit-tx)
+(env-chain-data
+  { "chain-id": (at 'chain-id (chain-data))
+, "block-time": (add-time (at 'block-time (chain-data)) 43203) })
+(begin-tx "the design record: seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "PS-8 declare the FUTURE round the pool was pre-funded for")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "R2" 0.002 (time "2026-07-01T00:00:00Z"))  ; future vs the 06-01 clock
+(expect "PS-8: nothing is owed yet — the round is not effective" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))
+(expect "PS-8: but 10 KDA WILL be owed once it is" 10.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declared-liability))
+(expect "PS-8: and the declaration is what closes the window — surplus drops to ZERO" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pool-surplus))
+(commit-tx)
+
+(begin-tx "PS-8 the pre-funded cash cannot be clawed back")
+;; 🔴 SCOPED so the refusal is still the LIABILITY BOUND and not "Managed capability not
+;; installed" — the admin here is fully authorised and correctly scoped, and is refused anyway.
+(env-sigs [{ "key": "admin-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.RECOVER-SURPLUS 10.0)] }])
+(expect-failure "PS-8: the admin cannot claw back money owed under a declared round"
+  "amount exceeds the award pool's unowed surplus"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.recover-pool-surplus 10.0))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; PS-9 — THE POINT OF THE WHOLE FIX. Upgrade to a module compiled with
+;; FROZEN-MODULE=true and show that (a) the fixture really is frozen, (b) the old
+;; acquire-module-admin recovery is dead, and (c) recover-pool-surplus still works.
+;; ---------------------------------------------------------------------------
+(begin-tx "PS-9 a third party donates 25 KDA the module cannot refuse")
+(env-sigs [{ "key": "mallory-key", "caps": [(coin.TRANSFER "mallory" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT 25.0)] }])
+(coin.transfer "mallory" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT 25.0)
+(expect "PS-9: the donation is pure surplus — nobody is owed it" 25.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pool-surplus))
+(commit-tx)
+
+(begin-tx "PS-9 FREEZE the module in place")
+(env-data
+  { "ns": "n_48867b242317a0216a67f8c7ca26696b5878e0e3"
+, "upgrade": true
+, "spt-gov-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-gov"
+, "spt-gov": { "keys": ["admin-key"], "pred": "keys-all" }
+, "spt-ops-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-ops"
+, "spt-ops": { "keys": ["admin-key"], "pred": "keys-any" } })
+(env-keys ["admin-key"])
+(load "fixtures/frozen-SPT.pact")
+(commit-tx)
+
+(begin-tx "PS-9 the frozen module: old recovery dead, new recovery alive")
+;; (a) POSITIVE CONTROL on the fixture itself. Without this the two assertions
+;; below would also pass against an UNfrozen module, and the suite would report a
+;; freeze-survival property it never tested.
+(expect "PS-9a: the loaded module really is frozen" true
+  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FROZEN-MODULE)
+(commit-tx)
+
+;; (b) the pre-fix recovery route — a direct spend falling through to
+;; acquire-module-admin — is now permanently dead. This is the 4,990 KDA trap.
+(begin-tx "PS-9b the old acquire-module-admin route")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT "sender00" 25.0)] }])
+(expect-failure "PS-9b: acquire-module-admin recovery is destroyed by the freeze" "Module is frozen"
+  (coin.transfer n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT "sender00" 25.0))
+(expect "PS-9b: the pool is untouched by the failed sweep" 35.0
+  (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+(commit-tx)
+
+;; (c) recover-pool-surplus does not depend on it: ADMIN carries no FROZEN-MODULE
+;; clause and the Pattern-E module guards are satisfied by this module being on the
+;; call stack, so the path never reaches acquire-module-admin at all.
+(begin-tx "PS-9c recovery on the frozen module")
+(env-sigs [{ "key": "admin-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.RECOVER-SURPLUS 25.0)] }])
+(let ((rev-before (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT)))
+  (expect "PS-9c: recovery STILL WORKS on a frozen module" "pool surplus recovered"
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.recover-pool-surplus 25.0))
+  (expect "PS-9c: the donation reached funding" (+ rev-before 25.0)
+    (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT)))
+(expect "PS-9c: the pool is back to exactly what is owed" 10.0
+  (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+(commit-tx)
+
+;; and the bound still holds post-freeze — recovery is not a frozen-mode master key
+(begin-tx "PS-9d the bound still binds after the freeze")
+;; 🔴 SCOPED so the post-freeze refusal is still the liability bound, not a missing install.
+(env-sigs [{ "key": "admin-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.RECOVER-SURPLUS 10.0)] }])
+(expect-failure "PS-9c: the liability bound is enforced on the frozen module too"
+  "amount exceeds the award pool's unowed surplus"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.recover-pool-surplus 10.0))
+(commit-tx)
+
+(begin-tx "PS-10 funding still has its own admin exit post-freeze, so recovered cash can leave")
+(env-sigs [{ "key": "admin-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.WITHDRAW-FUNDING "sender00" 25.0)] }])
+(expect "withdraw-funding survives the freeze" "funding withdrawn"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.withdraw-funding "sender00" 25.0))
+(commit-tx)
+
+(print "smartpacts-pool-surplus a later change suite PASSED")

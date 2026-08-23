@@ -1,0 +1,39 @@
+;; ===========================================================================
+;; Like setup.repl but STOPS before init-supply — for testing the init guards
+;; (chain-0-only mint, admin gate, double-init) from a clean, uninitialized state.
+;; ===========================================================================
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+
+(begin-tx "load coin")
+(load "fixtures/fungible-v2.pact")
+(load "fixtures/fungible-xchain-v1.pact")
+(load "fixtures/coin.pact")
+(create-table coin.coin-table)
+(create-table coin.allocation-table)
+(commit-tx)
+
+(begin-tx "fund sender00")
+(env-data { "sender00": { "keys": ["admin-key"], "pred": "keys-all" } })
+(test-capability (coin.COINBASE))
+(coin.coinbase "sender00" (read-keyset "sender00") 1000000.0)
+(commit-tx)
+
+(begin-tx "load SPT modules")
+(env-data
+  { "ns": "n_48867b242317a0216a67f8c7ca26696b5878e0e3"
+ ;; the design record two tiers. Same deliberate choice as setup.repl — both satisfiable by `admin-key`,
+ ;; with the threshold proven only in smartpacts-admin-tiers.repl. 🔴 THIS FILE IS A SECOND,
+ ;; INDEPENDENT COPY of that block and 5 suites load it instead of setup.repl; a change to one
+ ;; prelude that skips the other leaves those 5 on a keyset the modules no longer define.
+, "spt-gov-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-gov"
+, "spt-gov": { "keys": ["admin-key"], "pred": "keys-all" }
+, "spt-ops-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-ops"
+, "spt-ops": { "keys": ["admin-key"], "pred": "keys-any" }
+, "upgrade": false                                   ; fresh deploy: create all tables
+, "sender00": { "keys": ["admin-key"], "pred": "keys-all" } })
+(env-keys ["admin-key"])
+(define-namespace "n_48867b242317a0216a67f8c7ca26696b5878e0e3" (read-keyset 'spt-gov) (read-keyset 'spt-gov))
+(load "../modules/SPT.pact")     ; governance merged in (the design record live-vote)
+(load "../modules/SPT-launch.pact")
+(commit-tx)
+;; NOTE: init-supply intentionally NOT called here.

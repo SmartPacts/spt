@@ -1,0 +1,131 @@
+;; ===========================================================================
+;; a later change a finding — a SQUATTED coin row must not brick init. (an internal review F-C)
+;;
+;; THE DEFECT THIS PINS. `coin.create-account` is an `insert` and aborts on an
+;; existing row. FUNDING-G / POOL-G / SALES-PROCEEDS-G are PUBLIC defconsts, so any
+;; stranger could reference one in top-level transaction code and create the
+;; module's own coin account first — measured under `env-sigs []`, no admin key,
+;; no signature at all: "Write succeeded". After that `init-supply` aborted with
+;; "Value already found while in Insert mode", and because `enforce-not-initialized`
+;; is one-shot and the module freezes, that was PERMANENT: on chain 0 it meant
+;; the token could never be minted.
+;;
+;; The window was the entire gap between the deploy transaction and the init
+;; transaction — neither deploy footer calls init — on every one of the 20
+;; chains, and indefinitely for any chain chainweb adds later. It was reachable
+;; with NO hostile intent: an early donor routing funding to the published
+;; FUNDING-ACCOUNT does it by being helpful.
+;;
+;; 🔴 WHY TOLERATING THE ROW IS SAFE, which is a measured claim about `coin` and
+;; not an assumption: `coin.create-account` runs `enforce-reserved`, and
+;; `coin.credit` enforces `(= retg guard)` on an existing row. For an `m:` name
+;; `check-reserved` returns "m", so a principal account can only ever be created
+;; under the guard that derives it. A squatted FUNDING-ACCOUNT provably carries
+;; FUNDING-G — the squatter gains nothing and controls nothing. That is asserted
+;; below, not assumed, because the whole fix rests on it.
+;;
+;; Run: cd pact/test && pact smartpacts-squatted-coin-row.repl
+;; ===========================================================================
+(load "setup-noinit.repl")
+
+;; ---------------------------------------------------------------------------
+;; The squat. No admin key, no signature over anything — just public defconsts.
+;; ---------------------------------------------------------------------------
+(begin-tx "an unsigned stranger squats all three module coin accounts")
+(env-keys [])
+(env-sigs [])
+(expect "a finding: a stranger CAN still create the funding row (coin is permissionless)"
+  "Write succeeded"
+  (coin.create-account
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-G))
+(expect "a finding: and the pool row" "Write succeeded"
+  (coin.create-account
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-G))
+(expect "a finding: and the sale proceeds row" "Write succeeded"
+  (coin.create-account
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.SALES-PROCEEDS-ACCOUNT
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.SALES-PROCEEDS-G))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; The squatter controls NOTHING. This is the claim the tolerant fix rests on,
+;; so it is asserted rather than reasoned: coin binds an `m:` principal to the
+;; guard that derives it, both on create and on credit-into-existing-row.
+;; ---------------------------------------------------------------------------
+(begin-tx "a finding: coin refuses to bind a protocol principal to a foreign guard")
+(env-data { "evil": { "keys": ["attacker"], "pred": "keys-all" } })
+(env-keys ["attacker"])
+(expect-failure "a finding: an m: principal cannot be created under a guard that does not derive it"
+  "Reserved protocol guard violation"
+  (coin.create-account "m:free.evil:evil" (read-keyset 'evil)))
+(expect-failure "a finding: and the existing protocol row cannot be re-created under a foreign guard"
+  "Reserved protocol guard violation"
+  (coin.create-account
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT (read-keyset 'evil)))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; 🔴 THE ASSERTION THIS FILE EXISTS FOR. THE MINT STILL HAPPENS.
+;; Revert `ensure-coin-account` to a bare `coin.create-account` and this is the
+;; line that fails, with "Value already found while in Insert mode".
+;; ---------------------------------------------------------------------------
+(begin-tx "a finding: init-supply still mints over a squatted row")
+(env-data
+  { "fk": { "keys": ["f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"], "pred": "keys-all" }
+, "tk": { "keys": ["a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"], "pred": "keys-all" }
+, "lk": { "keys": ["b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"], "pred": "keys-all" } })
+(env-keys ["admin-key"])
+(expect "a finding: THE MINT SURVIVES A SQUATTED COIN ROW"
+  "supply initialized"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init-supply
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G
+    [ { "account": "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"
+   , "amount": n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-TRANCHE } ]))
+(expect "a finding: the full supply really was minted" 100000.0
+  (+ (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance
+       n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-ACCOUNT)
+     (+ (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance
+          n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-ACCOUNT)
+        (+ (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance
+             n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.LIQUIDITY-ACCOUNT)
+           (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance
+             n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-ACCOUNT)))))
+(commit-tx)
+
+;; The sibling module's init survives it too — and note squatting FUNDING-ACCOUNT
+;; alone used to brick this one as well, because the check inside `launch.init`
+;; reads SPT.get-launch-reserve.
+(begin-tx "a finding: the sale still initializes over a squatted proceeds row")
+(env-keys ["admin-key"])
+(expect "a finding: launch.init survives a squatted SALES-PROCEEDS row"
+  "sale initialized"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; CONTROL — the module is genuinely initialized, not merely un-aborted, and the
+;; one-shot guard still holds. Without this, "supply initialized" above could be
+;; consistent with an init that did nothing.
+;; ---------------------------------------------------------------------------
+(begin-tx "a finding CONTROL the one-shot guard still refuses a second init")
+(env-data
+  { "fk": { "keys": ["f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"], "pred": "keys-all" }
+, "tk": { "keys": ["a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"], "pred": "keys-all" }
+, "lk": { "keys": ["b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"], "pred": "keys-all" } })
+(env-keys ["admin-key"])
+;; 🔴 THE MESSAGE HERE IS ITSELF EVIDENCE THE FIX LANDED. Before it, a second
+;; init-supply aborted with coin's "Value already found while in Insert mode" —
+;; the coin insert blew up before the module's own one-shot guard was ever
+;; reached, which is the same abort a SQUATTER caused. Now the module's guard
+;; fires first and says so. Same refusal, correct reason.
+(expect-failure "a finding CONTROL: init-supply is still one-shot"
+  "module already initialized"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init-supply
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G
+    [ { "account": "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"
+   , "amount": n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-TRANCHE } ]))
+(rollback-tx)
+
+(print "smartpacts-squatted-coin-row: a squatted coin row no longer bricks init.")

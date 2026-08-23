@@ -1,0 +1,38 @@
+;; MUST-FAIL FIXTURE — the design record (a later change). Sibling of `deploy-wrong-keyset-name.repl-must-fail`.
+;;
+;; the design record turned ONE pinned keyset name into TWO. The existing fixture was carried forward for
+;; the gov pin; this one exists because a second pin with no falsifying test is exactly the
+;; state an internal review a finding found the FIRST pin in — reachable, uncovered, and green under
+;; mutation. Adding the enforce without adding this file would have re-created that defect on
+;; the same line of the same file, one commit after fixing it.
+;;
+;; 🔴 THE GOV NAME HERE IS CORRECT ON PURPOSE. The gov enforce runs first; if both names were
+;; wrong, this fixture would abort on the gov line and pass while asserting nothing about the
+;; ops pin — the "a check that cannot fail" shape. Only the ops name is mistyped, so the
+;; expected message can come from nowhere else.
+;;
+;; 🔴 FALSIFIABILITY, MEASURED — AND THE OBVIOUS TEST FOR IT IS WRONG. Deleting the
+;; `spt-ops-name` enforce does NOT make this fixture load successfully: it re-loads a module the
+;; prelude already deployed, so it then aborts further down on "Table ... already exists". An
+;; EXIT-CODE check therefore reports "still fails" and would clear a dead pin. Measured that way
+;; first, and it gave exactly that false all-clear.
+;; run-tests.sh does not judge it that way — it requires the fixture to fail AND to carry its
+;; expected message, so with the enforce deleted it reports "failed for the WRONG reason".
+;; That is the real falsification, and it is the one to re-run:
+;; with the enforce -> aborts with "spt-ops-name must be the namespace's spt-ops keyset"
+;; without it -> aborts with "Table ... already exists" (gate: WRONG reason)
+;; The lesson generalises past this file: a must-fail fixture is only pinned by its MESSAGE.
+(load "setup.repl")
+(begin-tx "fresh deploy whose spt-ops-name is one character wrong")
+(env-data
+  { "ns": "n_48867b242317a0216a67f8c7ca26696b5878e0e3"
+, "upgrade": false
+ ;; CORRECT gov name — this fixture is about the ops pin only.
+, "spt-gov-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-gov"
+, "spt-gov": { "keys": ["admin-key"], "pred": "keys-all" }
+ ;; The correct name ends ".spt-ops". This one ends ".spt-osp".
+, "spt-ops-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-osp"
+, "spt-ops": { "keys": ["admin-key"], "pred": "keys-any" } })
+(env-keys ["admin-key"])
+(load "../modules/SPT.pact")
+(commit-tx)

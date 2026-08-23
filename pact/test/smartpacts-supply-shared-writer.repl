@@ -1,0 +1,152 @@
+;; ===========================================================================
+;; smartpacts-supply-shared-writer — SUPPLY AND SOLVENCY THROUGH THE SHARED WRITER (the design record, a later change).
+;;
+;; the design record consolidated four inlined balance-writes into ONE CREDIT-gated `credit`, on the
+;; hottest and most-audited path in the module. The acquisition ROUTES are mapped in
+;; a probe kept out of this repo; what this file asserts is that routing every credit through one
+;; writer did not change WHAT IS WRITTEN:
+;; §A supply is conserved at exactly TOTAL-SUPPLY across mint -> launch -> award ->
+;; transfer -> tranche release, summed over every account that can hold SPT.
+;; §B the the design record solvency identity is EXACT after routing through the shared writer:
+;; award-liability == Σ pending-awards-of over every float account.
+;;
+;; These are the assertions that would catch a consolidation that dropped a counter delta
+;; on one of the four former call sites — the specific way this change could go wrong.
+;; ===========================================================================
+(load "setup.repl")
+
+(begin-tx "A the mint conserved supply exactly")
+;; init-supply ran in setup.repl and routed all four reserve credits through `credit`.
+(let* ((reserves [ n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-ACCOUNT
+                   n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-ACCOUNT
+                   n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.LIQUIDITY-ACCOUNT
+                   (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-launch-reserve) ])
+       (total (fold (+) 0.0 (map (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance) reserves))))
+  (expect "the four reserves hold exactly TOTAL-SUPPLY after the mint" 100000.0 total)
+  (expect "and that IS TOTAL-SUPPLY, not a coincidence" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TOTAL-SUPPLY total))
+(expect "circulating is 0 — every token is in an excluded reserve" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+(commit-tx)
+
+(begin-tx "A the launch moves supply between accounts without creating any")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+       , "bob":   { "keys": ["bob-key"],   "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1500.0) (coin.TRANSFER "sender00" "bob" 500.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1500.0)
+(coin.transfer-create "sender00" "bob"   (read-keyset 'bob)   500.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 1500.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "alice" (read-keyset 'alice) 3000.0)
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 500.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "bob" (read-keyset 'bob) 1000.0)
+(commit-tx)
+
+(begin-tx "A a holder-to-holder transfer, also through the shared writer")
+(env-data { "carol": { "keys": ["carol-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" "carol" 250.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create "alice" "carol" (read-keyset 'carol) 250.0)
+(commit-tx)
+
+(begin-tx "A a tranche release — the fourth former call site")
+;; a later amendment (a later change): the FOUNDER row is the release path now (cliff T+365d), and it
+;; routes through the same `credit` writer this suite is about. Liquidity moves by
+;; disbursement instead — covered in smartpacts-tranches.repl.
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-06-02T00:00:00Z") })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.release-tranche "founder:k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0")
+(commit-tx)
+
+(begin-tx "A SUPPLY IS CONSERVED AT EXACTLY 100,000 ACROSS ALL FOUR CREDIT PATHS")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-06-01T00:00:00Z") })
+(env-data { "everyone":
+  [ "alice" "bob" "carol"
+ ;; a later amendment (a later change): the tranche-release credit path now lands on the FOUNDER
+ ;; address, not the old liquidity beneficiary — same fourth credit path, new destination.
+    "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0" ] })
+(let ((held (fold (+) 0.0
+              (map (lambda (a:string) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance a))
+                   (read-msg 'everyone))))
+      (reserved (fold (+) 0.0
+              (map (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance)
+                   [ n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-ACCOUNT
+                     n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-ACCOUNT
+                     n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.LIQUIDITY-ACCOUNT
+                     (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-launch-reserve) ]))))
+  (print (format "the design record supply: holders={} reserves={} total={}" [held reserved (+ held reserved)]))
+  (expect "mint + launch + transfer + tranche release conserve TOTAL-SUPPLY exactly"
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TOTAL-SUPPLY (+ held reserved)))
+(commit-tx)
+
+;; ===========================================================================
+;; §B — THE the design record SOLVENCY IDENTITY, EXACT, AFTER THE CONSOLIDATION.
+;; award-liability == Σ over float accounts of pending-awards-of
+;; The O(1) counters (sum-pending, sum-debt, circulating-supply) are maintained by the
+;; shared writer now. If the consolidation dropped or double-applied a delta on any path,
+;; this identity is where it shows up — the counters would drift from the O(n) truth.
+;; ===========================================================================
+(begin-tx "B fund and declare a round (the design record: fund first)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-06-01T00:00:00Z") })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT 5000.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" 5000.0)
+(commit-tx)
+(begin-tx "B fund the pool")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-06-01T00:00:00Z") })
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 5000.0)
+(commit-tx)
+;; ---- the design record (a later change): A ROUND NEEDS A SEALED RECORD DATE ----------------------
+;; Schedule one clear of the 12h runway (2 x MIN-RETRACT-LEAD), let it land, seal it.
+;; The seal runs with NO KEYS on purpose: `advance-snapshot` is permissionless, and a
+;; chain with no activity must still be sealable by anyone.
+(begin-tx "the design record: name the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (add-time (at 'block-time (chain-data)) 43202))
+(commit-tx)
+(env-chain-data
+  { "chain-id": (at 'chain-id (chain-data))
+, "block-time": (add-time (at 'block-time (chain-data)) 43203) })
+(begin-tx "the design record: seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "B declare it")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-06-01T00:00:00Z") })
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "ADR032-R1" 0.01 (time "2027-06-03T00:00:00Z"))
+(commit-tx)
+
+(begin-tx "B the identity holds exactly once the round is effective")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-06-04T00:00:00Z") })
+(env-data { "float": [ "alice" "bob" "carol"
+                       "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0" ] })
+(let ((l (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))
+      (sum-pend (fold (+) 0.0
+                  (map (lambda (a:string) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of a))
+                       (read-msg 'float)))))
+  (print (format "the design record solvency: liability={} Sigma-pending={}" [l sum-pend]))
+  (expect "award-liability == Σ pending-of, EXACT, through the shared writer" sum-pend l))
+(commit-tx)
+
+(begin-tx "B and a credit AFTER accrual still leaves the identity exact")
+;; A transfer to a brand-new account exercises the is-new branch of credit-plan and the
+;; crystallization branch for the sender, both through `credit`.
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-06-04T00:00:00Z") })
+(env-data { "dave": { "keys": ["dave-key"], "pred": "keys-all" }
+       , "float2": [ "alice" "bob" "carol" "dave"
+                        "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0" ] })
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" "dave" 100.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create "alice" "dave" (read-keyset 'dave) 100.0)
+(let ((l (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))
+      (sum-pend (fold (+) 0.0
+                  (map (lambda (a:string) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of a))
+                       (read-msg 'float2)))))
+  (expect "identity still EXACT after a fresh-account credit" sum-pend l))
+(expect "and supply is still exactly TOTAL-SUPPLY" true
+  (<= (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating)
+      n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TOTAL-SUPPLY))
+(commit-tx)
+
+(print "smartpacts-supply-shared-writer suite PASSED")

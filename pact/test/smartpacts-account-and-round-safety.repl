@@ -1,0 +1,502 @@
+;; ===========================================================================
+;; a later change — remediation of the engine-independent the operator runbook cold-audit findings.
+;; §A finding 5 — declare-round is bounded, and a not-yet-effective round is retractable
+;; §B finding 6 — validate-account is enforced on the credit path
+;; §C finding 8 — the expected chain count is snapshotted onto the proposal
+;;
+;; Every negative here pins the EXACT error string and then asserts STATE IS UNCHANGED,
+;; because "an error fired" is not the property under test. Error strings are checked to be
+;; unique to this module: `expect-failure` matches on SUBSTRING, and a message that is also a
+;; substring of coin's is satisfied by coin failing rather than by us — which has already
+;; produced one false green in this repo (see recover-pool-surplus).
+;; ===========================================================================
+(load "setup.repl")
+
+(begin-tx "seed float via the launch so there is a real liability to reason about")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+       , "bob":   { "keys": ["bob-key"],   "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1250.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1250.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 1250.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "alice" (read-keyset 'alice) 2500.0)
+(expect "alice holds 2500 SPT" 2500.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice"))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; the design record (a later change) — this suite is about declare-round's BOUNDS, and every positive
+;; declaration below now needs the pool to already cover it. 1,300 KDA is provisioned once
+;; here, which is what the largest of them costs: §A2's round is rate 0.5
+;; against this suite's 2,500 float = 1,250 KDA. The surplus is recovered before §A6 so the
+;; pool-balance assertions in §A7 stay the exact numbers they were.
+;; The funding runs in its OWN transaction (one admin operation per tx) — see §A7's note.
+;; ---------------------------------------------------------------------------
+(begin-tx "the design record route the provisioning funding in")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT 1300.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" 1300.0)
+(commit-tx)
+
+(begin-tx "the design record provision the pool so the bound under test is the RATE bound, not solvency")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 1300.0)
+(expect "pool provisioned to 1300 with nothing owed yet" 1300.0
+  (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+(commit-tx)
+
+;; ===========================================================================
+;; §A — FINDING 5: declare-round's unbounded `rate`
+;; MEASURED on the unfixed module (a probe kept out of this repo): ONE admin tx with rate 1000.0
+;; set liability to 2,500,000 KDA against 2,500 tokens and permanently killed the whole
+;; award subsystem on all 20 chains, stranding the pool's KDA with no exit.
+;; ===========================================================================
+
+;; 🔴 THE NEGATIVES BELOW NEED A SEALED GENERATION IN SCOPE. Without one `declare-round`
+;; refuses with "no record date has sealed" FIRST, and expect-failure matches by SUBSTRING
+;; — every rate/lead negative in this file would go green without reaching its own check.
+;; 🔴 the design record: seal from an earlier clock (the ceremony costs 12h) so every block below
+;; keeps asserting against this suite's own calendar.
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+;; ---- the design record (a later change): A ROUND NEEDS A SEALED RECORD DATE ----------------------
+;; Schedule one clear of the 12h runway (2 x MIN-RETRACT-LEAD), let it land, seal it.
+;; The seal runs with NO KEYS on purpose: `advance-snapshot` is permissionless, and a
+;; chain with no activity must still be sealable by anyone.
+(begin-tx "the design record: name the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (add-time (at 'block-time (chain-data)) 43202))
+(commit-tx)
+(env-chain-data
+  { "chain-id": (at 'chain-id (chain-data))
+, "block-time": (add-time (at 'block-time (chain-data)) 43203) })
+(begin-tx "the design record: seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "A1 — the measured fat finger is now REJECTED, and nothing is recorded")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(env-keys ["admin-key"])
+(expect "no rounds declared yet" 0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-round-count))
+;; Reached whenever a chain has not yet received its replica of a declaration — a real
+;; operator state during the 20-chain roll-out, and the branch that keeps rkey away from
+;; index 0. It must be a clean refusal, not a missing-row abort.
+(expect-failure "retracting with nothing declared is refused by name"
+  "there is no declared award round to retract"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.retract-round "NOTHING"))
+;; 🔴 THE RATE-CAP NEGATIVE STOOD HERE AND IS DELETED (a later amendment, a later change). It declared
+;; rate 1000.0 and asserted the cap refused it, then witnessed STATE UNCHANGED. With the cap
+;; gone that declaration is ACCEPTED at this chain's zero sealed float — and owes nothing,
+;; which is the whole a later amendment result (Z-1..Z-4). The state-unchanged assertions went with
+;; it because they existed only to witness that refusal; kept, they would assert nothing about
+;; a call that no longer happens.
+(commit-tx)
+
+;; ---------------------------------------------------------------------------------------
+;; A1b/A1c — a later change COLD AUDIT FINDING 1 (HIGH). `effective-at` was bounded only from BELOW,
+;; and it was the last unbounded admin input in the module. MEASURED on the first version of
+;; this change set: `declare-round "R-TYPO" 0.5 (time "…")` was ACCEPTED (its implied
+;; liability sat inside the then-current cap), retract-round zeroed the rate but PRESERVED the
+;; timestamp, and declare-round's monotonicity check then rejected every subsequent round
+;; FOREVER with "effective-at must be >= the previous round's". One mistyped digit killed
+;; awards on all 20 chains, and the retraction did not save it.
+;;
+;; The whole block runs in ONE transaction that is ROLLED BACK, so the rounds it declares do
+;; not perturb the accounting the rest of §A asserts on.
+;; ---------------------------------------------------------------------------------------
+(begin-tx "A1b/A1c — the effective-at bound and the retraction rewind")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(env-keys ["admin-key"])
+(expect "no rounds yet" 0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-round-count))
+;; 🔴 A1b IS DELETED (the design record, a later change) — the three assertions that pinned MAX-ROUND-LEAD:
+;; the mistyped-YEAR typo refused, one second beyond the 365-day lead refused, exactly at the
+;; lead accepted. The bound is gone, so none of those refusals can happen.
+;; 🔴 A1c BELOW IS NOT DELETED, AND THE DIFFERENCE IS THE POINT. A1b pinned the BOUND; A1c
+;; pins the RETRACTION REWIND — that retracting a far-future round rewinds `effective-at` so
+;; it stops governing the monotonicity floor. That property is untouched by the design record, and it is
+;; the very fix that made the bound redundant, so deleting it would remove the evidence that
+;; justifies the deletion. It needs a far-future round to act on, so one is simply declared —
+;; no longer possible to assert anything about its distance, only that it exists.
+(expect "a far-future round is declarable — nothing bounds the lead from above now" "round declared"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round
+    "R-EDGE" 0.001 (add-time (time "2026-06-02T00:00:00Z") 31536000)))
+;; A1c — the OTHER half of finding 1: retraction must REWIND effective-at, or a retracted
+;; far-future round keeps governing the monotonicity floor and still blocks nearer rounds.
+(expect "the far round retracts" "round retracted"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.retract-round "R-EDGE"))
+(expect "a round 2 days out is declarable again — the whole point of the rewind" "round declared"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round
+    "R-RECOVER" 0.001 (time "2026-06-04T00:00:00Z")))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-05T00:00:00Z") })
+(expect "rpt counts the recovery round only" 0.001
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+(expect "max-rpt agrees — the retracted round contributes nothing, ever" 0.001
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.max-rpt))
+(rollback-tx)
+
+(begin-tx "A1b/A1c really was rolled back — §A below depends on it")
+(expect "no rounds survive the rolled-back block" 0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-round-count))
+(commit-tx)
+
+;; ---- the design record (a later change): A ROUND NEEDS A SEALED RECORD DATE ----------------------
+;; Schedule one clear of the 12h runway (2 x MIN-RETRACT-LEAD), let it land, seal it.
+;; The seal runs with NO KEYS on purpose: `advance-snapshot` is permissionless, and a
+;; chain with no activity must still be sealable by anyone.
+(begin-tx "the design record: name the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (add-time (at 'block-time (chain-data)) 43202))
+(commit-tx)
+(env-chain-data
+  { "chain-id": (at 'chain-id (chain-data))
+, "block-time": (add-time (at 'block-time (chain-data)) 43203) })
+(begin-tx "the design record: seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "A2 — declare the round A3/A4 will act on")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(env-keys ["admin-key"])
+;; 🔴 A2's BOUNDARY TEST IS DELETED (a later amendment, a later change). It asserted the rate cap exact in
+;; BOTH directions — one 1e-12 over REFUSED, exactly at the cap ACCEPTED — plus a crossover
+;; assertion derived from `MAX-ROUND-LIABILITY / MAX-ROUND-RATE`. All three constants are gone,
+;; so none of those refusals can happen and none of that arithmetic exists any more. The
+;; negatives are DELETED rather than re-pointed at some other bound: a negative that no longer
+;; names a real refusal is a check that CANNOT FAIL, which is the defect this project has
+;; shipped before. The evidence that replaced them attempts the HARM instead of the bound —
+;; `a probe kept out of this repo`, a later amendment.
+;; 🔴 WHAT SURVIVES IS THE ROUND ITSELF, and only because A3/A4 below need a declared round to
+;; exercise the retraction gate and its window. It is declared at a plain 0.5 now; nothing
+;; about its VALUE is asserted any more, and the block name says so.
+(expect "a round is declared for A3/A4 to act on" "round declared"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round
+    "AT-CAP" 0.5 (time "2026-06-10T00:00:00Z")))
+(expect "the round was recorded" 1 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-round-count))
+(commit-tx)
+
+(begin-tx "A3 — retract-round: the ADMIN gate")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(env-keys ["intruder-key"])
+(expect-failure "a stranger cannot retract a declared round"
+  "Keyset failure"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.retract-round "AT-CAP"))
+(env-keys ["admin-key"])
+(expect "the round is untouched by the failed attempt" 0.5
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.max-rpt))
+(commit-tx)
+
+(begin-tx "A4 — retract-round: too close to taking effect")
+;; a later change finding 3: MIN-RETRACT-LEAD is now 6h (halved, so the DECLARATION floor of 2x
+;; stays at the 12h it has always been while the retraction WINDOW becomes a guaranteed >=6h
+;; instead of a possible 60 seconds). The AT-CAP round is effective, so at
+;; T19:00 only 5h remain and the retraction must be refused rather than risk
+;; landing on some chains after others have already applied the round.
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-09T19:00:00Z") })
+(env-keys ["admin-key"])
+(expect-failure "inside the lead time the retraction is refused"
+  "award round is too close to taking effect to be retracted"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.retract-round "AT-CAP"))
+(expect "the rate is unchanged" 0.5 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.max-rpt))
+(expect "the round is still counted" 1 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-round-count))
+;; one second the other side of the boundary is accepted — the bound is exact
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-09T17:59:59Z") })
+(expect "one second outside the lead time it is accepted" "round retracted"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.retract-round "AT-CAP"))
+(commit-tx)
+
+(begin-tx "A5 — what retraction actually did, measured")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-09T12:00:00Z") })
+(expect "the rate is zeroed, so the round can never contribute" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.max-rpt))
+(expect "rpt is untouched — a future round had never accrued anything" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+(expect "declared-liability is back to zero" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declared-liability))
+;; The index stays append-only: the count is NOT decremented, so declare-round's `insert`
+;; keeps its meaning and no slot is ever reused.
+(expect "the index is still append-only — the count is not rewound" 1
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-round-count))
+(env-keys ["admin-key"])
+(expect-failure "a retracted round cannot be retracted twice"
+  "the last declared award round is already retracted"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.retract-round "AT-CAP"))
+;; A zero-rate round is inert to apply-round: it moves nothing, so there is nothing to apply.
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-11T00:00:00Z") })
+(expect-failure "a retracted round can never be applied, even once its date passes"
+  "no newly-effective rounds to apply"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.apply-round "AT-CAP"))
+(expect "and rpt is still zero after its date passed" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+(commit-tx)
+
+;; the design record: AT-CAP is retracted, so its 1,250 KDA of provisioning is owed to nobody and reads
+;; as surplus again. Recover it here — that is precisely what recover-pool-surplus is for —
+;; leaving exactly the 50 KDA §A6's round will cost, so §A7's pool figures below are the same
+;; numbers they were before the design record and still mean the same thing.
+(begin-tx "the design record recover the provisioning the retraction freed")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-11T00:00:00Z") })
+;; 🔴 a later change (founder ): RECOVER-SURPLUS is `@managed` on `amount`, so the
+;; signature must NAME it with the amount actually recovered; (env-keys ["admin-key"]) no
+;; longer drives this path at all.
+(env-sigs [{ "key": "admin-key"
+        , "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.RECOVER-SURPLUS 1250.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.recover-pool-surplus 1250.0)
+(expect "50 KDA left in the pool — exactly what the next round costs" 50.0
+  (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+(commit-tx)
+
+(begin-tx "A6 — a real round declared AFTER a retraction still works end to end")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-11T00:00:00Z") })
+(env-keys ["admin-key"])
+(expect "a sane round is accepted" "round declared"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round
+    "R2" 0.02 (time "2026-06-12T00:00:00Z")))
+(commit-tx)
+(begin-tx "A6 — and it accrues normally past the retracted one")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-13T00:00:00Z") })
+(expect "rpt counts ONLY the live round" 0.02
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+(expect "liability = 0.02 * 2500 tokens" 50.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))
+(env-keys ["admin-key"])
+(expect "apply-round folds past the retracted round in one pass" "round applied"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.apply-round "R2"))
+(expect "rpt is materialized, unchanged in value" 0.02
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+(commit-tx)
+
+;; A7 — the subsystem the finding said was permanently destroyed is alive: fund, recover,
+;; claim. ONE ADMIN OPERATION PER TX: once a managed capability has been installed in a
+;; transaction, a mid-tx (env-keys ...) no longer resets the signer set and the next
+;; unscoped enforce-keyset fails with a bare "Keyset failure" that looks like a module bug
+;; and is not (smartpacts-pool-surplus.repl found this the hard way).
+(begin-tx "A7a route funding in")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-13T00:00:00Z") })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT 100.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" 100.0)
+(commit-tx)
+
+(begin-tx "A7b fund-awards against the live round")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-13T00:00:00Z") })
+(env-keys ["admin-key"])
+;; 10, not 60: the design record already required the round's own 50 KDA to be in the pool before it
+;; could be declared, so this is the TOP-UP leg — which is what fund-awards is for now.
+;; The resulting pool (60), liability (50) and surplus (10) are unchanged.
+(expect "fund-awards works" "awards funded"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 10.0)) ; pool 50 -> 60 > 50.0 liability
+(expect "the pool holds a real surplus over the liability" 10.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pool-surplus))
+(commit-tx)
+
+(begin-tx "A7c recover-pool-surplus — the freeze-surviving exit a later change added")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-13T00:00:00Z") })
+;; a later change: RECOVER-SURPLUS is `@managed` on `amount` — scoped signature, amount matching
+;; the call.
+(env-sigs [{ "key": "admin-key"
+        , "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.RECOVER-SURPLUS 10.0)] }])
+(expect "the unowed surplus can be recovered" "pool surplus recovered"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.recover-pool-surplus 10.0))
+(commit-tx)
+
+(begin-tx "A7d and a holder can actually be paid")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-13T00:00:00Z") })
+(expect "alice claims 0.02 * 2500" 50.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "alice"))
+(commit-tx)
+
+;; A9 — THE ORDERING THAT WORRIES ME MOST, because it is where a zeroed round could corrupt
+;; `rounds-applied`: an APPLIED round, then a retracted one, then another real one. If
+;; apply-round's prefix fold mishandled the zero in the middle, either the retracted rate
+;; would leak into rpt or the fold would stall and R3 would never apply.
+;; the design record: alice's claim drained the pool, so §A9's rounds need provisioning of their own.
+;; R3 is rate 0.3 against the 2,500 float = 750 KDA; R4 (0.01) then costs 25 and is covered by
+;; what R3's retraction frees. The funding account holds the 1,250 recovered before §A6.
+(begin-tx "the design record provision the pool for the A9 rounds")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-13T00:00:00Z") })
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 750.0)
+(commit-tx)
+
+;; 🔴 A6's round consumed the generation that A4/A5's retraction had freed (retraction
+;; rewinds the GENERATION rate too, which is what re-opens it), so R3 needs a new one.
+;; ---- the design record (a later change): A ROUND NEEDS A SEALED RECORD DATE ----------------------
+;; Schedule one clear of the 12h runway (2 x MIN-RETRACT-LEAD), let it land, seal it.
+;; The seal runs with NO KEYS on purpose: `advance-snapshot` is permissionless, and a
+;; chain with no activity must still be sealable by anyone.
+(begin-tx "the design record: name the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (add-time (at 'block-time (chain-data)) 43202))
+(commit-tx)
+(env-chain-data
+  { "chain-id": (at 'chain-id (chain-data))
+, "block-time": (add-time (at 'block-time (chain-data)) 43203) })
+(begin-tx "the design record: seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "A9 — declare R3 after the earlier retracted round, with R2 already applied")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-13T00:00:00Z") })
+(env-keys ["admin-key"])
+(expect "a third round declares on top" "round declared"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round
+    "R3" 0.3 (time "2026-06-25T00:00:00Z")))
+(commit-tx)
+
+(begin-tx "A9 — retract it, leaving a ZERO between an applied round and the next real one")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-14T00:00:00Z") })
+(env-keys ["admin-key"])
+(expect "R3 retracts" "round retracted"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.retract-round "R3"))
+(expect "the retracted 5.0 does not leak into rpt" 0.02
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+(expect "nor into max-rpt — nothing is owed under it, ever" 0.02
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.max-rpt))
+(commit-tx)
+
+(begin-tx "A9 — a fourth, real round still applies straight past the zero")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-26T00:00:00Z") })
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round
+  "R4" 0.01 (time "2026-06-27T00:00:00Z"))
+(commit-tx)
+(begin-tx "A9 — apply it")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-28T00:00:00Z") })
+(env-keys ["admin-key"])
+(expect "apply-round folds past the zeroed round in ONE pass" "round applied"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.apply-round "R4"))
+(expect "rpt is exactly the sum of the two LIVE rounds" 0.03
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+(expect "and rounds-applied advanced past the zero, so max-rpt agrees" 0.03
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.max-rpt))
+(commit-tx)
+
+;; ===========================================================================
+;; §B — FINDING 6: validate-account was never called on the credit path.
+;; MEASURED on the unfixed module (a probe kept out of this repo): create-account correctly rejected
+;; "ab", and transfer-create then created a holder called "ab" anyway — and one whose
+;; account name was the EMPTY STRING.
+;; ===========================================================================
+
+;; TX HYGIENE THAT IS LOAD-BEARING FOR THE "STATE UNCHANGED" CLAIM, and that this suite
+;; found by measurement: `transfer-create` DEBITS THE SENDER BEFORE credit-plan validates
+;; the receiver's name. On chain that is correct — the whole transaction aborts and nothing
+;; persists — but the REPL's `expect-failure` catches the abort and LEAVES THE PARTIAL WRITE
+;; BEHIND, which survives commit-tx. Measured here first: four rejected 1.0 transfers took
+;; alice from 2500.0 to 2496.0 while every assertion still "passed".
+;; So each rejection gets its OWN transaction, ROLLED BACK, and the state assertions live in
+;; a separate committed transaction afterwards. A "state unchanged" assertion written any
+;; other way in this REPL is measuring the leak, not the module.
+(begin-tx "B1a — too short (the reviewer's exact case)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-13T00:00:00Z") })
+(env-data { "sq": { "keys": ["sq-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" "ab" 1.0)] }])
+(expect-failure "transfer-create rejects a 2-char receiver"
+  "account name length 3..256"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create
+    "alice" "ab" (read-keyset 'sq) 1.0))
+(rollback-tx)
+
+(begin-tx "B1b — the empty string (the worst case: it broke every indexer)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-13T00:00:00Z") })
+(env-data { "sq": { "keys": ["sq-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" "" 1.0)] }])
+ ;; the design record MOVED WHICH CHECK FIRES HERE, and the test follows the code rather than the
+ ;; other way round. The restored `CREDIT` capability carries coin's own body —
+ ;; (enforce (!= receiver "") …) — and the cap is acquired BEFORE `credit` runs, so the
+ ;; empty name is now refused one layer earlier than `validate-account`. Both still refuse
+ ;; it; only the message changed. `validate-account`'s length bound keeps its own
+ ;; falsifying negative through the 2-character "ab" case above/below, which the cap body
+ ;; does NOT catch — so nothing lost coverage in the move.
+(expect-failure "transfer-create rejects the empty-string receiver"
+  "SPT credit receiver must not be empty"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create
+    "alice" "" (read-keyset 'sq) 1.0))
+(rollback-tx)
+
+(begin-tx "B1c — too long: 257 characters, one past the upper bound")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-13T00:00:00Z") })
+(env-data { "sq": { "keys": ["sq-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" (concat (make-list 257 "x")) 1.0)] }])
+(expect-failure "transfer-create rejects a 257-char receiver"
+  "account name length 3..256"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create
+    "alice" (concat (make-list 257 "x")) (read-keyset 'sq) 1.0))
+(rollback-tx)
+
+(begin-tx "B1d — outside CHARSET_LATIN1: a distinct branch with a distinct message")
+;; Pact has no \u escape (measured: "Lexical Error: Invalid escape sequence"), so the
+;; out-of-charset character is decoded from base64 rather than embedded in the source —
+;; which also keeps this file pure ASCII. It is ASSERTED to be non-LATIN1 before it is used,
+;; so this negative cannot silently degrade into an ordinary-name test that proves nothing.
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-13T00:00:00Z") })
+(env-data { "sq": { "keys": ["sq-key"], "pred": "keys-all" } })
+(expect "the probe character really is outside CHARSET_LATIN1" false
+  (is-charset CHARSET_LATIN1 (concat ["bad" (base64-decode "4Li3") "name"])))
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" (concat ["bad" (base64-decode "4Li3") "name"]) 1.0)] }])
+(expect-failure "transfer-create rejects a non-LATIN1 receiver"
+  "account name has invalid characters"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create
+    "alice" (concat ["bad" (base64-decode "4Li3") "name"]) (read-keyset 'sq) 1.0))
+(rollback-tx)
+
+(begin-tx "B1e — STATE UNCHANGED after all four rejections")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-13T00:00:00Z") })
+(expect-failure "no \"ab\" holder exists"
+  "No value found in table n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT_accounts for key: ab"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "ab"))
+(expect-failure "no empty-string holder exists"
+  "No value found in table n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT_accounts for key: "
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance ""))
+(expect "alice's balance is untouched" 2500.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice"))
+(expect "circulating supply is untouched" 2500.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+(commit-tx)
+
+(begin-tx "B2 — the bound is exact: 3 chars and 256 chars are ACCEPTED")
+;; A validator that rejects legitimate names is its own outage on a frozen module, so both
+;; ends of the accepted range are proven, not assumed.
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-13T00:00:00Z") })
+(env-data { "sq": { "keys": ["sq-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" "abc" 1.0)] }])
+(expect "a 3-char receiver is accepted" "transfer-create ok"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create
+    "alice" "abc" (read-keyset 'sq) 1.0))
+(expect "and it really holds the tokens" 1.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "abc"))
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" (concat (make-list 256 "y")) 1.0)] }])
+(expect "a 256-char receiver is accepted" "transfer-create ok"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create
+    "alice" (concat (make-list 256 "y")) (read-keyset 'sq) 1.0))
+(commit-tx)
+
+(begin-tx "B3 — the check is on the SHARED credit path, so the tranche release carries it too")
+;; The point of putting it in credit-plan rather than at each caller: release-tranche
+;; credits a ceremony-fixed k: address through the same function, and it still works.
+;; a later amendment (a later change): that is the FOUNDER row now — past its 365d cliff.
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-06-02T00:00:00Z") })   ; past the 365d founder cliff
+(expect "the founder tranche still releases through the validated credit path" true
+  (> (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.release-tranche "founder:k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0") 0.0))
+(commit-tx)
+
+;; ===========================================================================
+;; §C — FINDING 8 — DELETED (a later change / the design record Decision 1).
+;;
+;; It proved that `get-final-results` snapshots `chain-count` on the proposal instead of
+;; reading `coin.VALID_CHAIN_IDS` at result-read time, so a coin upgrade adding chains could
+;; not retroactively flip a decided result. Both the function and the field are deleted with
+;; the cross-chain aggregation, so the hazard has no surface left.
+;;
+;; The GENERAL lesson survives and is worth more than the test was: never derive a recorded
+;; outcome from a constant owned by a module you do not control. Nothing in the module does
+;; this today — checked, not assumed.
+;;
+;; Findings 5, 6 and 11 below are untouched.
+(print "smartpacts-account-and-round-safety suite PASSED")

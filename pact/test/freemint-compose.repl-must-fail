@@ -1,0 +1,68 @@
+;; ===========================================================================
+;; MUST-FAIL FIXTURE (asserted by run-tests.sh: non-zero exit + error grep).
+;; ---------------------------------------------------------------------------
+;; 🔴 REPLACED BY the design record / a later change, AND READ THE REASON BEFORE CHANGING IT AGAIN.
+;;
+;; WHAT THIS FILE USED TO DO. It pinned that the NAME `CREDIT` does not resolve — Pattern W
+;; (the design record §2.2) had deleted both the capability and the `credit` function, so the attack
+;; was a compile-time name-resolution abort. the design record RESTORED both in coin's shape, so that
+;; assertion is now FALSE. A must-fail fixture that quietly stops failing — or that keeps
+;; passing for a reason nobody re-checked — is a silent hole, and it is exactly an internal review's
+;; lead finding. Hence: replaced, not deleted, and not left pinned to a dead name.
+;;
+;; WHAT IT PINS NOW: THE ROUTE, not the name. On a FIXED engine there are exactly two ways
+;; to put `CREDIT` in scope from outside SPT (the design record's own table):
+;;
+;; route A `with-capability` from another module -> guardForModuleCall -> needs SPT's
+;; module admin -> REFUSED. **This has ALWAYS been true, on every engine**, which
+;; is why it is the half that can live in a must-fail fixture. THIS FILE.
+;; route B `compose-capability` from another module -> this was the platform bug. Guarded
+;; since Pact 5.4.1, FORK-GATED behind Chainweb32.
+;;
+;; 🔴 ROUTE B IS STILL OPEN ON THE ENGINE THIS FILE RUNS ON, AND IT IS NOT PINNED HERE.
+;; The bare REPL is pact 5.4 — the PRE-Chainweb32 engine — and the compose route SUCCEEDS
+;; there: MEASURED against this very module, `987654321.0` SPT minted from
+;; nothing into an attacker account. Writing "route B is refused" into a must-fail fixture
+;; would therefore assert a falsehood and the fixture would fail to fail. Route B is pinned
+;; where a claim about today's behaviour belongs — `a probe kept out of this repo`, which ASSERTS
+;; behaviour on an earlier engine and is expected to change on a fixed one. That is the same treatment
+;; findings 1-4 get, and a failure there is a TRIAGE EVENT, not a test to relax.
+;;
+;; So the two halves together are the whole claim, and NEITHER IS SUFFICIENT ALONE:
+;; this file — the engine-independent route is shut, on every engine, forever.
+;; a probe kept out of this repo — the fork-gated route is open TODAY and must be measured CLOSED on
+;; the target chain before deploy (the operator runbook gates on Chainweb32 >= 1).
+;;
+;; The attack below is NOT wrapped in `expect-failure`: the whole file must abort, and the
+;; runner asserts that from OUTSIDE on both the exit code AND the error text, because a
+;; fixture that failed for an unrelated reason (a typo, a renamed path) would otherwise read
+;; as a pass — which is the exact failure mode these fixtures exist to prevent.
+;; ===========================================================================
+(load "setup.repl")
+
+(begin-tx "attacker module in its own namespace")
+(env-data { "evil": { "keys": ["attacker"], "pred": "keys-all" } })
+(env-keys ["attacker"])
+(define-namespace "evilns" (read-keyset 'evil) (read-keyset 'evil))
+(namespace "evilns")
+(define-keyset "evilns.ks" (read-keyset 'evil))
+(module evil GOV
+  (defcap GOV () (enforce-keyset "evilns.ks"))
+ ;; ROUTE A: acquire SPT's CREDIT directly with `with-capability`. This runs
+ ;; guardForModuleCall, which demands SPT' module admin — an admin the
+ ;; attacker does not have and cannot obtain. Engine-independent.
+  (defun mint (a:string g:guard amt:decimal)
+    (with-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.CREDIT a)
+      (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.credit a g amt))))
+(commit-tx)
+
+(begin-tx "free mint via route A")
+(env-data { "mal": { "keys": ["attacker"], "pred": "keys-all" } })
+(env-keys ["attacker"])
+(evilns.evil.mint "mallory" (read-keyset 'mal) 987654321.0)
+;; If control ever reaches here, module admin stopped protecting the capability and the
+;; supply cap is broken on EVERY engine, fork or no fork. This fixture MUST fail loudly.
+(expect "REGRESSION: SPT was free-minted through the module-admin route"
+  "with-capability from a foreign module must require SPT module admin"
+  (format "minted {} SPT to mallory" [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "mallory")]))
+(commit-tx)

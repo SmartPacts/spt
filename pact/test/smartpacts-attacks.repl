@@ -1,0 +1,452 @@
+;; ===========================================================================
+;; smartpacts-attacks — ADVERSARIAL red-team regression suite (cold re-derivation).
+;; Each block asserts the SECURE outcome: an attack is BLOCKED, or a fix holds.
+;; Maps 1:1 to docs/security/RED-TEAM-.md attack IDs (A-*).
+;; Run from pact/test/. Pre-fix, A-B/A-C/A-D2 FAIL (exploit present); the
+;; root-cause fixes flip them green. Do not weaken — these pin the fixes.
+;; ===========================================================================
+(load "setup.repl")
+
+;; seed two float holders (alice 3000, bob 2000), received (pre any proposal)
+(begin-tx "activate launch for seeding")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(commit-tx)
+
+;; Seed via sender00 LAUNCH-buy then SPT transfer, so alice/bob hold SPT but have NO coin
+;; account of their own (A-C's squat test needs bob's vanity coin name to be unclaimed).
+(begin-tx "seed float holders (alice 3000, bob 2000) w/o coin accounts")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+       , "bob": { "keys": ["bob-key"], "pred": "keys-all" }
+       , "sender00": { "keys": ["admin-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 2500.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "sender00" (read-keyset 'sender00) 5000.0)
+(env-sigs [{ "key": "admin-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "sender00" "alice" 3000.0) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "sender00" "bob" 2000.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create "sender00" "alice" (read-keyset 'alice) 3000.0)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create "sender00" "bob" (read-keyset 'bob) 2000.0)
+(commit-tx)
+
+;; ===========================================================================
+;; A-A — FREE MINT. Closed STRUCTURALLY by Pattern W (a later change / the design record §2.2): the
+;; module has no CREDIT capability and no standalone `credit` writer, so there is
+;; nothing to gate and nothing to call. The old form of this block asserted that
+;; `(with-capability CREDIT …)` and a direct `credit` call were refused — both of
+;; which now name members that DO NOT EXIST, which is a compile-time abort that
+;; `expect-failure` cannot catch and that would have made this suite fail to load
+;; while looking like a pass in a less careful runner. The BEHAVIOURAL proof
+;; therefore lives in freemint-compose.repl-must-fail (exit-code + error-text
+;; asserted by run-tests.sh); what is asserted here is the structural tripwire and
+;; the surface that is still live.
+;; ===========================================================================
+(begin-tx "A-A free mint structurally impossible")
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(env-keys ["atk-key"])
+;; Text scan of the deployed module source: a TRIPWIRE against re-introduction, not
+;; a proof of absence (a proof is the must-fail fixture + the per-site write
+;; enumeration in an internal document later change-IMPL.md). The POSITIVE CONTROL is not
+;; optional: without it, a describe-module that returned "" would make every
+;; "absent" assertion below pass vacuously — a check that cannot fail.
+(let ((code (at 'code (describe-module "n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT"))))
+  (expect "CONTROL: the scanner is reading real module source" true
+    (contains "(defun transfer-create" code))
+ ;; ---- the design record INVERTED TWO OF THESE ASSERTIONS, DELIBERATELY -----------------------
+ ;; This tripwire used to assert `(defcap CREDIT` and `(defun credit` were ABSENT. the design record
+ ;; restored both in coin's shape, so those assertions are now false BY DECISION. They are
+ ;; inverted rather than deleted: a tripwire that silently stops firing is worthless, and
+ ;; the thing worth watching has moved from "does the writer exist" to "is there exactly
+ ;; ONE of it, and is it gated".
+  (expect "the design record: the CREDIT capability exists again, in coin's shape" true
+    (contains "(defcap CREDIT (receiver:string)" code))
+  (expect "the design record: and the standalone credit writer exists again" true
+    (contains "(defun credit:string (account:string guard:guard amount:decimal)" code))
+  (expect "it is gated by CREDIT, exactly as coin.credit is" true
+    (contains "(require-capability (CREDIT account))" code))
+ ;; 🔴 THE INVARIANT THAT REPLACED THE ABSENCE CHECK. the design record restored ONE writer, not the
+ ;; freedom to add more: `credit` must remain the module's ONLY balance-increasing write.
+ ;; A second `(write accounts` would be an ungated writer beside a gated one, which is the
+ ;; shape Pattern W was built to remove and the shape the design record explicitly does not license.
+ ;; COUNTING occurrences needs string splitting, which Pact has no native for — so the
+ ;; "exactly one" half is enforced in run-tests.sh (a grep -c against the module, failing
+ ;; closed on any count but 1). Here we pin only that the writer is present, and the
+ ;; comment records where the real count lives so it is not assumed to be here.
+  (expect "the writer is present (the EXACTLY-ONE count is enforced in run-tests.sh)" true
+    (contains "(write accounts account (at 'row p))" code))
+ ;; The counters stay in the PURE planner, not scattered back across callers (the design record D2).
+  (expect "credit-plan is still the one place the the design record counters are computed" true
+    (contains "(defun credit-plan:object{planned-credit}" code)))
+;; `debit` remains a public defun and remains correctly gated: DEBIT is a REAL cap
+;; (it enforces the account's own guard), which is coin's own shape. Satisfying it
+;; only lets a holder burn their OWN tokens, so it is not a Pattern-W concern.
+(expect-failure "direct debit() blocked by require-capability" "not granted"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.debit "alice" 1.0))
+
+;; a later change (the LOW): "debit emits no event on a no-credit-follows burn, so supply
+;; reconciliation diverges silently." DISPOSITION: no event is warranted, because the
+;; burn is not reachable — and that is asserted here rather than argued.
+;; Acquiring DEBIT is the only way past the require-capability above, and
+;; `with-capability` is wrapped in guardForModuleCall, so transaction code cannot
+;; acquire another module's capability without that module's ADMIN. The three
+;; in-module acquisition sites are TRANSFER (composes DEBIT), TRANSFER_XCHAIN
+;; (composes DEBIT) and release-tranche, and every one of them is lexically fused
+;; with a credit or an SPV yield — so there is no debit anywhere that destroys supply
+;; without a paired event. An unconditional event in `debit` would also be wrong: it
+;; sits on the hot transfer path, which already emits TRANSFER, so it would double-
+;; report every transfer, and `debit` cannot see whether a credit follows it.
+;; This is a TRIPWIRE: it fires the day someone makes DEBIT acquirable from outside.
+(expect-failure "the account OWNER cannot acquire DEBIT from transaction code"
+  "Module admin necessary"
+  (with-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DEBIT "alice")
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.debit "alice" 1.0)))
+(expect "no silent burn happened: alice's balance is intact" 3000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice"))
+(expect "no silent burn happened: circulating supply is intact" 5000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+;; credit-plan IS public — that is safe only because it is PURE. Prove it: call it
+;; for a million SPT with a satisfying guard, and assert nothing moved. This is the
+;; assertion that fires if anyone ever puts a write back into the shared helper.
+(expect "credit-plan is pure — a 1,000,000 SPT plan writes nothing" 3000.0
+  (let ((_ (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.credit-plan
+             "alice"
+             (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-guard "alice")
+             1000000.0)))
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice")))
+;; Branch-complete negatives for credit-plan's own enforces. They are unreachable through
+;; transfer/transfer-create (which validate first) and through the mint/resume/tranche paths,
+;; but credit-plan is PUBLIC, so they are directly reachable here — which is the only way to
+;; prove they can fire at all. Safe to run inside this tx: credit-plan performs no writes.
+(expect-failure "credit-plan rejects a non-positive amount" "SPT credit amount must be positive"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.credit-plan
+    "alice" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-guard "alice") -5.0))
+(expect-failure "credit-plan rejects an over-precise amount" "amount violates minimum precision"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.credit-plan
+    "alice" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-guard "alice")
+    0.0000000000001))
+;; GUARD MISMATCH (fungible-v2 semantics). Crediting an EXISTING account under a guard that is
+;; not its own must fail. Note precisely what this does and does not defend: the write uses the
+;; STORED guard (`retg`), so removing the enforce would NOT re-key the account — measured, when
+;; the enforce is removed the transfer simply returns "transfer-create ok" and alice keeps her
+;; own guard. What it protects is the SENDER's stated intent: without it, transfer-create
+;; silently credits an account whose guard differs from the one the sender named, which is how a
+;; payer is tricked into paying an account they did not mean to. Same rule as coin.
+(expect-failure "credit-plan rejects a foreign guard on an existing account" "SPT account guards do not match"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.credit-plan
+    "alice" (read-keyset 'atk) 1.0))
+(commit-tx)
+
+;; Same guard-substitution defence through the REAL path (writes, so: own tx + rollback-tx —
+;; expect-failure does not roll back partial writes and commit-tx would PERSIST the leak).
+(begin-tx "A-A guard substitution via transfer-create")
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "bob-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "bob" "alice" 1.0)] }])
+(expect-failure "transfer-create cannot re-key an existing account" "SPT account guards do not match"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create
+    "bob" "alice" (read-keyset 'atk) 1.0))
+(rollback-tx)
+
+;; ===========================================================================
+;; A-INT — internal reserve drain (treasury/founder/funding/pool). MUST be blocked.
+;; ===========================================================================
+(begin-tx "A-INT reserve drain blocked")
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(env-keys ["atk-key"])
+;; cannot acquire any internal account cap-guard from tx code
+;; 🔴 THIS EXPECTED STRING ENDS AT THE MODULE NAME AND CANNOT BE DISAMBIGUATED (a finding, delta
+;; an internal review). MEASURED: the engine's message stops at `…acquired:<ns>.SPT` with nothing after
+;; it, and `expect-failure` matches by SUBSTRING — so since the rename it is also satisfied by
+;; `…acquired:<ns>.SPT-launch`. It is precise ONLY because the call below names `SPT.TREASURY-GUARD`
+;; explicitly. If you ever change which module this call targets, this pin stops discriminating
+;; and will go green on the wrong module. There is no string fix; the call is the guarantee.
+(expect-failure "TREASURY-GUARD unacquirable externally"
+  "Module admin necessary for operation but has not been acquired:n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT"
+  (with-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-GUARD) "nope"))
+;; FUNDING / POOL are now MODULE-guarded (Pattern E) — there is no acquirable weak
+;; cap at all, so the old "FUNDING-GUARD unacquirable via with-capability" case is
+;; obsolete (and was insufficient: an earlier engine reached that route by another path). Assert
+;; the property that actually matters: the KDA accounts cannot be drained from tx
+;; code. The module guard falls through to acquireModuleAdmin -> admin keyset.
+(env-sigs [{ "key": "atk-key"
+        , "caps": [(coin.TRANSFER n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT "atk" 1.0)] }])
+(expect-failure "funding KDA cannot be moved without SPT module admin"
+  "Keyset failure (keys-all): [admin-ke...]"
+  (coin.transfer n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT "atk" 1.0))
+(env-sigs [{ "key": "atk-key"
+        , "caps": [(coin.TRANSFER n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT "atk" 1.0)] }])
+(expect-failure "award pool KDA cannot be moved without SPT module admin"
+  "Keyset failure (keys-all): [admin-ke...]"
+  (coin.transfer n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT "atk" 1.0))
+;; cannot move SPT out of the treasury (DEBIT needs the cap guard)
+(env-sigs [{ "key": "atk-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-ACCOUNT "atk" 100.0)] }])
+(expect-failure "treasury SPT cannot be transferred out"
+  "protocol accounts cannot send SPT; tranche SPT leaves only by vesting"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-ACCOUNT "atk" (read-keyset 'atk) 100.0))
+;; non-admin cannot withdraw KDA funding.
+;; WITHDRAW-FUNDING became @managed on amount (founder, ), so an unscoped
+;; signature can no longer reach the keyset check at all — it dies earlier on "Managed
+;; capability not installed", which would leave this negative passing for the WRONG
+;; reason. The attacker is therefore given the FULLY SCOPED signature (the strongest
+;; thing they could ever hold) so the test still pins what it names: even a correctly
+;; scoped non-admin signature is refused by GOV-KS.
+(env-sigs [{ "key": "atk-key"
+        , "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.WITHDRAW-FUNDING "atk" 1.0)] }])
+(expect-failure "non-admin funding withdraw blocked"
+  "Keyset failure (keys-all): [admin-ke...]"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.withdraw-funding "atk" 1.0))
+(commit-tx)
+
+;; ===========================================================================
+;; A-D1 — award double-claim + checkpoint theft + excluded claim. MUST be blocked.
+;; ===========================================================================
+;; the design record (a later change): fund first, then declare, in two transactions — `fund-awards` runs
+;; `install-capability`, which disables unscoped signatures for the rest of that tx.
+(begin-tx "A-D1 fund the pool (circ 5000, the round will cost 100)")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT 100.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" 100.0)
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 100.0)              ; alice 3000->60, bob 2000->40
+(commit-tx)
+;; ---- the design record (a later change): A ROUND NEEDS A SEALED RECORD DATE ----------------------
+;; Schedule one clear of the 12h runway (2 x MIN-RETRACT-LEAD), let it land, seal it.
+;; The seal runs with NO KEYS on purpose: `advance-snapshot` is permissionless, and a
+;; chain with no activity must still be sealable by anyone.
+(begin-tx "the design record: name the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (add-time (at 'block-time (chain-data)) 43202))
+(commit-tx)
+(env-chain-data
+  { "chain-id": (at 'chain-id (chain-data))
+, "block-time": (add-time (at 'block-time (chain-data)) 43203) })
+(begin-tx "the design record: seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "A-D1 declare the round")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "R1" 0.02 (time "2026-06-03T00:00:00Z"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })  ; a later amendment: cross effective-at
+(commit-tx)
+(begin-tx "A-D1 double-claim + excluded claim blocked")
+(expect "alice claims once" 60.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "alice"))
+(expect-failure "alice cannot double-claim"
+  "nothing to claim" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "alice"))
+(expect-failure "treasury (excluded) cannot claim"
+  "nothing to claim" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-ACCOUNT))
+(commit-tx)
+
+;; ===========================================================================
+;; A-C — award-claim DoS via coin-account-name squatting. FIX: claim pays to
+;; (create-principal guard), which a squatter cannot pre-occupy with a bad guard.
+;; ===========================================================================
+(begin-tx "A-C attacker squats coin account 'bob' with attacker guard")
+(env-data { "atkg": { "keys": ["atk-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "bob" 0.001)] }])
+(coin.transfer-create "sender00" "bob" (read-keyset 'atkg) 0.001)   ; coin 'bob' guard != SPT 'bob' guard
+(commit-tx)
+(begin-tx "A-C bob's award claim still succeeds (squat cannot block)")
+(env-data { "bob": { "keys": ["bob-key"], "pred": "keys-all" } })
+;; bob accrued 40 in A-D1 and has not claimed yet
+(expect "bob claim succeeds despite squatted coin name" 40.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "bob"))
+;; paid to the guard-bound principal, not the squatted vanity name
+(expect "award landed at bob's guard principal"
+  40.0 (coin.get-balance (create-principal (read-keyset 'bob))))
+(commit-tx)
+
+;; ===========================================================================
+;; A-B — ambiguous vote key (':' is legal in account names, incl. principals).
+;; FIX: vkey = (hash [voter chain proposal]) — structurally unambiguous. (Now on
+;; SPT after the the design record governance merge.)
+;; ===========================================================================
+(begin-tx "A-B vote key is unambiguous")
+(expect "distinct triples -> distinct keys (no colon collision)"
+  true
+  (!= (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vkey "bob:0" "0" "P1")
+      (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vkey "bob" "0" "0:P1")))
+(commit-tx)
+
+;; ===========================================================================
+;; A-V — LIVE-VOTE integrity (the design record): guard required to vote, excluded rejected,
+;; re-vote allowed (updates in place — NOT a double-count). MUST hold.
+;; ===========================================================================
+(begin-tx "A-V create proposal P1 on hub (chain 0)")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal "P1" "t" "d" (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) (add-time (time "2026-06-02T00:00:00Z") 1.0) 259200)
+(commit-tx)
+(begin-tx "A-V vote-for-others blocked; re-vote updates; excluded blocked")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })
+(env-keys ["atk-key"])  ;; attacker cannot vote AS alice (no alice guard)
+(expect-failure "cannot vote for another account"
+  "neither account guard nor registered vote key satisfied" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "alice" "P1" true))
+(env-keys ["alice-key"])
+(expect "alice votes yes 3000" "vote cast" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "alice" "P1" true))
+;; re-vote is ALLOWED and updates in place (no double count): flip to no.
+(expect "alice re-votes (flip) — updates in place" "vote cast" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "alice" "P1" false))
+(let ((r (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "P1")))
+  (expect "yes 0 after flip (no double count)" 0.0 (at 'yes r))
+  (expect "no 3000 after flip" 3000.0 (at 'no r)))
+(env-keys ["admin-key"])
+;; 🔴 RENAMED BY a later change. This was titled "excluded treasury cannot vote" and an internal review
+;; named it as coverage for `"excluded reserve cannot vote"`. It is not: it asserts the VOTE
+;; GUARD's message, which fires four checks earlier. MEASURED — with the exclusion enforce
+;; deleted this whole suite stayed at ZERO failures, while the real pins went red and a
+;; 55,000-SPT phantom vote landed. What it does assert is still worth keeping: an admin key is
+;; not the treasury's key. The exclusion backstop is pinned in smartpacts-governance.repl §EXCL
+;; (engine-independent) and a probe kept out of this repo L-2 (the attacker route).
+(expect-failure "the admin key cannot authenticate AS the treasury — the VOTE guard refuses"
+  "neither account guard nor registered vote key satisfied"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-ACCOUNT "P1" true))
+(commit-tx)
+
+;; ===========================================================================
+;; A-GRIEF — V-GRIEF-VOTE (HIGH): dust-transfer vote suppression. THE fix (the design record
+;; live-vote): a vote weighs CURRENT tokens; receiving dust never REMOVES tokens,
+;; so a dust to a voter cannot reduce their vote. (Pre-fix, last-received-time was
+;; reset by the dust and disqualified the whole balance.)
+;; ===========================================================================
+(begin-tx "A-GRIEF create P-GRIEF; bob votes his 2000")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal "P-GRIEF" "grief target" "d" (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) (add-time (time "2026-06-02T00:00:00Z") 1.0) 259200)
+(commit-tx)
+(begin-tx "A-GRIEF bob votes yes 2000")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T06:00:00Z") })
+(env-keys ["bob-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "bob" "P-GRIEF" true)
+(expect "bob's recorded vote is 2000" 2000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-weight "bob" "0" "P-GRIEF"))
+(commit-tx)
+
+;; ---- THE ATTACK: attacker dusts bob AFTER he voted. His vote must NOT change. ----
+(begin-tx "A-GRIEF fund attacker + dust bob after he voted")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" "atk" 0.000000000005)] }])
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create "alice" "atk" (read-keyset 'atk) 0.000000000005)
+(env-sigs [{ "key": "atk-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "atk" "bob" 0.000000000001)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "atk" "bob" 0.000000000001)
+(commit-tx)
+(begin-tx "A-GRIEF assert bob's vote is untouched by the dust (suppression defeated)")
+(expect "V-GRIEF-VOTE fixed (live-vote): dust did NOT reduce bob's recorded vote"
+  2000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-weight "bob" "0" "P-GRIEF"))
+(let ((r (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "P-GRIEF")))
+  (expect "tally yes still 2000 (dust cannot suppress)" 2000.0 (at 'yes r)))
+;; multi-dust: dust bob two more times; his vote still holds
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T02:00:00Z") })
+(env-sigs [{ "key": "atk-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "atk" "bob" 0.000000000001)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "atk" "bob" 0.000000000001)
+(expect "V-GRIEF multi-dust: bob's vote still 2000" 2000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-weight "bob" "0" "P-GRIEF"))
+(commit-tx)
+
+;; ===========================================================================
+;; A-D2 — CHAIN-LOCAL proposals (the design record): admin replicates the proposal to every
+;; chain (identical created-at/duration => identical close-at); a NON-admin still
+;; cannot create one anywhere; a replica whose close-at already passed is rejected
+;; (fail closed — a lagging chain can never be zero-reported into the aggregate).
+;; ===========================================================================
+(begin-tx "A-D2 replica creation: admin-only, any chain, never after close-at")
+(env-keys ["atk-key"])
+(env-chain-data { "chain-id": "5", "block-time": (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) })
+(expect-failure "non-admin cannot create a proposal on any chain (ADMIN-OPS)"
+  "Keyset failure (keys-any): [admin-ke...]"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal "P5" "t" "d" (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) (add-time (time "2026-06-02T00:00:00Z") 1.0) 259200))
+(env-keys ["admin-key"])
+;; the design record (as CORRECTED): the bound is "voting must open at least MIN-REVIEW-GAP after THIS
+;; announcement", measured against `curr-time` — the block time of this transaction, which no
+;; caller chooses. A month-old announcement is rejected because its `open-at` is already in the
+;; past, i.e. the notice is negative. Asserting the old `close-at already passed` string here
+;; would be testing a guard that no longer runs (the ordering trap DF-9a warns about).
+(expect-failure "backdated replica rejected by the review-gap bound (fail closed)"
+  "SPT voting must open at least the minimum review gap after this announcement"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal "P5" "t" "d" (add-time (time "2026-05-01T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) (add-time (time "2026-05-01T00:00:00Z") 1.0) 259200))
+;; The `close-at already passed` bound is still DOMINATED and unreachable: `open-at` is at
+;; least 48h in the future and close-at is open-at plus at least MIN-PROPOSAL-DURATION.
+;; Retained in the module as defence in depth, and deliberately with no negative test — a
+;; branch that cannot fail cannot be proven by one.
+
+;; (The backdating negative lives in its own transaction below, because it needs a clock
+;; LATER than this one — see "A-D2b".)
+
+;; THE BOUNDARY, both sides. The negatives above prove the bound exists; only these two prove
+;; WHERE it sits, and without them a `>=` -> `>` mutation survives the whole suite.
+(env-chain-data { "chain-id": "5", "block-time": (time "2026-06-02T01:00:00Z") })
+(env-keys ["admin-key"])
+;; EXACTLY MIN-REVIEW-GAP of notice, measured from this transaction: accepted
+(expect "exactly the minimum review gap of real notice is accepted" "proposal created"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal "P5in" "t" "d" (time "2026-06-02T01:00:00Z")
+    (add-time (time "2026-06-02T01:00:00Z") n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP) 259200))
+;; one second less: refused
+(expect-failure "one second under the minimum review gap is rejected"
+  "SPT voting must open at least the minimum review gap after this announcement"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal "P5edge" "t" "d" (time "2026-06-02T01:00:00Z")
+    (add-time (time "2026-06-02T01:00:00Z") (- n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP 1.0)) 259200))
+;; restore the clock the rest of this tx assumes — the boundary probes above advanced it by an
+;; hour, which would otherwise push the later replica tests past their own open-at
+(env-chain-data { "chain-id": "5", "block-time": (time "2026-06-02T00:00:00Z") })
+(expect-failure "created-at in the future rejected"
+  "created-at cannot be in the future"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal "P5" "t" "d" (time "2026-06-03T00:00:00Z") (add-time (time "2026-06-03T00:00:00Z") n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP) 259200))
+(expect "the design record: admin CAN announce a replica off the hub" "proposal created"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal "P5" "t" "d" (time "2026-06-02T00:00:00Z")
+    (add-time (time "2026-06-02T00:00:00Z") n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP) 259200))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })
+(commit-tx)
+
+;; ===========================================================================
+;; 🔴 A-D2b — THE BACKDATING ATTACK, WHICH THE FIRST VERSION OF the design record DID NOT STOP.
+;; MEASURED against that version: `created-at` is caller data bounded only from
+;; ABOVE (`<= now`), so backdating it bought 48h of PAPER notice with SIXTY SECONDS of real
+;; notice — every enforce satisfied, the gap sitting exactly on the MIN-REVIEW-GAP boundary,
+;; and a real vote cast one minute after the announcement landed.
+;;
+;; THIS IS a later change's BACKDATING DEFECT IN A NEW PLACE. There it made MIN-PROPOSAL-DURATION
+;; nominal rather than enforced; here it made MIN-REVIEW-GAP nominal. a later change had added a
+;; LOWER bound on created-at to stop it; the design record removed that bound — correctly, since
+;; close-at no longer derives from created-at — and the new constant inherited the weakness
+;; the same day. The fix measures notice from `curr-time`, which no caller can choose.
+;; ===========================================================================
+(begin-tx "A-D2b backdated created-at cannot buy paper notice")
+(env-chain-data { "chain-id": "5", "block-time": (time "2026-06-02T00:00:00Z") })
+(env-keys ["admin-key"])
+;; created-at = now - 48h + 60s (legal: <= now). open-at = now + 60s.
+;; open-at - created-at is EXACTLY MIN-REVIEW-GAP, so the naive data-only check passes.
+(expect-failure "48h of PAPER notice with 60 seconds of REAL notice is refused"
+  "SPT voting must open at least the minimum review gap after this announcement"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal "P5back" "t" "d"
+    (add-time (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) 60.0)
+    (add-time (time "2026-06-02T00:00:00Z") 60.0) 259200))
+(expect "and the backdated proposal was NOT recorded" false
+  (at 'exists (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-record "P5back")))
+(rollback-tx)
+
+;; ===========================================================================
+;; A-S — sale: cannot get SPT without paying; sub-cost purchase blocked;
+;; reserve cannot be drained without the launch cap. MUST hold.
+;; ===========================================================================
+;; (launch already initialized + resumed in setup.repl for test seeding — no re-init needed)
+(begin-tx "A-S sale drain attempts blocked")
+(env-data { "atk": { "keys": ["atk-key"], "pred": "keys-all" } })
+(env-keys ["atk-key"])
+;; cannot pull SPT from the LAUNCH reserve directly (needs LAUNCH-RESERVE-CAP)
+(env-sigs [{ "key": "atk-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-ACCOUNT "atk" 100.0)] }])
+(expect-failure "launch reserve SPT cannot be transferred without sale cap"
+  "Keyset failure (keys-all): [admin-ke...]"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-ACCOUNT "atk" (read-keyset 'atk) 100.0))
+;; sub-precision / zero purchase rejected
+(expect-failure "zero-amount buy rejected"
+  "SPT token amount must be positive" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "atk" (read-keyset 'atk) 0.0))
+(commit-tx)
+
+;; ===========================================================================
+;; A-R — rotate: principal account cannot drift to a non-matching guard (a finding).
+;; ===========================================================================
+(begin-tx "A-R principal rotate guard re-bind")
+(env-data { "kp":  { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+       , "kp2": { "keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], "pred": "keys-all" } })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-account "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" (read-keyset 'kp))
+(env-keys ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"])
+(expect-failure "principal cannot rotate to mismatched guard" "SPT: it is unsafe for principal"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.rotate "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" (read-keyset 'kp2)))
+(commit-tx)
+
+(print "smartpacts-attacks RED-TEAM suite PASSED")

@@ -1,0 +1,30 @@
+;; MUST-FAIL FIXTURE (an internal review, a finding — the fourth quarter of external audit a finding).
+;;
+;; Falsifies the GOV predicate enforce:
+;; (enforce (or (= (typeof-principal gp) "k:") (contains (drop 46 gp) [...builtins...]))
+;; "SPT spt-gov predicate must be a built-in")
+;; Measured unpinned: deleting it and regenerating the derived frozen fixtures left run-tests.sh
+;; printing ALL SUITES PASS and both recorded module hashes unchanged.
+;;
+;; 🔴 THE GOV HALF IS WORSE THAN THE OPS HALF THAT IS ALREADY PINNED. `keys-1` is the spelling
+;; the design record's own text asks for and Pact has no such predicate: it parses as a custom predicate
+;; naming a function that does not exist, `define-keyset` ACCEPTS it, both modules load, and it
+;; fails only at the first `enforce-keyset`. On the GOV tier that kills the founder/treasury/
+;; liquidity tranches, funding withdrawal and the freeze itself — permanently, on a module with
+;; no upgrade path, and unrepairable even holding all three keys, because redefining the keyset
+;; must first enforce the dead one.
+;;
+;; The OPS keyset is deliberately VALID here, so the abort can only be the gov predicate check.
+(load "setup.repl")
+(begin-tx "fresh deploy whose spt-gov predicate is keys-1")
+(env-data
+  { "ns": "n_48867b242317a0216a67f8c7ca26696b5878e0e3"
+, "upgrade": false
+, "spt-gov-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-gov"
+ ;; The payload under test.
+, "spt-gov": { "keys": ["admin-key"], "pred": "keys-1" }
+, "spt-ops-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-ops"
+, "spt-ops": { "keys": ["admin-key"], "pred": "keys-any" } })
+(env-keys ["admin-key"])
+(load "../modules/SPT.pact")
+(commit-tx)

@@ -1,0 +1,198 @@
+;; ===========================================================================
+;; a later change — remediation of an internal review (a later change F-A) — THE a finding CLASS.
+;;
+;; THE RULE THIS FILE DEFENDS:
+;; PATTERN E HOLDS ONLY FOR `coin.*` CALLS THIS MODULE DOES NOT ORIGINATE.
+;; The moment the module is the CALLER, every module-guarded account it can
+;; name is spendable by whoever chose the argument.
+;;
+;; F-A, measured on the pre-fix tree with `env-keys []` / `env-sigs []`:
+;; POOL 100.0 -> 0.0, FUNDING +100.0, via SPT.receive-funding
+;; with `from` = POOL-ACCOUNT. No signature, no compose-capability, no fork
+;; involvement — so the Chainweb32 deploy gate does NOT contain it, and after
+;; freeze it would have been unfixable.
+;;
+;; 🔴 WHY THIS FILE COVERS A SET AND NOT A FUNCTION. F-A exists *because*
+;; the design record found this exact mechanism inside `debit` and closed it there;
+;; `receive-funding` was the sibling entry point the fix never reached. Closing
+;; only `receive-funding` would repeat the defect being remediated. So every
+;; row of the a finding enumeration that is reachable gets its own negative here,
+;; each pinning the EXACT refusal string (3-arg form throughout — a 2-arg form
+;; matches any failure and 82 of them once asserted nothing).
+;;
+;; Run: cd pact/test && pact smartpacts-capability-guard-class.repl
+;; ===========================================================================
+(load "setup.repl")
+
+(begin-tx "seed: real KDA in the pool and the funding account")
+(env-keys ["admin-key"])
+(env-sigs [{ "key": "admin-key"
+        , "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT 100.0)] }])
+(coin.transfer-create "sender00"
+  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT
+  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-G 100.0)
+(expect "pool holds 100 KDA" 100.0
+  (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; C-1a — THE CRITICAL ITSELF. An unsigned stranger cannot name POOL-ACCOUNT as
+;; the SOURCE of a funding deposit. This is the assertion that goes RED if the
+;; `protocol-account?` reject in receive-funding is reverted.
+;;
+;; State-unchanged is asserted in its OWN rollback-tx: `expect-failure` leaks
+;; writes through `commit-tx` (measured in this repo — an oversell negative once
+;; moved 12,500 KDA and survived a line reading "(tx rolled back)").
+;; ---------------------------------------------------------------------------
+(begin-tx "C-1a POOL cannot be the source of a funding deposit")
+(env-keys [])
+(env-sigs [])
+(install-capability (coin.TRANSFER
+  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT
+  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT 100.0))
+(expect-failure "C-1a: an unsigned stranger cannot drain the pool through receive-funding"
+  "SPT protocol accounts cannot be the source of a funding deposit"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT 100.0))
+(expect "C-1a: the pool is untouched" 100.0
+  (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; C-1b — THE SET, not the instance. `protocol-account?` covers five accounts,
+;; and it is deliberately NOT narrowed to FUNDING+POOL: TREASURY / FOUNDER /
+;; LIQUIDITY are principals of module guards too, so a coin row at any of those
+;; addresses is equally drainable through this same call. One negative each.
+;; ---------------------------------------------------------------------------
+(begin-tx "C-1b FUNDING itself cannot be the source")
+(env-keys [])
+(env-sigs [])
+(expect-failure "C-1b: FUNDING-ACCOUNT is refused as a source"
+  "SPT protocol accounts cannot be the source of a funding deposit"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT 1.0))
+(rollback-tx)
+
+(begin-tx "C-1b TREASURY cannot be the source")
+(env-keys [])
+(env-sigs [])
+(expect-failure "C-1b: TREASURY-ACCOUNT is refused as a source"
+  "SPT protocol accounts cannot be the source of a funding deposit"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-ACCOUNT 1.0))
+(rollback-tx)
+
+(begin-tx "C-1b FOUNDER cannot be the source")
+(env-keys [])
+(env-sigs [])
+(expect-failure "C-1b: FOUNDER-ACCOUNT is refused as a source"
+  "SPT protocol accounts cannot be the source of a funding deposit"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-ACCOUNT 1.0))
+(rollback-tx)
+
+(begin-tx "C-1b LIQUIDITY cannot be the source")
+(env-keys [])
+(env-sigs [])
+(expect-failure "C-1b: LIQUIDITY-ACCOUNT is refused as a source"
+  "SPT protocol accounts cannot be the source of a funding deposit"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.LIQUIDITY-ACCOUNT 1.0))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; C-1c — THE POSITIVE CONTROL. Without this, every refusal above is equally
+;; consistent with "receive-funding is broken for everybody". An ordinary payer
+;; must still be able to route funding in.
+;; ---------------------------------------------------------------------------
+(begin-tx "C-1c CONTROL an ordinary payer can still deposit funding")
+(env-data { "donor": { "keys": ["donor-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key"
+        , "caps": [(coin.TRANSFER "sender00" "donor" 5.0)] }])
+(coin.transfer-create "sender00" "donor" (read-keyset 'donor) 5.0)
+(commit-tx)
+
+(begin-tx "C-1c CONTROL the deposit lands")
+(env-data { "donor": { "keys": ["donor-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "donor-key"
+        , "caps": [(coin.TRANSFER "donor" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT 5.0)] }])
+(let ((before (try 0.0 (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT))))
+  (expect "C-1c: an ordinary payer's funding deposit still succeeds"
+    "funding received"
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "donor" 5.0))
+  (expect "C-1c: and the funding account actually grew by the deposit" 5.0
+    (- (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT) before)))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; C-1d — THE SIBLING MODULE. `SPT-launch.buy` is the same class:
+;; `buyer` is a caller-chosen SENDER of a coin call this module originates.
+;; Before the fix it was blocked only by coin's own `sender and receiver must
+;; differ`, in two different places, by coincidence — and for buyer =
+;; LAUNCH-RESERVE that save fires only AFTER the KDA leg has already debited the
+;; reserve. One new module-guarded account in SPT-launch would make it live.
+;; ---------------------------------------------------------------------------
+(begin-tx "C-1d activate the sale")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5)
+(commit-tx)
+(begin-tx "C-1d resume")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(commit-tx)
+
+(begin-tx "C-1d put KDA in the launch reserve — a foreseeable misdirected deposit")
+(env-sigs [{ "key": "admin-key"
+        , "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-ACCOUNT 50.0)] }])
+(coin.transfer-create "sender00"
+  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-ACCOUNT
+  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G 50.0)
+(commit-tx)
+
+(begin-tx "C-1d the launch reserve cannot buy from itself")
+(env-keys [])
+(env-sigs [])
+(install-capability (coin.TRANSFER
+  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-ACCOUNT
+  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.SALES-PROCEEDS-ACCOUNT 5.0))
+(expect-failure "C-1d: LAUNCH-RESERVE is refused as a buyer BY THIS MODULE, not by coincidence"
+  "SPT sale accounts cannot buy tokens"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-ACCOUNT
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G 10.0))
+(expect "C-1d: the reserve's KDA is untouched — the KDA leg never ran" 50.0
+  (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-ACCOUNT))
+(rollback-tx)
+
+(begin-tx "C-1d sales proceeds cannot buy either")
+(env-keys [])
+(env-sigs [])
+(expect-failure "C-1d: SALES-PROCEEDS is refused as a buyer BY THIS MODULE"
+  "SPT sale accounts cannot buy tokens"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.SALES-PROCEEDS-ACCOUNT
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.SALES-PROCEEDS-G 10.0))
+(rollback-tx)
+
+;; C-1d control: tokens' OWN protocol accounts are not rejected here, and do not
+;; need to be — at the KDA leg only SPT-launch is on the stack, so a
+;; SPT module guard is NOT satisfied. Asserting the actual refusal
+;; documents WHY the launch-local reject is scoped to launch's two accounts.
+(begin-tx "C-1d control: tokens' POOL as buyer fails on the GUARD, not on our check")
+(env-keys [])
+(env-sigs [])
+(install-capability (coin.TRANSFER
+  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT
+  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.SALES-PROCEEDS-ACCOUNT 5.0))
+;; Measured refusal: the tokens module guard is not satisfied here, so it falls through to
+;; acquireModuleAdmin(SPT) -> that module's admin keyset -> "Keyset failure".
+;; That fall-through IS the mechanism, and pinning it is what makes this a control rather
+;; than a restatement of our own check.
+(expect-failure "C-1d control: a token module guard is NOT satisfied from inside SPT-launch"
+  "Keyset failure"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-G 10.0))
+(rollback-tx)
+
+(print "smartpacts-capability-guard-class: a finding class closed in BOTH modules; controls green.")

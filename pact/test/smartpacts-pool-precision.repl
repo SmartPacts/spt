@@ -1,0 +1,97 @@
+;; ===========================================================================
+;; smartpacts-pool-precision — THE KDA-PRECISION FLOOR IN `pool-surplus`, PINNED.
+;;
+;; Cold an internal review (F-3b) found the floor documented as load-bearing and pinned by NOTHING:
+;; removing `(floor … (coin.precision))` left the entire suite green. The reason is a property
+;; of the SCENARIOS, not the code — every other fixture picks balances and rates that land on
+;; 12 decimals or fewer, so the floored and unfloored values are equal and no assertion can
+;; tell them apart. This file exists to be the one place where they differ.
+;;
+;; WHAT THE FLOOR IS FOR, in the module's own words: "this is the exact ceiling
+;; recover-pool-surplus accepts and the value can be passed straight back to it". The liability
+;; accumulates rate x supply products, so the subtraction can land well past KDA's 12 decimals;
+;; without the floor the obvious call `(recover-pool-surplus (pool-surplus))` ABORTS on
+;; precision, and the operator cannot use the number the module just told them to use.
+;;
+;; THE ONE STATE THAT SEPARATES THEM: a 12-decimal RATE against a FRACTIONAL float, with the
+;; pool deliberately over-funded so a surplus exists at all.
+;; rate 0.000000000001 x circ 3000.5 = declared-liability 0.0000000030005 (13 dp)
+;; pool 1.0 - that = 0.9999999969995 (13 dp)
+;; pool-surplus = 0.999999996999 (12 dp, floored)
+;; MEASURED both directions: with the floor the round trip below succeeds; with the floor
+;; removed it fails on precision at that exact assertion.
+;; ===========================================================================
+(load "setup.repl")
+
+(begin-tx "P-1 seed a FRACTIONAL float — 3000.5, not a round number")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 5000.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 5000.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 2000.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "alice" (read-keyset 'alice) 3000.5)
+(expect "P-1 the float is fractional, which is the whole point" 3000.5
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+(commit-tx)
+
+(begin-tx "P-2 seal a record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot (time "2026-06-02T00:00:00Z"))
+(commit-tx)
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:01Z") })
+(begin-tx "P-3 advance (permissionless)")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "P-4 OVER-fund by 1 KDA so a surplus exists")
+(env-keys ["admin-key"])
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT 1.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" 1.0)
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 1.0)
+(commit-tx)
+
+(begin-tx "P-5 declare a round at a TWELVE-DECIMAL rate")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "R1" 0.000000000001 (time "2026-06-03T00:00:00Z"))
+(commit-tx)
+
+(begin-tx "P-6 the liability really does exceed KDA precision")
+;; 13 decimals: 0.000000000001 x 3000.5. If this ever reads a 12-decimal number the scenario has
+;; drifted and the assertions below stop being able to see the floor — treat that as a defect
+;; in this file, not a pass.
+(expect "P-6 declared-liability carries 13 decimals" 0.0000000030005
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declared-liability))
+(expect "P-6 the UNFLOORED difference carries them too" 0.9999999969995
+  (- (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declared-liability)))
+(expect "🔴 P-6 pool-surplus is FLOORED to KDA precision — 12 decimals, not 13" 0.999999996999
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pool-surplus))
+(commit-tx)
+
+(begin-tx "P-7 🔴 THE ROUND TRIP — the number the module tells you to use must be usable")
+;; This is the assertion that dies when the floor is removed: recover-pool-surplus is handed
+;; pool-surplus's OWN output and must accept it. Unfloored, it receives a 13-decimal amount and
+;; aborts on KDA precision — the operator is told a number the contract then refuses.
+(env-keys ["admin-key"])
+(env-sigs [{ "key": "admin-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.RECOVER-SURPLUS (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pool-surplus))] }])
+(expect "🔴 P-7 recover-pool-surplus accepts pool-surplus's own output" "pool surplus recovered"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.recover-pool-surplus (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pool-surplus)))
+(commit-tx)
+
+(begin-tx "P-8 and the floor errs the SAFE way — it leaves more in the pool, never less")
+;; 1.0 - 0.999999996999 = 0.000000003001, which is 5e-13 MORE than the 0.0000000030005 actually
+;; owed. That residue is the floored-off remainder, and it stays with the holders' pool rather
+;; than leaving with the recovery. The direction matters: `floor` on a number that bounds what
+;; may LEAVE always under-recovers, so a rounding error can strand dust in the pool but can
+;; never hand out KDA that is owed to someone.
+(expect "P-8 the pool retains the liability plus the floored-off remainder" 0.000000003001
+  (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+(expect "P-8 and that is strictly MORE than the debt, never less" true
+  (>= (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT)
+      (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declared-liability)))
+(commit-tx)
+
+(print "smartpacts-pool-precision: OK")

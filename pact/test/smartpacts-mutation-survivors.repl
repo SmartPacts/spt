@@ -1,0 +1,111 @@
+;; ===========================================================================
+;; a later change a finding — the SECURITY-RELEVANT mutation survivors, covered.
+;;
+;; A full sweep mutated all 124 `enforce*` / `require-capability` sites in both
+;; modules to `true`, one at a time, running the suite for each: 26 survived
+;; (21%). Three were closed by a finding. Of the rest, most are provably UNREACHABLE,
+;; documented-DELIBERATE, or SUBSUMED by another check (proven by DOUBLE
+;; mutation, not by inspection — one-at-a-time mutation over-reports, because
+;; redundant guards mask each other).
+;;
+;; These are the ones that were none of those: real checks with zero coverage.
+;;
+;; 🔴 THE HEADLINE, AND IT NEEDED A DOUBLE MUTATION TO SEE. The two "SPT funding
+;; amount must be positive" bounds mask each other's absence, so a single-site
+;; mutation proves nothing. Neutering BOTH at once and running every one of the
+;; 21 funding-touching suites: ALL GREEN. Verified independently on this tree.
+;; Money is not at risk — coin's own "transfer amount must be positive" catches
+;; a non-positive amount underneath — so this is defence in depth, not a live
+;; hole. But SPT's own bound had no test, and it FREEZES.
+;;
+;; Note the pins below are the SPT-prefixed strings on purpose: they are
+;; deliberately distinct from coin's, and pinning coin's message would pass
+;; while SPT's own check was gone (the a later change rule, in its exact original form).
+;;
+;; Run: cd pact/test && pact smartpacts-mutation-survivors.repl
+;; ===========================================================================
+(load "setup.repl")
+
+;; ---------------------------------------------------------------------------
+;; #104 / #106 — the funding amount bounds, in BOTH functions.
+;; ---------------------------------------------------------------------------
+(begin-tx "a finding #104 receive-funding rejects a non-positive amount")
+(env-data { "donor": { "keys": ["donor-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "donor" 10.0)] }])
+(coin.transfer-create "sender00" "donor" (read-keyset 'donor) 10.0)
+(commit-tx)
+
+(begin-tx "a finding #104 zero and negative are both refused BY SPT")
+(env-keys ["donor-key"])
+(expect-failure "a finding #104: receive-funding refuses a ZERO amount, with SPT's own message"
+  "SPT funding amount must be positive"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "donor" 0.0))
+(expect-failure "a finding #104: and a NEGATIVE amount"
+  "SPT funding amount must be positive"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "donor" -5.0))
+(rollback-tx)
+
+;; 🔴 a later change (founder ): WITHDRAW-FUNDING became `@managed` on `amount`, so an
+;; Un_48867b242317a0216a67f8c7ca26696b5878e0e3COPED signature can no longer drive `withdraw-funding` at all. These two negatives were
+;; signed with (env-keys ["admin-key"]) and, measured on this tree, began failing with
+;; "Managed capability not installed" instead of SPT's own bound — passing for the WRONG
+;; reason, which is exactly the defect class this suite exists to catch. They are now signed
+;; SCOPED, with the capability arguments matching the call, so each one reaches the bound it
+;; names. One tx per amount: the install identity is (to), so two amounts for "sender00"
+;; cannot coexist in one signer set.
+(begin-tx "a finding #106 withdraw-funding rejects a ZERO amount")
+(env-sigs [{ "key": "admin-key"
+        , "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.WITHDRAW-FUNDING "sender00" 0.0)] }])
+(expect-failure "a finding #106: withdraw-funding refuses a ZERO amount, with SPT's own message"
+  "SPT funding amount must be positive"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.withdraw-funding "sender00" 0.0))
+(rollback-tx)
+
+(begin-tx "a finding #106 withdraw-funding rejects a NEGATIVE amount")
+(env-sigs [{ "key": "admin-key"
+        , "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.WITHDRAW-FUNDING "sender00" -5.0)] }])
+(expect-failure "a finding #106: and a NEGATIVE amount"
+  "SPT funding amount must be positive"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.withdraw-funding "sender00" -5.0))
+(rollback-tx)
+
+;; CONTROL — without this, the two refusals above are equally consistent with
+;; "funding is broken". A positive amount must still work on both sides.
+(begin-tx "a finding CONTROL a positive funding deposit still succeeds")
+(env-sigs [{ "key": "donor-key"
+        , "caps": [(coin.TRANSFER "donor" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT 10.0)] }])
+(expect "a finding CONTROL: a positive deposit is accepted" "funding received"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "donor" 10.0))
+(commit-tx)
+
+(begin-tx "a finding CONTROL a positive withdrawal still succeeds")
+;; a later change: scoped, and the cap arguments are the call's own — an unscoped admin key is no
+;; longer sufficient for this path.
+(env-sigs [{ "key": "admin-key"
+        , "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.WITHDRAW-FUNDING "sender00" 1.0)] }])
+(expect "a finding CONTROL: a positive withdrawal is accepted" "funding withdrawn"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.withdraw-funding "sender00" 1.0))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; #50 — clear-vote-key's protocol-account reject. It emits the public
+;; VOTE-KEY-CLEARED event, so a forged one is a false on-chain signal about a
+;; protocol account. Its set-vote-key twin (:1388) is covered; this one was not
+;; — cover-the-instance-not-the-set, again.
+;; ---------------------------------------------------------------------------
+(begin-tx "a finding #50 a protocol account cannot clear a vote key")
+(env-keys ["admin-key"])
+(expect-failure "a finding #50: clear-vote-key refuses a protocol account"
+  "protocol accounts cannot register a vote key"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.clear-vote-key
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-ACCOUNT))
+(expect-failure "a finding #50: and the FUNDING account too — the set, not one member"
+  "protocol accounts cannot register a vote key"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.clear-vote-key
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT))
+(rollback-tx)
+
+(print "smartpacts-mutation-survivors: the security-relevant survivors are covered.")
+
+;; #80 / #81 (enforce-beneficiary) need a pre-init module, so they live in
+;; smartpacts-init-beneficiary-bounds.repl, which loads setup-noinit.

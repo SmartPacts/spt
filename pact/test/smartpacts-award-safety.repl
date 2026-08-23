@@ -1,0 +1,234 @@
+;; ===========================================================================
+;; AWARD SAFETY — three properties that were once wrong and are now enforced.
+;; E1 an account name is validated on the credit path, not only on create-account
+;; E2 `try` catches a MISSING COIN ROW (a missing TABLE is a different question,
+;; and `try` does NOT catch that one)
+;; E3 a fat-fingered award rate is refused ON THE MONEY, and every award path
+;; still works afterwards -- funding, recovery and claiming included
+;;
+;; Each assertion names the behaviour that must hold, so this file FAILS against code
+;; that does not have it. The pre-fix values are recorded inline so the before/after is
+;; readable without re-running an older tree.
+;; ===========================================================================
+(load "setup.repl")
+
+(begin-tx "seed float via the launch")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1250.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1250.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 1250.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "alice" (read-keyset 'alice) 2500.0)
+(commit-tx)
+
+;; ---------------- E1 ----------------
+;; MEASURED PRE-FIX: create-account correctly rejected "ab", and then
+;; transfer-create "alice" "ab" -> holder "ab" created with balance 1.0
+;; transfer-create "alice" "" -> holder "" (EMPTY NAME) created with balance 1.0
+;; POST-FIX both are rejected by validate-account inside credit-plan.
+;; Each rejection sits in its own ROLLED-BACK tx: transfer-create debits before the receiver
+;; name is validated, and the REPL's expect-failure leaves that debit behind (measured — it
+;; silently moved alice 2500.0 -> 2496.0 in an earlier draft of the a later change suite).
+(begin-tx "E1 control — create-account still rejects a 2-char name")
+(env-data { "sq": { "keys": ["sq-key"], "pred": "keys-all" } })
+(expect-failure "create-account rejects a 2-char name"
+  "account name length 3..256"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-account "ab" (read-keyset 'sq)))
+(rollback-tx)
+
+(begin-tx "E1 — transfer-create can no longer smuggle a 2-char holder in")
+(env-data { "sq": { "keys": ["sq-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" "ab" 1.0)] }])
+(expect-failure "the credit path rejects it too"
+  "account name length 3..256"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create "alice" "ab" (read-keyset 'sq) 1.0))
+(rollback-tx)
+
+(begin-tx "E1 — nor an EMPTY-STRING holder")
+(env-data { "sq": { "keys": ["sq-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" "" 1.0)] }])
+ ;; the design record MOVED WHICH CHECK FIRES HERE, and the test follows the code rather than the
+ ;; other way round. The restored `CREDIT` capability carries coin's own body —
+ ;; (enforce (!= receiver "") …) — and the cap is acquired BEFORE `credit` runs, so the
+ ;; empty name is now refused one layer earlier than `validate-account`. Both still refuse
+ ;; it; only the message changed. `validate-account`'s length bound keeps its own
+ ;; falsifying negative through the 2-character "ab" case above/below, which the cap body
+ ;; does NOT catch — so nothing lost coverage in the move.
+(expect-failure "the empty account name is rejected"
+  "SPT credit receiver must not be empty"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create "alice" "" (read-keyset 'sq) 1.0))
+(rollback-tx)
+
+(begin-tx "E1 — and neither holder exists; the ledger is exactly as it was")
+(expect-failure "no \"ab\" holder"
+  "No value found in table n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT_accounts for key: ab"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "ab"))
+(expect-failure "no empty-name holder"
+  "No value found in table n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT_accounts for key: "
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance ""))
+(expect "alice still holds all 2500" 2500.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice"))
+(expect "circulating supply unchanged" 2500.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+(commit-tx)
+
+;; ---------------- E2 (control, not a fix) ----------------
+;; The reviewer's sentinel was named "TRY-DID-NOT-CATCH", which is backwards: `try` returns
+;; the DEFAULT precisely when it DOES catch, so the original print read as evidence of the
+;; opposite of what it measured. Renamed and asserted.
+;; This is what makes fund-awards / pool-surplus safe on a chain whose pool coin account
+;; does not exist yet. It is the MISSING ROW case; a missing TABLE is a different question
+;; and `try` does NOT catch that one.
+(begin-tx "E2 — try DOES catch a missing coin ROW")
+(expect "try returns its default for a non-existent coin account" "CAUGHT-AS-EXPECTED"
+  (try "CAUGHT-AS-EXPECTED" (coin.get-balance "no-such-account-xyz")))
+(commit-tx)
+
+;; ---------------- E3 ----------------
+;; MEASURED PRE-FIX with ONE admin tx, `declare-round "R1" 1000.0`:
+;; rpt 1000.0 · liability 2,500,000.0 · pool-surplus -2,499,900.0
+;; fund-awards -> "pool underfunded" (permanently)
+;; recover-pool-surplus -> "exceeds the ... unowed surplus", even for 1e-12
+;; claim-awards -> "Insufficient funds"
+;; 100 KDA stranded in the pool with no exit, on all 20 chains.
+;; POST-FIX the declaration itself is refused and every one of those paths still works.
+(begin-tx "E3 — admin routes funding in")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT 100.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" 100.0)
+(commit-tx)
+
+(begin-tx "E3 — fund the pool (one admin op per tx: see smartpacts-pool-surplus.repl)")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 100.0)
+(expect "pool holds 100 KDA before the bad round" 100.0
+  (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+(commit-tx)
+
+;; 🔴 The the design record seal moves block-time forward 12h, so it runs from an EARLIER clock:
+;; every date below is asserted against this suite's own calendar.
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+;; ---- the design record: A ROUND NEEDS A SEALED RECORD DATE ----------------------
+;; Schedule one clear of the 12h runway (2 x MIN-RETRACT-LEAD), let it land, seal it.
+;; The seal runs with NO KEYS on purpose: `advance-snapshot` is permissionless, and a
+;; chain with no activity must still be sealable by anyone.
+(begin-tx "the design record: name the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (add-time (at 'block-time (chain-data)) 43202))
+(commit-tx)
+(env-chain-data
+  { "chain-id": (at 'chain-id (chain-data))
+, "block-time": (add-time (at 'block-time (chain-data)) 43203) })
+(begin-tx "the design record: seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "E3 — the fat-fingered declare-round is REJECTED")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(env-keys ["admin-key"])
+;; 🔴 THE MECHANISM MOVED AT a later change; THE PROPERTY DID NOT. This asserted the rate cap
+;; refused a 1000.0 fat finger. a later amendment deleted that cap after measuring its named harm
+;; unreproducible — so the assertion now names the refusal that ACTUALLY fires: the design record's
+;; exact pool bar. "One admin tx can no longer destroy the award subsystem" is still true and
+;; still falsifiable; it is enforced ON THE MONEY, at the point the mistake happens, which is
+;; the principle of refusing at the point of the mistake and strictly stronger than the cap's bounded loss .
+(expect-failure "one admin tx can no longer destroy the award subsystem — refused on the MONEY"
+  "SPT award pool does not cover the liability this round declares"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round
+    "R1" 1000.0 (time "2026-06-03T00:00:00Z")))
+(commit-tx)
+
+(begin-tx "E3 — and the three paths that were once dead are all alive")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-04T00:00:00Z") })
+(expect "no round was recorded" 0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-round-count))
+(expect "rpt is still 0.0 (was 1000.0)" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+(expect "liability is still 0.0 (was 2,500,000.0)" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))
+(expect "pool-surplus is the whole pool, +100.0 (was -2,499,900.0)" 100.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pool-surplus))
+(commit-tx)
+
+;; ONE recovery per tx — each one installs a managed coin.TRANSFER, and after that a
+;; mid-tx (env-keys ...) no longer resets the signer set, so a second admin call in the
+;; same tx fails with a bare "Keyset failure" that looks like a module bug and is not.
+(begin-tx "E3a — the 1e-12 that was once unrecoverable")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-04T00:00:00Z") })
+;; 🔴 a later change (founder decision): RECOVER-SURPLUS is `@managed` on `amount`, so the
+;; signature must NAME it with the exact amount recovered; (env-keys ["admin-key"]) no
+;; longer drives this path at all.
+(env-sigs [{ "key": "admin-key"
+       , "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.RECOVER-SURPLUS 0.000000000001)] }])
+(expect "1e-12 now succeeds (the smallest recoverable amount)" "pool surplus recovered"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.recover-pool-surplus 0.000000000001))
+(commit-tx)
+
+(begin-tx "E3a — and the whole remaining balance comes back too")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-04T00:00:00Z") })
+;; a later change: scoped, amount matching the call.
+(env-sigs [{ "key": "admin-key"
+       , "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.RECOVER-SURPLUS 99.999999999999)] }])
+(expect "the rest of the pool is recoverable" "pool surplus recovered"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.recover-pool-surplus 99.999999999999))
+(expect "the pool is empty — nothing is stranded" 0.0
+  (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+(expect "and the KDA is back in funding, not lost" 100.0
+  (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT))
+(commit-tx)
+
+;; the design record: the pool was just drained to zero, so the sane round has to be paid for
+;; before it can be promised — 0.01 x 2,500 float = 25 KDA. This does not weaken E3's point:
+;; the finding was that a bad round BRICKED the subsystem, and the proof is that after the
+;; refusal every path still works, funding included.
+(begin-tx "E3b — provision the pool for the sane round (the design record)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-04T00:00:00Z") })
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 25.0)
+(commit-tx)
+
+;; 🔴 The the design record seal moves block-time forward 12h, so it runs from an EARLIER clock:
+;; every date below is asserted against this suite's own calendar.
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-04T00:00:00Z") })
+;; ---- the design record: A ROUND NEEDS A SEALED RECORD DATE ----------------------
+;; Schedule one clear of the 12h runway (2 x MIN-RETRACT-LEAD), let it land, seal it.
+;; The seal runs with NO KEYS on purpose: `advance-snapshot` is permissionless, and a
+;; chain with no activity must still be sealable by anyone.
+(begin-tx "the design record: name the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (add-time (at 'block-time (chain-data)) 43202))
+(commit-tx)
+(env-chain-data
+  { "chain-id": (at 'chain-id (chain-data))
+, "block-time": (add-time (at 'block-time (chain-data)) 43203) })
+(begin-tx "the design record: seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "E3b — a SANE round then declares")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-04T00:00:00Z") })
+(env-keys ["admin-key"])
+(expect "a sane rate is accepted" "round declared"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round
+    "R2" 0.01 (time "2026-06-05T00:00:00Z")))
+(commit-tx)
+
+(begin-tx "E3b — top it up")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-06T00:00:00Z") })
+(env-keys ["admin-key"])
+(expect "liability is 0.01 * 2500" 25.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))
+(expect "fund-awards is not bricked" "awards funded"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 25.0))
+(commit-tx)
+
+(begin-tx "E3b — and the holder is actually paid")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-06T00:00:00Z") })
+(expect "claim-awards is not bricked" 25.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "alice"))
+(commit-tx)
+
+(print "a probe kept out of this repo PASSED (both properties remediated)")

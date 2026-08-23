@@ -1,0 +1,111 @@
+;; ===========================================================================
+;; the design record — founder allocations accept ANY address; the founder owns the guard.
+;;
+;; 🔴 ITS OWN WORLD, DELIBERATELY. Both tests this ADR names need a chain where ONE founder has
+;; created their account and ANOTHER has not, and `init-supply` is one-shot — so no suite that
+;; has already initialized can host them. `setup-noinit.repl` stops before init-supply, which is
+;; the only starting point that lets this file run the ceremony itself.
+;; ===========================================================================
+(load "setup-noinit.repl")
+
+;; ===========================================================================
+;; the design record — THE FAILURE MODE INVERTS. Both tests this ADR names, in one world.
+;;
+;; 🔴 WHAT THE OLD RULE ACTUALLY DID. Founder rows were single-key `k:` only, on the argument
+;; that a `k:` guard is fully determined by its address so an unmeetable-threshold keyset was
+;; unrepresentable. MEASURED (the design record): a plain `k:` address whose key NOBODY HOLDS — a typo, the
+;; likelier real mistake — was accepted, paid out by the permissionless `release-tranche`, and
+;; those tokens are unspendable forever. IDENTICAL damage to the `w:` shape the rule forbade. It
+;; closed one of two identical entrances while banning every multisig founder, permanently.
+;;
+;; What replaces it is not a better filter. It is a different FAILURE MODE: the release credits
+;; an account that must ALREADY EXIST, so a wrong address REFUSES instead of paying tokens away.
+;; ===========================================================================
+(begin-tx "the design record: two founders — one has created their account, one has not")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+(env-data
+  { "solo": { "keys": ["c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"], "pred": "keys-all" }
+ ;; A GENUINE 2-of-3 multisig — the shape the old rule made impossible forever.
+, "msig": { "keys": ["d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4"
+                   ,"e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5"
+                   ,"f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6"]
+         , "pred": "keys-2" } })
+(env-keys ["admin-key"])
+(expect "the design record: a multisig founder address is ACCEPTED by the ceremony" "supply initialized"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init-supply
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G
+    [ { "account": (create-principal (read-keyset 'msig)), "amount": 6000.0 }
+      { "account": (create-principal (read-keyset 'solo)), "amount": 4000.0 } ]))
+;; 🔴 ONLY THE MULTISIG FOUNDER CREATES THEIR ACCOUNT. The solo founder does not — they are the
+;; "wrong or not-yet-created address" case, and the whole point is what happens to their tokens.
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-account
+  (create-principal (read-keyset 'msig)) (read-keyset 'msig))
+(commit-tx)
+
+(begin-tx "the design record NEGATIVE: the missing account's tranche WAITS — it does not strand")
+(env-chain-data { "chain-id": "0", "block-time": (time "2030-06-02T00:00:00Z") })   ; well past the 365d cliff
+(env-keys [])
+;; The refusal is RETRYABLE and says so: nothing is consumed, nothing is written, and the
+;; founder can still act. Contrast the old behaviour, which PAID the tokens to an address
+;; nobody controlled — irreversibly, on a module that freezes.
+(expect-failure "the design record: a release to a not-yet-created account is REFUSED, retryably"
+  "SPT founder account does not exist yet"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.release-tranche
+    (+ "founder:" (create-principal (read-keyset 'solo)))))
+;; 🔴 AND NOTHING IS STRANDED — this is the half a refusal alone does not prove. The tokens are
+;; still in the FOUNDER reserve, which `excluded?` keeps OUT of the float, so they accrue no
+;; awards and are owed to nobody while they wait.
+(expect "the waiting tokens are still in the founder reserve" 10000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-ACCOUNT))
+(expect "the reserve is excluded, so the waiting tokens are outside the float" true
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.excluded?
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-ACCOUNT))
+;; RETRYABLE, PROVEN: create the account and the SAME call now succeeds. Without this line the
+;; test above would pass just as well against a permanently bricked release.
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-account
+  (create-principal (read-keyset 'solo)) (read-keyset 'solo))
+(expect "the design record: the SAME release succeeds once the founder creates the account" 4000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.release-tranche
+    (+ "founder:" (create-principal (read-keyset 'solo)))))
+(rollback-tx)
+
+(begin-tx "the design record POSITIVE: a 2-of-3 multisig founder RECEIVES and SPENDS its tranche")
+(env-chain-data { "chain-id": "0", "block-time": (time "2030-06-02T00:00:00Z") })
+(env-keys [])
+;; RECEIVES — permissionless, so no founder signature is needed to be paid.
+(expect "the multisig founder is paid its full tranche" 6000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.release-tranche
+    (+ "founder:" (create-principal (read-keyset 'msig)))))
+(expect "and the tokens are in the multisig account" 6000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance
+    (create-principal (read-keyset 'msig))))
+;; 🔴 AND SPENDS — receiving proves nothing on its own. The old rule's whole justification was
+;; that a `w:` founder might be UNABLE TO SPEND (an unmeetable threshold), so a test that stops
+;; at the balance would leave exactly the feared case unmeasured.
+;; TWO of the three keys sign, which is what keys-2 requires.
+;; 🔴 env-data REPLACES the whole object — re-state `msig` alongside `dest` or the caps above,
+;; which call (create-principal (read-keyset 'msig)), abort with "read-keyset failure". Measured.
+(env-data
+  { "msig": { "keys": ["d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4"
+                   ,"e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5"
+                   ,"f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6"]
+         , "pred": "keys-2" }
+, "dest": { "keys": ["a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7"], "pred": "keys-all" } })
+(env-sigs [ { "key": "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4"
+         , "caps": [ (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER
+                          (create-principal (read-keyset 'msig)) "k:a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7" 1500.0) ] }
+            { "key": "e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5"
+         , "caps": [ (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER
+                          (create-principal (read-keyset 'msig)) "k:a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7" 1500.0) ] } ])
+(expect "the multisig founder SPENDS its tranche with 2 of 3 keys" "transfer-create ok"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create
+    (create-principal (read-keyset 'msig))
+    "k:a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7"
+    (read-keyset 'dest) 1500.0))
+(expect "the destination holds the spent tokens" 1500.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance
+    "k:a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7"))
+(rollback-tx)
+
+(print "smartpacts-founder-address REPL suite PASSED")

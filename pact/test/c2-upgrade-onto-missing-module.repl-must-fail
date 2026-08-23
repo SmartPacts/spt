@@ -1,0 +1,50 @@
+;; MUST-FAIL FIXTURE (an internal review, a finding). The deploy footer's upgrade branch must REFUSE a
+;; chain that never received the fresh deploy.
+;;
+;; 🔴 THE DEFECT THIS PINS. Sending the artifact as `upgrade:true` to a chain with no prior module
+;; fresh-installs it CLEANLY — Pact does not evaluate GOVERNANCE when the module is absent, so
+;; nothing authorises anything and the upgrade branch creates NO TABLES. With the freeze artifact
+;; that lands a permanently frozen module with no tables: every stateful function aborts, GOVERNANCE
+;; refuses every repair forever, and our own post-freeze verification calls that chain correct
+;; (identical hash, identical stored code). One operator keystroke, one unrecoverable chain, across a
+;; 20-chain train where a missed chain is exactly the precondition.
+;;
+;; 🔴 WHY THIS FILE EXISTS RATHER THAN A FROZEN FIXTURE. run-tests.sh's gen_frozen DELETES the real
+;; footer from /^(if (read-msg 'upgrade)$/ to EOF and substitutes a two-line stub, and the devnet
+;; freeze drill synthesises its own. So NO existing test has ever exercised the real footer. This
+;; fixture loads the REAL module file, so the footer under test is the one that ships. The freeze
+;; is not needed to demonstrate it — the refusal fires on any tableless upgrade — and leaving the
+;; freeze out is what lets this pin the shipping bytes instead of a generated copy.
+;;
+;; Falsifying: revert the footer's upgrade branch to the bare string and this fixture STOPS failing.
+(begin-tx "load coin")
+(load "fixtures/fungible-v2.pact")
+(load "fixtures/fungible-xchain-v1.pact")
+(load "fixtures/gas-payer-v1.pact")
+(load "fixtures/coin.pact")
+(commit-tx)
+
+(begin-tx "namespace and keysets, but NO SPT module has ever been deployed here")
+(env-data
+  { "ns": "n_48867b242317a0216a67f8c7ca26696b5878e0e3"
+, "spt-gov-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-gov"
+, "spt-gov": { "keys": ["admin-key"], "pred": "keys-all" }
+, "spt-ops-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-ops"
+, "spt-ops": { "keys": ["admin-key"], "pred": "keys-any" }
+, "upgrade": false })
+(env-keys ["admin-key"])
+(define-namespace "n_48867b242317a0216a67f8c7ca26696b5878e0e3" (read-keyset 'spt-gov) (read-keyset 'spt-gov))
+(commit-tx)
+
+;; The operator's mistake: the upgrade payload, onto a chain the fresh deploy never reached.
+(begin-tx "upgrade:true onto a chain with no prior module")
+(env-data
+  { "ns": "n_48867b242317a0216a67f8c7ca26696b5878e0e3"
+, "spt-gov-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-gov"
+, "spt-gov": { "keys": ["admin-key"], "pred": "keys-all" }
+, "spt-ops-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-ops"
+, "spt-ops": { "keys": ["admin-key"], "pred": "keys-any" }
+, "upgrade": true })
+(env-keys ["admin-key"])
+(load "../modules/SPT.pact")
+(commit-tx)

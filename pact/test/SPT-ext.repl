@@ -1,0 +1,231 @@
+;; ===========================================================================
+;; SPT EXTENSIONS — fungible negatives, account validation, plain transfer,
+;; checkpoint-at-transfer (no award theft), circulating conservation, claim
+;; negatives, and admin-gate negatives. Builds on setup.repl (post init-supply).
+;; ===========================================================================
+(load "setup.repl")
+
+;; --- seed two participating holders via the launch (the design record float-entry path) ---
+(begin-tx "activate launch for seeding")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(commit-tx)
+(begin-tx "seed alice 3000 / bob 2000 via launch")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+       , "bob": { "keys": ["bob-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1500.0) (coin.TRANSFER "sender00" "bob" 1000.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1500.0)
+(coin.transfer-create "sender00" "bob"   (read-keyset 'bob)   1000.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 1500.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "alice" (read-keyset 'alice) 3000.0)
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 1000.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "bob" (read-keyset 'bob) 2000.0)
+(expect "TOK-R19a: circulating 5000 after seed" 5000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+(commit-tx)
+
+;; --- TOK-R07: account-name + principal-guard validation ---
+(begin-tx "TOK-R07 account validation")
+(env-data { "g": { "keys": ["gk"], "pred": "keys-all" } })
+(expect-failure "name too short (<3)"
+  "account name length 3..256" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-account "ab" (read-keyset 'g)))
+(expect-failure "invalid charset"
+  "account name has invalid characters" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-account "bad€name" (read-keyset 'g)))
+;; principal account whose guard does NOT match -> reserved-guard violation
+(env-data { "mismatch": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(expect-failure "Reserved protocol guard violation"
+  "SPT reserved protocol guard violation: k:2222222222222222222222222222222222222222222222222222222222222222"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-account "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'mismatch)))
+(commit-tx)
+
+;; --- TOK-R08: rotate by wrong key rejected ---
+(begin-tx "TOK-R08 rotate wrong key")
+(env-keys ["bob-key"]) ;; bob tries to rotate alice's guard
+(env-data { "new": { "keys": ["newk"], "pred": "keys-all" } })
+(expect-failure "guard failure"
+  "Keyset failure (keys-all): [alice-ke...]" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.rotate "alice" (read-keyset 'new)))
+(commit-tx)
+
+;; --- a finding: principal account cannot rotate to a non-matching guard (coin parity).
+;; old-guard IS satisfied here, so this exercises the principal re-bind enforce,
+;; not the wrong-key path above. ---
+(begin-tx "a finding principal rotate guard re-bind")
+(env-data
+  { "kp":  { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+, "kp2": { "keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], "pred": "keys-all" } })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-account "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" (read-keyset 'kp))
+(env-keys ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"])
+(expect-failure "principal cannot rotate to a mismatched guard" "SPT: it is unsafe for principal"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.rotate "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" (read-keyset 'kp2)))
+(expect "principal may re-bind to its own matching guard" "guard rotated"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.rotate "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" (read-keyset 'kp)))
+(commit-tx)
+
+;; --- TOK-R20: plain transfer (not -create) between existing accounts ---
+(begin-tx "TOK-R20 plain transfer alice->bob 500")
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" "bob" 500.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "alice" "bob" 500.0)
+(expect "alice 2500" 2500.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice"))
+(expect "bob 2500" 2500.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "bob"))
+(expect "TOK-R19b: circulating unchanged 5000 (holder->holder)" 5000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+(commit-tx)
+
+;; --- TOK-R21: transfer negatives ---
+(begin-tx "TOK-R21 transfer negatives")
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" "alice" 1.0)] }])
+(expect-failure "self-transfer rejected"
+  "sender and receiver must differ" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "alice" "alice" 1.0))
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" "bob" 999999.0)] }])
+(expect-failure "over-balance rejected"
+  "insufficient funds" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "alice" "bob" 999999.0))
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" "bob" 0.0)] }])
+(expect-failure "non-positive rejected"
+  "SPT transfer amount must be positive" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "alice" "bob" 0.0))
+(expect-failure "sub-precision rejected"
+  "amount violates minimum precision" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.enforce-unit 0.0000000000001))
+(commit-tx)
+
+;; --- TOK-R21b: `debit`'s OWN bound checks (a later change) ---------------------------
+;; `debit` had NO positivity negative — a Hard Rule 11 gap on the one function that
+;; DESTROYS supply. It is not reachable from transaction code (an internal review a finding: a top-level
+;; `with-capability (DEBIT ...)` is refused with "Module admin necessary"), so the transfer
+;; negatives above enter it only through `transfer`, whose own identically-worded checks
+;; fire FIRST. That is why this needs `test-capability`: it grants DEBIT directly, so these
+;; assertions reach debit's enforces rather than transfer's.
+;;
+;; NOT written with `try`. `try` forces read-only mode, so a write-attempting call fails
+;; for the WRONG reason and proves nothing (the trap an independent probe header warns about, and it
+;; was measured again here: a `try`-wrapped debit returned the caught value whether or not
+;; the positivity check existed). Every string below was captured from a run.
+;;
+;; Own transaction, ROLLED BACK. The enforces precede every write in `debit`, so no leak is
+;; possible — but `expect-failure` leaks writes through `commit-tx`, and this file's later
+;; assertions depend on alice's balance, so the negative is not left to prove that itself.
+(begin-tx "TOK-R21b debit bound checks (reached directly via test-capability)")
+(env-keys ["alice-key"])
+(test-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DEBIT "alice"))
+(expect-failure "debit zero rejected"
+  "SPT debit amount must be positive"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.debit "alice" 0.0))
+(expect-failure "debit negative rejected — a burn cannot run backwards into a mint"
+  "SPT debit amount must be positive"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.debit "alice" -5.0))
+(expect-failure "debit sub-precision rejected"
+  "amount violates minimum precision"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.debit "alice" 1.0000000000001))
+(rollback-tx)
+
+(begin-tx "TOK-R21b: and none of those refusals moved anything")
+(expect "alice still 2500 after three refused debits" 2500.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice"))
+(expect "circulating still 5000" 5000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+(commit-tx)
+
+;; --- TOK-R22: transfer without TRANSFER cap rejected ---
+(begin-tx "TOK-R22 transfer without cap")
+(env-sigs [])
+(expect-failure "managed cap not installed / unauthorized"
+  "Managed capability not installed: (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER \"alice\" \"bob\" 10.0)" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "alice" "bob" 10.0))
+(commit-tx)
+
+;; --- TOK-R10: tranche release gating (the design record replaces create-funder-allocation) ---
+(begin-tx "TOK-R10 tranche release gating")
+;; a later amendment (a later change): release-tranche is FOUNDER-ONLY, so the pre-cliff negative moved
+;; to the founder row (cliff T+365d = ); the two module-held tranches are covered
+;; by their own disbursement negatives in smartpacts-tranches.repl.
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-15T00:00:00Z") })
+(expect-failure "nothing releasable before cliff"
+  "nothing releasable" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.release-tranche "founder:k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"))
+(expect-failure "and a module-held tranche is not releasable at all"
+  "SPT only founder allocations are released; treasury and liquidity are disbursed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.release-tranche "liquidity"))
+;; an unknown tranche name is rejected (fixed 3-row key space)
+(expect-failure "unknown tranche rejected"
+  "No value found in table n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT_tranche-locks for key: bogus" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.release-tranche "bogus"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+(commit-tx)
+
+;; --- TOK-R13: declare-round + fund-awards guards (circulating is 5000 here) ---
+(begin-tx "TOK-R13 award API guards")
+(env-keys ["admin-key"])
+;; declare-round guards
+(expect-failure "non-positive rate rejected"
+  "rate must be positive" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "G0" 0.0 (time "2026-06-01T09:00:00Z")))
+;; fund-awards guards (now single-arg cash-only)
+(expect-failure "non-positive pool rejected"
+  "pool-amount must be positive" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 0.0))
+(env-keys ["intruder-key"])
+(expect-failure "non-admin declare-round rejected (ADMIN-GOV — a later change moved it)"
+  "Keyset failure (keys-all): [admin-ke...]" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "G1" 0.01 (time "2026-06-01T09:00:00Z")))
+(expect-failure "non-admin fund-awards rejected (ADMIN-GOV — a later change moved it)"
+  "Keyset failure (keys-all): [admin-ke...]" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 100.0))
+(commit-tx)
+
+;; --- award round (circ 5000): alice 2500 -> 50, bob 2500 -> 50 ---
+;; the design record (a later change): FUND, THEN DECLARE — and in two transactions. `fund-awards` runs
+;; `install-capability`, after which Pact 5 rejects unscoped signatures for the rest of the
+;; transaction (checkSigCaps; measured — see SPT.repl for the four-way control),
+;; so the admin-gated declaration cannot token a tx with the funding under `env-keys`.
+(begin-tx "fund the pool FIRST (the design record)")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT 100.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" 100.0)
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 100.0)
+(commit-tx)
+
+;; 🔴 The the design record seal moves block-time forward 12h, so it runs from an EARLIER clock:
+;; every date below is asserted against this suite's own calendar.
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-05-31T00:00:00Z") })
+;; ---- the design record (a later change): A ROUND NEEDS A SEALED RECORD DATE ----------------------
+;; Schedule one clear of the 12h runway (2 x MIN-RETRACT-LEAD), let it land, seal it.
+;; The seal runs with NO KEYS on purpose: `advance-snapshot` is permissionless, and a
+;; chain with no activity must still be sealable by anyone.
+(begin-tx "the design record: name the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (add-time (at 'block-time (chain-data)) 43202))
+(commit-tx)
+(env-chain-data
+  { "chain-id": (at 'chain-id (chain-data))
+, "block-time": (add-time (at 'block-time (chain-data)) 43203) })
+(begin-tx "the design record: seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "declare the award round against a pool that already covers it")
+(env-keys ["admin-key"])
+;; a later amendment: declared ahead of its date, then block-time crosses it.
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "R1" 0.02 (time "2026-06-02T00:00:00Z"))
+(expect "declared but not yet effective" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(expect "alice pending 50" 50.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "alice"))
+(expect "bob pending 50" 50.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "bob"))
+(commit-tx)
+
+;; --- TOK-R18: checkpoint-at-transfer — receiver cannot inherit sender's pending ---
+(begin-tx "TOK-R18 checkpoint no theft (bob -> fresh carol 1000)")
+(env-sigs [{ "key": "bob-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "bob" "carol" 1000.0)] }])
+(env-data { "carol": { "keys": ["carol-key"], "pred": "keys-all" } })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create "bob" "carol" (read-keyset 'carol) 1000.0)
+(expect "bob pending crystallized = 50 (kept by sender)" 50.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "bob"))
+(expect "carol pending 0 (received after the round; no theft)" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "carol"))
+(expect "TOK-R19c: circulating still 5000 (holder->holder)" 5000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+(commit-tx)
+
+;; --- TOK-R15: double-claim rejected; TOK-R16: excluded claim rejected ---
+(begin-tx "TOK-R15/R16 claim negatives")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "alice")
+;; A-C fix: paid to alice's guard principal, not the raw vanity name (squat-proof).
+(expect "alice claimed 50 KDA at her guard principal" 50.0 (coin.get-balance (create-principal (read-keyset 'alice))))
+(expect-failure "TOK-R15 double-claim -> nothing to claim"
+  "nothing to claim" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "alice"))
+(expect-failure "TOK-R16 excluded treasury -> nothing to claim"
+  "nothing to claim" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-ACCOUNT))
+(expect-failure "carol (received late) nothing to claim"
+  "nothing to claim" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "carol"))
+(commit-tx)
+
+(print "SPT-ext REPL suite PASSED")

@@ -1,0 +1,92 @@
+;; ===========================================================================
+;; MUST-FAIL FIXTURE (asserted by run-tests.sh: non-zero exit + error grep).
+;; ---------------------------------------------------------------------------
+;; This file is the VERBATIM attack that SUCCEEDED against this module during
+;; a later change, found by the an internal reviewand reproduced before it was fixed.
+;;
+;; WHAT IT DID. Making `close-proposal` permissionless (the operator runbook §2.7) meant its gate
+;; could no longer be ADMIN, so the swap-and-pop writer was briefly guarded by a
+;; `LIFECYCLE` defcap whose body asserted `status = "active"`. That body is a
+;; PRECONDITION, NOT AN AUTHORIZATION — it asserts public state an unauthorized caller would need
+;; to be true, so it authenticates nobody. A foreign module composed it and called
+;; the public `deindex-proposal` directly, skipping the `(>= (curr-time) close-at)`
+;; bound that lived only in the close-proposal WRAPPER.
+;;
+;; MEASURED, attacker holding zero tokens and signing nothing:
+;; * a LIVE proposal was popped out of the active index (count 1 -> 0) while
+;; `status` stayed "active" and `proposal-active?` stayed true;
+;; * the transfer release-loop scans that index, so it went blind;
+;; * alice voted 2,500, transferred all 2,500 to dave, dave voted the SAME tokens:
+;; final tally yes 5,000 against circulating 2,500 — quorum met, passed true.
+;; THE CONTROL THAT MADE IT DECISIVE: the identical foreign route against the
+;; PREVIOUS `ADMIN` gate was BLOCKED on the same engine, in the same run. That is
+;; what proved it a REGRESSION rather than a pre-existing exposure —
+;; `enforce-keyset` authenticates, `status = "active"` does not.
+;;
+;; WHY IT IS A FIXTURE AND NOT AN `expect-failure`: the fix deleted BOTH
+;; `LIFECYCLE` and `deindex-proposal` (the swap-and-pop is now inlined into
+;; close-proposal and cancel-proposal, Pattern W applied to a state-transition
+;; writer). So both references below are NAME-RESOLUTION failures — they abort the
+;; whole file at compile time, which `expect-failure` cannot catch (pact-traps
+;; §REPL testing artifacts). The runner asserts it from outside, on the exit code
+;; AND the error text.
+;;
+;; ENGINE-INDEPENDENCE IS THE POINT, and it is the same argument as
+;; freemint-compose.repl-must-fail. The bare REPL is pact 5.4 = the PRE-Chainweb32
+;; engine, where compose-capability still skips guardForModuleCall — the most
+;; permissive engine there is, the one where this attack worked. It dies here
+;; anyway, because there is nothing left to call. "Safe because the code says so",
+;; not "safe because a closed-source engine says so" (the design record §2.2, reason 3).
+;; Do NOT convert this to a fork-gated devnet test, and do NOT re-introduce a named
+;; index writer with a precondition-shaped guard.
+;; ===========================================================================
+(load "setup.repl")
+
+(begin-tx "seed float + a LIVE proposal")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1250.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1250.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 1250.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "alice" (read-keyset 'alice) 2500.0)
+(commit-tx)
+
+;; separate tx: env-keys must not sit behind an env-sigs set in the same transaction
+(begin-tx "admin creates a LIVE proposal")
+(env-chain-data { "chain-id": "0", "block-time": (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) })
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal
+  "P1" "live" "d" (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) (add-time (time "2026-06-02T00:00:00Z") 1.0) 259200)
+(commit-tx)
+
+(begin-tx "foreign attacker module")
+(env-data { "evil": { "keys": ["attacker"], "pred": "keys-all" } })
+(env-keys ["attacker"])
+(define-namespace "dxns" (read-keyset 'evil) (read-keyset 'evil))
+(namespace "dxns")
+(define-keyset "dxns.ks" (read-keyset 'evil))
+(module dx GOV
+  (defcap GOV () (enforce-keyset "dxns.ks"))
+ ;; THE ESCAPE: LIFECYCLE's body asserted only that the proposal is active, which the
+ ;; attacker is happy to satisfy — so composing it cost nothing and granted everything.
+  (defcap HOLD-LC (id:string)
+    (compose-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.LIFECYCLE id)))
+  (defun pop (id:string slot:integer)
+    (with-capability (HOLD-LC id)
+      (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.deindex-proposal id slot))))
+(commit-tx)
+
+(begin-tx "pop a LIVE proposal out of the release-loop index")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })  ; << close-at
+(env-sigs [])
+(env-keys ["attacker"])
+(dxns.dx.pop "P1" 1)
+;; If control ever reaches here the release loop is blind and this fixture MUST fail loudly.
+(expect "REGRESSION: a LIVE proposal was popped out of the active index by a stranger"
+  "the module must not expose a named index writer"
+  (format "prop-count {} while P1 status is {}"
+    [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-prop-count)
+     (at 'status (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.proposal-details "P1"))]))
+(commit-tx)

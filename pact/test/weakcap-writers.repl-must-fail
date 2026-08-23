@@ -1,0 +1,77 @@
+;; ===========================================================================
+;; MUST-FAIL FIXTURE (asserted by run-tests.sh: non-zero exit + error grep).
+;; ---------------------------------------------------------------------------
+;; This is the VERBATIM shape of the operator runbook an internal review's a finding and a finding, the two CRITICALs
+;; that a later change / the design record removed. It is kept executable, and kept failing, because a
+;; security test that cannot fail is worthless — and this one COULD: run it against the
+;; pre-a later change module and it sets a LIVE tally to any value and forges the canonical
+;; cross-chain result, from a stranger holding zero tokens and signing nothing.
+;;
+;; MEASURED by the cold the reviewer on the engine mainnet01 runs today:
+;; * a finding — weak `TALLY` gating the public `apply-tally` / `release-votes-on-debit`:
+;; `yes 0.0 -> 99999.0, passed:true`, UNSIGNED, then the honest votes erased back to 0.0.
+;; * a finding — weak `AGGREGATE` gating the public `record-final-tally`: 20 forged per-chain
+;; reports at 4,900 each — every one UNDER the a later change supply cap — returning
+;; {chains-reported:20, complete:true, quorum-met:true, passed:true, yes:98000.0}
+;; without a single real chain having reported.
+;;
+;; WHY IT IS A FIXTURE AND NOT AN `expect-failure`: the fix DELETED all five names below
+;; (`TALLY`, `AGGREGATE`, `apply-tally`, `release-votes-on-debit`, `record-final-tally`).
+;; Referencing a removed module member is a NAME-RESOLUTION failure — it aborts the whole
+;; file at compile time, which `expect-failure` cannot catch (pact-traps §REPL testing
+;; artifacts). The runner therefore asserts it from OUTSIDE, on the exit code AND the text.
+;;
+;; ENGINE-INDEPENDENCE IS THE POINT, and it is the same argument as
+;; freemint-compose.repl-must-fail and deindex-compose.repl-must-fail. The bare REPL is
+;; pact 5.4 = the PRE-Chainweb32 engine, where compose-capability still skips
+;; guardForModuleCall — the most permissive engine there is, the one where these attacks
+;; worked. They die here anyway, because there is nothing left to call. That is the
+;; difference between "safe because the code says so" and "safe because a closed-source
+;; engine says so" (the design record §2.2, reason 3), and it is why the Chainweb32 fork was NOT
+;; treated as the remedy: 80% of supply must not sit behind an engine flag, and a platform
+;; regression after FROZEN-MODULE would be permanent.
+;;
+;; Do NOT re-introduce a named tally or aggregate writer, and do NOT "fix" a future variant
+;; of this by inventing a capability to gate one — a cap body that asserts public state is
+;; not an authorization, and that substitution already produced the a later change CRITICAL.
+;; ===========================================================================
+(load "setup.repl")
+
+(begin-tx "foreign attacker module: compose the weak caps, reach the writers")
+(env-data { "evil": { "keys": ["attacker"], "pred": "keys-all" } })
+(env-keys ["attacker"])
+(define-namespace "wcns" (read-keyset 'evil) (read-keyset 'evil))
+(namespace "wcns")
+(define-keyset "wcns.ks" (read-keyset 'evil))
+(module wc GOV
+  (defcap GOV () (enforce-keyset "wcns.ks"))
+ ;; a finding: weak TALLY -> the live tally, and every honest vote
+  (defcap HOLD-TALLY () (compose-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TALLY)))
+  (defun forge-tally (p:string dw:decimal dir:bool)
+    (with-capability (HOLD-TALLY)
+      (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.apply-tally p dw dir)))
+  (defun erase-votes (a:string amt:decimal)
+    (with-capability (HOLD-TALLY)
+      (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.release-votes-on-debit a amt)))
+ ;; a finding half TRIMMED (a later change / the design record Decision 1): `AGGREGATE`,
+ ;; `record-final-tally` and the canonical cross-chain result they produced are all
+ ;; DELETED, so this half now asserts the non-existence of a threat that no longer has a
+ ;; surface — the "attractive nuisance" the module's own comments warn about. The a finding half
+ ;; below is the live one, and the runner matches on its error string.
+  (defcap HOLD-AGG () true)
+  (defun forge-all (p:string)
+    (with-capability (HOLD-AGG)
+      (map (lambda (c:string)
+ ;; (record-final-tally deleted — see the a finding note above)
+             true)
+           coin.VALID_CHAIN_IDS))))
+(commit-tx)
+
+(begin-tx "if control reaches here the CRITICALs are back")
+(env-sigs [])
+(env-keys ["attacker"])
+(wcns.wc.forge-tally "P1" 99999.0 true)
+(expect "REGRESSION: a stranger rewrote a live tally and forged the canonical result"
+  "the module must not expose named tally or aggregate writers"
+  (format "tally {}" [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "P1")]))
+(commit-tx)

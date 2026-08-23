@@ -1,0 +1,883 @@
+;; ===========================================================================
+;; smartpacts-frozen-invariant — THE FREEZE INVARIANT, PER MODULE, PER FUNCTION.
+;; a later change. Founder definition, :
+;;
+;; "Freeze should only mean that the module is no longer upgradable, that's it. All
+;; functionalities and operations should work as always."
+;;
+;; FORMALLY: for every module, and every function that is not the upgrade path, behaviour
+;; with FROZEN-MODULE=true must be IDENTICAL to behaviour with FROZEN-MODULE=false. Only
+;; redeploy may be refused. An operation that stops working at freeze is a DEFECT — and a
+;; permanent, unfixable one, because a frozen module cannot be upgraded to repair it.
+;;
+;; WHY THIS FILE EXISTS. Cold an internal review a finding: `a separate gas-sponsorship module.init` composed
+;; GOVERNANCE, whose body enforces `(not FROZEN-MODULE)`, so a frozen station could never be
+;; created on a new chain. NO TEST COULD HAVE CAUGHT IT — two of the three modules had ZERO
+;; frozen-state coverage. This is "cover the set, not the instance" applied to the invariant
+;; that matters most.
+;;
+;; 🔴 THE METHOD IS ENUMERATION, NOT RECALL. Every public `defun`/`defpact` of both modules is
+;; listed below and given one of exactly two dispositions:
+;; EXERCISED — called against the FROZEN module, result asserted
+;; NOT-RUNNABLE — cannot run in THIS scenario, with the reason stated
+;; An unenumerated function is an untested one. The lists are transcribed from
+;; `grep -nE '^\s*\(def(un|pact) '` over each module, and §0 asserts the counts so that a
+;; function added later without a disposition makes this suite go RED rather than silently
+;; dropping out of the set.
+;;
+;; SCOPE (a later amendment): `SPT` and `SPT-launch`. The gas station is NOT in
+;; the first deployment and is deliberately out of scope — it gets this treatment before IT
+;; ships. Its absence here is a scope decision, not coverage.
+;; ===========================================================================
+(load "setup.repl")
+
+;; ---------------------------------------------------------------------------
+;; SEED — build real state BEFORE freezing, because most operations need it. Everything
+;; below this line runs against modules compiled with FROZEN-MODULE=true.
+;; ---------------------------------------------------------------------------
+(begin-tx "seed: activate the launch and create two holders")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+       , "bob":   { "keys": ["bob-key"],   "pred": "keys-all" }
+       , "carol": { "keys": ["carol-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 2000.0) (coin.TRANSFER "sender00" "bob" 1000.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 2000.0)
+(coin.transfer-create "sender00" "bob"   (read-keyset 'bob)   1000.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 2000.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "alice" (read-keyset 'alice) 4000.0)
+(commit-tx)
+
+(begin-tx "seed: funding + a funded pool, so the award path has cash")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT 900.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" 900.0)
+(commit-tx)
+(begin-tx "seed: fund the pool (the design record — before any declaration)")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 500.0)
+(commit-tx)
+
+;; ===========================================================================
+;; §0 — THE SET. Assert the function counts BEFORE freezing. If someone adds a public
+;; function and does not give it a disposition below, these counts move and this suite goes
+;; RED — which is the only mechanism that keeps an enumeration honest over time.
+;; Counted with: grep -cE '^\s*\(defun ' / '^\s*\(defpact ' over each module.
+;; ===========================================================================
+(begin-tx "0 the enumerated set is complete")
+;; 🔴 a later change: 76/14 -> 96/16. These were STALE by 22 functions and understated this suite's own
+;; scope; the MECHANICAL half in run-tests.sh was current throughout, so coverage was never
+;; short — only the number this file states about itself. Fix the number, not the coverage.
+(env-data { "tokens-defuns": 96, "tokens-defpacts": 1, "launch-defuns": 16, "launch-defpacts": 0 })
+;; These are transcribed counts, asserted against themselves — the REPL cannot grep the
+;; source. run-tests.sh carries the MECHANICAL half: it re-greps the modules and fails if the
+;; real counts move away from these numbers. Neither half is sufficient alone; the shell check
+;; is what makes this one non-vacuous.
+(expect "SPT public defuns enumerated below" 96 (read-msg 'tokens-defuns))
+(expect "SPT defpacts enumerated below" 1 (read-msg 'tokens-defpacts))
+(expect "SPT-launch public defuns enumerated below" 16 (read-msg 'launch-defuns))
+(expect "SPT-launch defpacts enumerated below" 0 (read-msg 'launch-defpacts))
+(commit-tx)
+
+;; ===========================================================================
+;; §1 — FREEZE BOTH MODULES IN PLACE (upgrade:true, so no create-table re-runs).
+;; ===========================================================================
+(begin-tx "1 freeze SPT")
+(env-data
+  { "ns": "n_48867b242317a0216a67f8c7ca26696b5878e0e3"
+, "upgrade": true
+, "spt-gov-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-gov"
+, "spt-gov": { "keys": ["admin-key"], "pred": "keys-all" }
+, "spt-ops-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-ops"
+, "spt-ops": { "keys": ["admin-key"], "pred": "keys-any" } })
+(env-keys ["admin-key"])
+(load "fixtures/frozen-SPT.pact")
+(commit-tx)
+
+;; ===========================================================================
+;; 🔴 §1a — THE OUTAGE WINDOW. a later change / an internal review `L4-03`, `L4-01`.
+;;
+;; THIS FILE USED TO STEP STRAIGHT FROM THE TX ABOVE TO THE ONE BELOW, and that single
+;; adjacency was the defect: loading the frozen SALE re-links it against the newly-frozen
+;; token hash, so by the time any assertion ran, service had already been restored. The suite
+;; then printed "every enumerated function survives the freeze" — a banner an operator or the
+;; founder reads as clearance — while stepping over an outage a later change had measured on a node.
+;; The one artifact that exists to prove the freeze is safe asserted the opposite of the truth.
+;;
+;; MEASURED HERE, in this window (a later change): freezing `SPT` changes its module
+;; hash, and `SPT-launch` is linked against the OLD one, so EVERY purchase aborts with
+;; "hash not blessed". On a real chain nothing re-links the sale automatically — that is a
+;; separate admin deploy — so this window is not one transaction wide, it lasts until someone
+;; notices and redeploys the sale.
+;;
+;; 🔴 THE ORDER IS LOAD-BEARING AND THIS IS WHY (`L4-02`): the rescue below is a re-deploy of
+;; SPT-launch. Freeze the SALE first and that re-deploy becomes impossible — buy and
+;; launch.init are then dead FOREVER on every chain, with no admin key, no signature set and no
+;; upgrade that can help, stranding the unsold launch reserve. Freeze the TOKEN first, always.
+;;
+;; The `bless` alternative (bless the pre-freeze hash inside the frozen token so the sale never
+;; needs re-linking) removes the window entirely, and it is MEASURED ON A NODE (a later change,
+;;, mined on the 3.2 devnet): bless-drill.ts D1 = an UNBLESSED hub upgrade kills
+;; launch.buy with "hash not blessed"; D2 = the same upgrade carrying (bless <v1-hash>)
+;; keeps buy working with NO launch redeploy. Same run, N2/P2: a decoy bless is refused
+;; for in-flight cross-chain resumes (YieldProvenanceDoesNotMatch) and the real bless lets
+;; them complete — so the ONE (bless <pre-freeze-hash>) line in the freeze source carries
+;; BOTH rescues. the operator runbook records the result; the operator runbook remains gated on the rest of the operator runbook.
+;;
+;; Rolled back: this is a negative asserting state, and the standing rule is that expect-failure
+;; leaks writes through commit-tx.
+;; ===========================================================================
+;; 🔴 L4-01 IS INVERTED BY a later change, AND THE INVERSION IS THE POINT.
+;;
+;; This block asserted the outage as EXPECTED BEHAVIOUR — "buy is DEAD while the sale is linked
+;; to the pre-freeze token hash" — and passed. Under the founder's rule, stated three times and
+;; now load-bearing ("freeze should only make the module no longer upgradable; ALL DEFUNS AND
+;; DEFPACTS MUST WORK AS ALWAYS"), a dead `buy` is a DEFECT, not an expectation. So the suite was
+;; PINNING THE VIOLATION: the one artifact that exists to prove a freeze is safe asserted that
+;; the freeze breaks a public function, and reported [PASS] for it.
+;;
+;; The requirement is now the BLESSED path, and the outage is demoted to its NEGATIVE CONTROL —
+;; kept, because it is the only thing that proves the bless line is what does the work, and
+;; because deleting it would leave "buy survives" compatible with buy never having been at risk.
+;; ===========================================================================
+(begin-tx "1a NEGATIVE CONTROL: an UNBLESSED freeze kills buy — this is the defect, not the spec")
+(env-data { "bob": { "keys": ["bob-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 500.0)] }])
+;; The HASH is deliberately not pinned — it changes with every edit to the module. The module
+;; NAME is, so this cannot be satisfied by coin or by the sale failing for its own reasons.
+;; 🔴 THE TRAILING COLON IS LOAD-BEARING (a finding, delta an internal review). `expect-failure` matches by
+;; SUBSTRING, and since the rename `SPT` is a strict PREFIX of `SPT-launch` — so without the
+;; colon this pin is satisfied by `...module <ns>.SPT-launch: <hash>`, i.e. by exactly the
+;; "sale failing for its own reasons" the line above claims it excludes. MEASURED, the real
+;; message is `Execution aborted, hash not blessed for module <ns>.SPT: cg8sInne-…`; the colon
+;; terminates the module name without pinning the volatile hash.
+(expect-failure "L4-01a CONTROL: an UNBLESSED freeze DOES kill buy — the harm is real"
+  "hash not blessed for module n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT:"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "bob" (read-keyset 'bob) 10.0))
+(rollback-tx)
+
+;; ...and the tx below IS the rescue: re-deploying the sale re-links it to the frozen token.
+;; That is the runbook step L4-02 says must never be made impossible by freezing the sale first.
+(begin-tx "1 freeze SPT-launch")
+(env-data
+  { "ns": "n_48867b242317a0216a67f8c7ca26696b5878e0e3"
+, "upgrade": true
+, "spt-gov-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-gov"
+, "spt-gov": { "keys": ["admin-key"], "pred": "keys-all" }
+, "spt-ops-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-ops"
+, "spt-ops": { "keys": ["admin-key"], "pred": "keys-any" } })
+(env-keys ["admin-key"])
+(load "fixtures/frozen-SPT-launch.pact")
+(commit-tx)
+
+;; 🔴 POSITIVE CONTROL ON THE FIXTURES THEMSELVES. Without this every assertion in this file
+;; would pass just as well against UNFROZEN modules, and the suite would report a
+;; freeze-survival property it never tested. This is the check that makes the rest mean
+;; anything, and it is why the generator's own "did not flip FROZEN-MODULE" guard is not
+;; enough on its own: that guard runs in the shell, this one runs against what actually loaded.
+(begin-tx "1 CONTROL: both loaded modules really are frozen")
+(expect "SPT is FROZEN" true
+  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FROZEN-MODULE)
+(expect "SPT-launch is FROZEN" true
+  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.FROZEN-MODULE)
+(commit-tx)
+
+;; ===========================================================================
+;; §2 — SPT: EVERY PUBLIC FUNCTION, FROZEN.
+;;
+;; NOT-RUNNABLE in this scenario, with reasons (each is a state precondition, never a freeze
+;; effect — that distinction is the whole point of listing them rather than omitting them):
+;; init-supply one-shot, already ran in setup.repl on chain 0 (§5 proves it
+;; still REACHES its own guard when frozen, i.e. it is not the
+;; freeze that stops it)
+;; init chain-0 guard: this scenario is chain 0, so `init` refuses by
+;; design ("Use init-supply on chain 0"); §5 proves that refusal
+;; is the chain check and not the freeze
+;; transfer-crosschain 🔴 CORRECTED a later change. This said "step 1 needs SPV — DEVNET ONLY,
+;; never runnable in the REPL", and that was FALSE. `continue-pact 1`
+;; runs it, measured. The disposition hid a CRITICAL for months: an
+;; UNBLESSED freeze aborts step 1 with "Yield provenance does not
+;; match", DESTROYING an in-flight transfer whose sender was already
+;; debited at step 0. Step 1 is now exercised across a blessed freeze
+;; in smartpacts-freeze-blessed.repl B-2/B-3, and the unblessed case
+;; is its mutation. FOURTH "node-only" claim disproved this week —
+;; treat every remaining one as unverified until it is run.
+;; funding-guard/pool-guard defconst-bound at load; exercised implicitly, since every
+;; FUNDING/POOL spend below depends on the guard they built
+;; TRANSFER-mgr the @managed manager, exercised by every transfer below (it
+;; meters each one); TRANSFER_XCHAIN-mgr likewise, by step 0
+;; TRANSFER_XCHAIN-mgr as above — and note this one is why the count is 73, not 72:
+;; my first transcription truncated its name at the underscore and
+;; silently dropped it. The shell count in run-tests.sh caught it,
+;; which is exactly why the enumeration has a mechanical half.
+;; DISBURSE-mgr a later change. The @managed manager for DISBURSE, exercised by the
+;; frozen disbursement in §2 — which now spends an approved budget
+;; and then proves the SAME frozen module refuses a second call
+;; ("DISBURSE exceeded: 10.0 requested of 0.0 managed"). Like the
+;; two above it is never called directly and carries no guard of
+;; its own: the engine invokes it on each acquisition and its
+;; authority is the defcap's. 🔴 ITS FREEZE PROPERTY IS NOT "it
+;; still runs" BUT "the LIMIT still binds" — a meter that quietly
+;; stopped metering after the freeze would be unfixable, so the
+;; enumeration entry and the §2 negative are one disposition, not
+;; two. Written BEFORE the count moved 95 -> 96.
+;; enforce-treasury-beneficiary / enforce-launch-reserve / enforce-beneficiary /
+;; enforce-not-initialized init-time validators, reached only through init/init-supply
+;; results-of / vkey / pkey / rkey pure helpers, exercised via their callers
+;; ===========================================================================
+
+(begin-tx "2 tokens READS all answer frozen")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+;; The freeze transactions replaced env-data wholesale, so the keysets this section compares
+;; against have to be put back. (setup.repl:46 does the same thing and a later change found the
+;; identical trap: a dropped keyset made a whole assertion block abort BEFORE the function it
+;; named, while a 2-arg expect-failure reported it as a pass.)
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+       , "bob":   { "keys": ["bob-key"],   "pred": "keys-all" }
+       , "carol": { "keys": ["carol-key"], "pred": "keys-all" }
+       , "frozen-probe-ks": { "keys": ["9999999999999999999999999999999999999999999999999999999999999999"], "pred": "keys-all" } })
+(expect "get-balance" 4000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice"))
+(expect "details" "alice" (at 'account (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.details "alice")))
+(expect "get-guard" (read-keyset 'alice) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-guard "alice"))
+(expect "precision" 12 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.precision))
+(expect "enforce-unit" true (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.enforce-unit 1.0))
+(expect "get-circulating" 4000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+(expect "get-rpt" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+(expect "max-rpt" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.max-rpt))
+(expect "outstanding-rate" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.outstanding-rate))
+(expect "award-liability" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))
+(expect "declared-liability" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declared-liability))
+(expect "pool-surplus" 500.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pool-surplus))
+(expect "get-round-count" 0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-round-count))
+;; --- get-round (added a later change / an internal review a finding) — EXERCISED FROZEN -------------
+;; 🔴 THIS FUNCTION EXISTS BECAUSE ITS ABSENCE WAS A FREEZE DEFECT, so "does it work frozen"
+;; is not a formality here — it is the entire point. Before it, `{rate, effective-at}` at an
+;; index was reachable only through module admin, and GOVERNANCE enforces (not FROZEN-MODULE)
+;; BEFORE the keyset check, so after the freeze the operator runbook's MANDATORY --verify-rounds step could
+;; never run again on any key. This module is FROZEN; the call below is the proof it survives.
+;;
+;; Both branches are exercised, but NOT both here: the exists:FALSE branch is below (it is the
+;; one a 20-chain comparator hits on a chain that never received a declaration — precisely the
+;; divergence the step exists to detect), and the exists:TRUE branch is asserted in §2's
+;; declare-round block, which is the only point in this suite where a round exists.
+;; 🔴 THIS COMMENT USED TO SAY "BOTH BRANCHES are exercised, deliberately" WHILE ALL THREE
+;; get-round ASSERTIONS BELOW HIT exists:false. The `with-read` — the only path that can abort
+;; and the whole reason the function exists — was covered by nothing, while the enumeration
+;; gate and the MANDATORY-step gate both passed on it. A false coverage claim in frozen text.
+(expect "get-rounds-applied: exported so ops never needs module admin, frozen"
+  0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rounds-applied))
+(expect "get-round: a never-declared index reports exists:false, frozen"
+  { "index": 1, "exists": false, "rate": 0.0
+, "effective-at": (time "1970-01-01T00:00:00Z") }
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-round 1))
+(expect "get-round: index 0 and negatives are out of range, not an abort"
+  false
+  (at 'exists (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-round 0)))
+(expect "get-prop-count" 0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-prop-count))
+(expect "active-prop-indices" [] (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.active-prop-indices))
+(expect "get-launch-reserve" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-ACCOUNT
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-launch-reserve))
+;; `get-treasury-beneficiary` is DELETED (a later amendment / a later change) with the field it read —
+;; the treasury tranche is module-held now, so there is no configured beneficiary anywhere.
+;; --- ensure-coin-account (added a later change / a finding) — EXERCISED FROZEN -----------
+;; It creates a coin row only if one does not already exist. Both branches are
+;; exercised here against the FROZEN module, because the whole reason it exists
+;; is that the missing branch permanently bricked init on a chain, and freeze is
+;; exactly when "permanently" stops being recoverable. It acquires no capability
+;; and touches no module table, so nothing in it can die at freeze.
+(expect "ensure-coin-account is a NO-OP when the row already exists (frozen)"
+  "coin account already exists"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.ensure-coin-account
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-G))
+(expect "ensure-coin-account CREATES a missing row (frozen)"
+  "Write succeeded"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.ensure-coin-account
+    "k:9999999999999999999999999999999999999999999999999999999999999999"
+    (read-keyset 'frozen-probe-ks)))
+
+(expect "protocol-account? true for a reserve" true
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.protocol-account? n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-ACCOUNT))
+(expect "protocol-account? false for a holder" false
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.protocol-account? "alice"))
+(expect "excluded? true for a reserve" true
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.excluded? n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-ACCOUNT))
+(expect "excluded? false for a holder" false (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.excluded? "alice"))
+(expect "validate-account" true (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.validate-account "alice"))
+(expect "enforce-reserved (non-principal)" true
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.enforce-reserved "alice" (read-keyset 'alice)))
+(expect "pending-awards-of" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "alice"))
+(expect "curr-time" (time "2026-06-02T00:00:00Z") (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.curr-time))
+(expect "this-chain" "0" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.this-chain))
+(expect "account-guard" (read-keyset 'alice) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.account-guard "alice"))
+(expect "tranche-vested (pre-cliff)" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.tranche-vested 100.0 (time "2027-01-01T00:00:00Z") (time "2028-01-01T00:00:00Z") (time "2026-06-02T00:00:00Z")))
+(expect "get-tranche" 15000.0 (at 'total (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-tranche "liquidity")))
+(expect "tranche-releasable" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.tranche-releasable "liquidity"))
+;; a later amendment (a later change): the founder-requested availability reader, EXERCISED FROZEN.
+(expect "tranche-available" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.tranche-available "liquidity"))
+(expect-failure "tranche-available refuses a founder allocation frozen (category error)"
+  "SPT only the treasury and liquidity tranches have a disbursable balance"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.tranche-available
+    "founder:k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"))
+(expect "credit-plan is pure and answers" 4000.0
+  (let ((_ (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.credit-plan "alice" (read-keyset 'alice) 1.0)))
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice")))
+(commit-tx)
+
+(begin-tx "2 tokens create-account + rotate, frozen")
+(env-data { "u": { "keys": ["u-key"], "pred": "keys-all" }, "u2": { "keys": ["u2-key"], "pred": "keys-all" } })
+(expect "create-account works frozen" "account created"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-account "ursula" (read-keyset 'u)))
+(env-keys ["u-key"])
+(expect "rotate works frozen" "guard rotated"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.rotate "ursula" (read-keyset 'u2)))
+(commit-tx)
+
+(begin-tx "2 tokens transfer-create works frozen (debit + credit both run)")
+(env-data { "bob": { "keys": ["bob-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" "bob" 500.0)] }])
+(expect "transfer-create works frozen" "transfer-create ok"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create "alice" "bob" (read-keyset 'bob) 500.0))
+(commit-tx)
+
+;; Its own transaction, and that is the house rule rather than a workaround: a @managed
+;; TRANSFER is installed once per transaction and metered, so a second transfer in the same tx
+;; re-enters an already-consumed grant. One value-moving operation per transaction is also how
+;; these calls actually arrive on chain.
+(begin-tx "2 tokens transfer works frozen")
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" "bob" 100.0)] }])
+(expect "transfer works frozen" "transfer ok"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "alice" "bob" 100.0))
+(expect "the credit landed" 600.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "bob"))
+(expect "supply conserved across the frozen transfers" 4000.0
+  (+ (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice") (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "bob")))
+(commit-tx)
+
+(begin-tx "2 tokens transfer-crosschain STEP 0, frozen (step 1 needs SPV — devnet only)")
+;; 🔴 a later change: env-data FIRST — the receiver is now a PRINCIPAL derived from the keyset, so it
+;; must exist before the cap that names it is built. Vanity receivers are refused cross-chain.
+(env-data { "bob": { "keys": ["bob-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "bob-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER_XCHAIN "bob" (create-principal (read-keyset 'bob)) 50.0 "1")] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-crosschain "bob" (create-principal (read-keyset 'bob)) (read-keyset 'bob) "1" 50.0)
+(expect "xchain step 0 debited on the frozen module" 550.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "bob"))
+(commit-tx)
+
+(begin-tx "2 tokens the vote-key surface, frozen")
+(env-data { "vk": { "keys": ["vk-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.VOTE-KEY-ADMIN "alice")] }])
+(expect "set-vote-key works frozen" "vote key set"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.set-vote-key "alice" (read-keyset 'vk)))
+(expect "get-vote-key works frozen" true
+  (at 'active (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-vote-key "alice")))
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.VOTE-KEY-ADMIN "alice")] }])
+(expect "clear-vote-key works frozen" "vote key cleared"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.clear-vote-key "alice"))
+(commit-tx)
+
+;; The whole governance lifecycle, frozen: announce -> review -> vote -> close.
+;; the design record puts open-at 48h after the announcement, so the clock moves between them.
+(begin-tx "2 tokens create-proposal works frozen")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(env-keys ["admin-key"])
+(expect "create-proposal works frozen" "proposal created"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal
+    "FRZ-P" "frozen lifecycle" "d" (time "2026-06-02T00:00:00Z")
+    (add-time (time "2026-06-02T00:00:00Z") n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)
+    259200))
+(expect "proposal-details works frozen" "active"
+  (at 'status (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.proposal-details "FRZ-P")))
+(expect "proposal-active? works frozen" true
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.proposal-active? "FRZ-P"))
+(commit-tx)
+
+(begin-tx "2 tokens cancel-proposal works frozen (own tx, rolled back — the vote path needs the proposal)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })
+(env-keys ["admin-key"])
+(expect "cancel-proposal works frozen" "proposal cancelled"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cancel-proposal "FRZ-P"))
+(rollback-tx)
+
+(begin-tx "2 tokens cast-vote + get-results + vote-record + plan-tally, frozen")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-04T00:00:01Z") })  ; past open-at
+(env-keys ["alice-key"])
+(expect "cast-vote works frozen" "vote cast"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "alice" "FRZ-P" true))
+(expect "get-results works frozen" 3400.0
+  (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "FRZ-P")))
+(expect "vote-weight works frozen" 3400.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-weight "alice" "0" "FRZ-P"))
+(expect "get-vote works frozen" true
+  (at 'direction (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-vote "alice" "0" "FRZ-P")))
+(expect "vote-record works frozen" true
+  (at 'exists (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-record "FRZ-P")))
+(expect "plan-tally is pure and answers frozen" 3401.0
+  (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.plan-tally "FRZ-P" 1.0 true)))
+(expect "plan-deindex is pure and answers frozen" true
+  (at 'pop (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.plan-deindex "FRZ-P" 1)))
+(commit-tx)
+
+(begin-tx "2 tokens close-proposal works frozen (permissionless)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-08T00:00:02Z") })  ; past close-at
+(env-sigs [{ "key": "carol-key", "caps": [] }])
+(expect "close-proposal works frozen, by a non-admin" "proposal closed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.close-proposal "FRZ-P"))
+(commit-tx)
+
+;; The award subsystem, frozen, end to end. the design record: fund before declare, one admin
+;; operation per transaction.
+;; 🔴 the design record: a round needs a SEALED RECORD DATE, and sealing one on a FROZEN module is
+;; itself part of the freeze claim — `schedule-snapshot` is ADMIN-gated and
+;; `advance-snapshot` WRITES, so if either died at the freeze the award subsystem below
+;; could never run again on that chain. §6 asserts both directly; this is the end-to-end.
+;; ---- the design record (a later change): A ROUND NEEDS A SEALED RECORD DATE ----------------------
+;; Schedule one clear of the 12h runway (2 x MIN-RETRACT-LEAD), let it land, seal it.
+;; The seal runs with NO KEYS on purpose: `advance-snapshot` is permissionless, and a
+;; chain with no activity must still be sealable by anyone.
+(begin-tx "the design record: name the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (add-time (at 'block-time (chain-data)) 43202))
+(commit-tx)
+(env-chain-data
+  { "chain-id": (at 'chain-id (chain-data))
+, "block-time": (add-time (at 'block-time (chain-data)) 43203) })
+(begin-tx "the design record: seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "2 tokens declare-round works frozen")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-08T00:00:02Z") })
+(env-keys ["admin-key"])
+(expect "declare-round works frozen" "round declared"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "FRZ-R1" 0.01 (time "2026-06-11T00:00:00Z")))
+;; 🔴 get-round's exists:TRUE BRANCH — the `with-read`, the only path in it that can abort and
+;; the entire reason the function was added. §2's three get-round assertions all hit
+;; exists:FALSE, and the comment there claimed "BOTH BRANCHES are exercised, deliberately".
+;; THAT CLAIM WAS FALSE (an internal review completeness critic, F-D): no test in the repo reached
+;; the read, while the enumeration gate and the MANDATORY-step gate both passed on it. This is
+;; the only place in this suite where a round actually exists, so it is where the branch lives.
+(expect "get-round: a DECLARED round reads back FROZEN with exists:true"
+  true (at 'exists (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-round 1)))
+(expect "get-round: and its real rate, not the zero default"
+  0.01 (at 'rate (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-round 1)))
+(commit-tx)
+
+(begin-tx "2 tokens retract-round works frozen")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-08T00:00:02Z") })
+(env-keys ["admin-key"])
+(expect "retract-round works frozen" "round retracted"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.retract-round "FRZ-R1"))
+(rollback-tx)
+
+(begin-tx "2 tokens apply-round works frozen")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-11T00:00:00Z") })
+(env-keys ["admin-key"])
+(expect "apply-round works frozen" "round applied"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.apply-round "FRZ-R1"))
+(expect "rpt materialized frozen" 0.01 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+(commit-tx)
+
+(begin-tx "2 tokens fund-awards works frozen")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-11T00:00:00Z") })
+(env-keys ["admin-key"])
+(expect "fund-awards works frozen" "awards funded"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 10.0))
+(commit-tx)
+
+(begin-tx "2 tokens claim-awards works frozen (a holder is PAID on a frozen module)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-11T00:00:00Z") })
+(expect "claim-awards pays out frozen" 34.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "alice"))
+(commit-tx)
+
+(begin-tx "2 tokens recover-pool-surplus works frozen (a later change's whole point)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-11T00:00:00Z") })
+;; a later change (founder ): RECOVER-SURPLUS is @managed on amount, so an unscoped
+;; signature cannot drive it. The clist names the capability with the SAME amount the call
+;; spends — and it must keep working on a FROZEN module, which is what this tx asserts.
+(env-sigs [{ "key": "admin-key"
+        , "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.RECOVER-SURPLUS 1.0)] }])
+(expect "recover-pool-surplus works frozen" "pool surplus recovered"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.recover-pool-surplus 1.0))
+(commit-tx)
+
+(begin-tx "2 tokens receive-funding + withdraw-funding work frozen")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-11T00:00:00Z") })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT 5.0)] }])
+(expect "receive-funding works frozen" "funding received"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" 5.0))
+(commit-tx)
+(begin-tx "2 tokens withdraw-funding works frozen")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-11T00:00:00Z") })
+;; a later change (founder ): WITHDRAW-FUNDING is @managed on amount, so an unscoped
+;; signature cannot drive it. The clist names the capability with the SAME destination and
+;; amount the call spends — and it must keep working on a FROZEN module.
+(env-sigs [{ "key": "admin-key"
+        , "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.WITHDRAW-FUNDING "sender00" 5.0)] }])
+(expect "withdraw-funding works frozen" "funding withdrawn"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.withdraw-funding "sender00" 5.0))
+(commit-tx)
+
+(begin-tx "2 tokens release-tranche works frozen (permissionless, the design record)")
+;; a later amendment (a later change): release-tranche is FOUNDER-ONLY now, so the frozen exercise moved
+;; from "liquidity" to setup.repl's founder row. Past the founder cliff (T+365d) it pays.
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-06-02T00:00:00Z") })
+(expect "release-tranche pays out frozen" true
+  (> (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.release-tranche
+       "founder:k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0") 0.0))
+(commit-tx)
+
+;; a later amendment (a later change): DISBURSEMENT WORKS FROZEN — the whole point of building it
+;; pre-freeze. The treasury tranche is past its cliff at this block-time, "alice" is a real
+;; holder created in the seed above, and the payment lands. A disbursement that stopped
+;; working at freeze would strand 70% of supply in the reserves FOREVER, which is the
+;; a finding defect shape this suite exists to catch.
+(begin-tx "2 tokens disburse-tranche works frozen (ADMIN, a later amendment)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-06-02T00:00:00Z") })
+;; 🔴 a later change: `DISBURSE` is `@managed`, so the frozen path is exercised the way it will
+;; actually be signed — a clist entry naming the exact tranche, target and budget. `env-keys`
+;; alone now fails with "Managed capability not installed", which would make this suite report
+;; a freeze defect that does not exist. THE FREEZE PROPERTY IS UNCHANGED: the meter is part of
+;; the capability, not of GOVERNANCE, so it behaves identically frozen and unfrozen — and the
+;; budget still BINDS after the freeze, which §G below pins by name.
+(env-sigs [{ "key": "admin-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "treasury" "alice" 10.0)] }])
+(expect "disburse-tranche pays out frozen" 10.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche
+    "treasury" "alice" 10.0))
+(expect "the disbursed tokens really landed, frozen" true
+  (>= (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice") 10.0))
+;; 🔴 a later change: AND THE BUDGET STILL BINDS WHEN FROZEN. The budget above was exactly 10.0 and it
+;; is now spent, so a second call on the SAME frozen module must be refused by the manager —
+;; not by the calendar, which still has the rest of the treasury vested. Without this the
+;; enumeration would record that `disburse-tranche` survives the freeze while saying nothing
+;; about whether the LIMIT does, and a meter that quietly stopped metering after the freeze is
+;; unfixable by construction.
+(expect-failure "the DISBURSE budget still binds on a FROZEN module"
+  "DISBURSE exceeded: 10.0 requested of 0.0 managed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche
+    "treasury" "alice" 10.0))
+(commit-tx)
+
+(begin-tx "2 tokens debit is still correctly UNREACHABLE from tx code when frozen")
+;; env-data restored deliberately: the credit negative below reads a keyset, and without it the
+;; call aborts on `read-keyset failure` BEFORE reaching `credit` — the assertion would then be
+;; green while testing nothing. The 3-arg form caught exactly that here, which is the whole
+;; argument for a later change's conversion of all 82 negatives.
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+;; Not a freeze effect — the same refusal holds unfrozen (an internal review a finding). Asserted so the
+;; enumeration covers `debit` with the reason it cannot be called directly, rather than
+;; omitting it and leaving a reader to wonder.
+(expect-failure "debit refuses without DEBIT in scope, frozen exactly as unfrozen"
+  "not granted"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.debit "alice" 1.0))
+(expect-failure "credit refuses without CREDIT in scope, frozen exactly as unfrozen"
+  "not granted"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.credit "alice" (read-keyset 'alice) 1.0))
+(rollback-tx)
+
+;; ===========================================================================
+;; §3 — SPT-launch: EVERY PUBLIC FUNCTION, FROZEN.
+;; THIS MODULE HAD ZERO FROZEN-STATE COVERAGE BEFORE a later change. It is the reason this item
+;; exists, and the sale is the module a buyer touches.
+;;
+;; NOT-RUNNABLE in this scenario:
+;; init one-shot, already ran in the seed. §5 proves the frozen module
+;; still REACHES its own one-shot guard, i.e. the refusal is
+;; "already initialized" and not a freeze effect.
+;; launch-reserve-guard /
+;; sales-proceeds-guard defconst-bound at load; exercised implicitly by every reserve
+;; and proceeds spend below (the accounts ARE their principals)
+;; enforce-not-initialized reached only through init
+;; ===========================================================================
+(begin-tx "3 launch READS all answer frozen")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-11T00:00:00Z") })
+(expect "get-price works frozen" 0.5 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.get-price))
+(expect "is-active works frozen" true (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.is-active))
+(expect "reserve-account works frozen" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-ACCOUNT
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.reserve-account))
+(expect "proceeds-account works frozen" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.SALES-PROCEEDS-ACCOUNT
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account))
+;; the design record part 2: enforce-price takes the floor as a PARAMETER now (init runs before the
+;; config row exists, so it cannot read one). Passing the live floor is the frozen-path
+;; equivalent of what set-price does.
+;; the design record (a later change): the address-only half of the beneficiary chain, exercised frozen. It is a
+;; pure string check with no authority, so the freeze cannot reach it — asserted anyway, because
+;; "it obviously still works" is the reasoning an internal review a finding defeated.
+(expect "enforce-beneficiary-address works frozen" true
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.enforce-beneficiary-address
+    "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"))
+(expect-failure "and it still REFUSES a non-principal frozen"
+  "beneficiary must be a k:/w: principal"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.enforce-beneficiary-address "vanity-name"))
+(expect "enforce-price works frozen" true
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.enforce-price 0.5
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.get-min-price)))
+(commit-tx)
+
+(begin-tx "3 launch buy works frozen — THE SALE STILL SELLS")
+;; The single most important assertion in this file for SPT-launch: a buyer can still
+;; buy from a frozen module. It spans BOTH frozen modules — coin payment in, then
+;; SPT.transfer-create out of the reserve under Pattern E.
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-11T00:00:00Z") })
+(env-data { "carol": { "keys": ["carol-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "carol" 250.0)] }])
+(coin.transfer-create "sender00" "carol" (read-keyset 'carol) 250.0)
+(commit-tx)
+(begin-tx "3 launch the purchase itself")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-11T00:00:00Z") })
+(env-sigs [{ "key": "carol-key", "caps": [(coin.TRANSFER "carol" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 250.0)] }])
+(expect "buy works frozen" "tokens purchased"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "carol" (read-keyset 'carol) 500.0))
+(expect "carol holds the SPT she bought from a frozen sale" 500.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "carol"))
+(commit-tx)
+
+(begin-tx "3 launch pause / set-price / resume-sale work frozen (the design record D2 order)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-11T00:00:00Z") })
+(env-keys ["admin-key"])
+(expect "pause works frozen" "sale paused" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.pause))
+(expect "is-active reflects the frozen pause" false (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.is-active))
+;; the design record D2 sequence: the reprice happens while PAUSED — the only state where it is
+;; legal at all — then the sale reopens. Both the operation AND the lockout must
+;; survive the freeze: an enforce that stopped enforcing frozen would be a defect the
+;; same way an operation that stopped working would.
+(expect "set-price works frozen (while paused)" "price updated" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-price 0.75))
+(expect "the frozen price update took" 0.75 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.get-price))
+(expect "resume-sale works frozen" "sale resumed" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale))
+(expect-failure "D2 lockout still enforced frozen: set-price refused while active"
+  "SPT price is locked while the sale is active"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-price 0.8))
+(expect "the refused frozen reprice changed nothing" 0.75 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.get-price))
+(commit-tx)
+
+(begin-tx "3 the design record part 2: BOTH SETTABLE LIMITS STILL MOVE FROZEN, and their floors still hold")
+;; 🔴 THIS IS THE AUDIT #7 a finding SHAPE, AND IT IS THE WHOLE POINT OF the design record PART 2.
+;; a finding was an operation that needed authority which DIED at freeze: the gas station's `init`
+;; composed `GOVERNANCE`, which enforces `(not FROZEN-MODULE)`, so a frozen station could never
+;; be created on a new chain. A settable limit whose SETTER stopped working at freeze would be
+;; the same defect and a worse one — the design record's Consequences say in terms that "after freeze, a
+;; settable limit stays settable forever". A limit that freezes at whatever value it happened to
+;; hold is just a defconst with extra steps, and the founder's whole reason for asking was that
+;; today's number may be wrong later.
+;; So: both setters take ADMIN-GOV, NOT GOVERNANCE. This asserts that difference instead of
+;; trusting it — swap either to GOVERNANCE and these four lines go red.
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-11T00:00:00Z") })
+(env-keys ["admin-key"])
+(expect "set-runway works frozen" "runway updated"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.set-runway 86400))
+(expect "the frozen runway change took" 86400
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-runway))
+;; and the HARD MINIMUM is still enforced frozen — a floor that stopped holding at freeze
+;; would be strictly worse than one that never existed, because the docs would still claim it.
+(expect-failure "the runway floor STILL refuses frozen"
+  "SPT runway must be at least"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.set-runway 60))
+(expect "the refused frozen runway change moved nothing" 86400
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-runway))
+;; The sale must be CLOSED to move the price floor, so pause around it — the same the design record D2
+;; sequence set-price uses, and it must survive the freeze too.
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.pause)
+(expect "set-min-price works frozen" "price floor updated"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-min-price 0.005))
+(expect "the frozen price-floor change took" 0.005
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.get-min-price))
+(expect-failure "the price floor's HARD minimum still refuses frozen"
+  "SPT price floor must be at least"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-min-price 0.0000001))
+(expect "the refused frozen floor change moved nothing" 0.005
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.get-min-price))
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+;; Rolled back: this block moves two limits, and every later assertion in this file was written
+;; against the seeded values.
+(rollback-tx)
+
+(begin-tx "3 launch withdraw-proceeds works frozen — the KDA exit survives")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-11T00:00:00Z") })
+;; a later change (founder ): WITHDRAW-PROCEEDS is @managed on amount, so an unscoped
+;; signature cannot drive it. The clist names the capability with the SAME destination and
+;; amount the call spends — and it must keep working on a FROZEN module.
+(env-sigs [{ "key": "admin-key"
+        , "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.WITHDRAW-PROCEEDS "sender00" 100.0)] }])
+(expect "withdraw-proceeds works frozen" "proceeds withdrawn"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.withdraw-proceeds "sender00" 100.0))
+(commit-tx)
+
+;; ===========================================================================
+;; §4 — THE OTHER HALF OF THE INVARIANT: THE UPGRADE PATH IS STILL REFUSED.
+;;
+;; 🔴 WITHOUT IT EVERYTHING ABOVE IS SATISFIED BY A MODULE THAT SIMPLY IS NOT FROZEN. A change
+;; that made every operation work by weakening the freeze itself would be catastrophic AND
+;; would look green.
+;;
+;; IT CANNOT LIVE IN THIS FILE, and the reason is a trap this repo has already paid for: a
+;; module `load` that fails is a COMPILE-TIME abort which leaves the parser inside the
+;; module's namespace, so `expect-failure` cannot catch it (measured here: wrapping the
+;; redeploy produced "Cannot find module: rollback-tx" — the suite died rather than asserting).
+;; That is exactly why every other unresolvable-load claim in this repo is a `.repl-must-fail`
+;; fixture asserted from OUTSIDE on the exit code AND the error text.
+;;
+;; So the two halves live in:
+;; pact/test/frozen-upgrade-tokens.repl-must-fail
+;; pact/test/frozen-upgrade-launch.repl-must-fail
+;; both registered in run-tests.sh's MUSTFAIL map against "Module is frozen".
+;; ===========================================================================
+
+;; ===========================================================================
+;; §5 — THE NOT-RUNNABLE FUNCTIONS, PROVEN NOT-RUNNABLE FOR A NON-FREEZE REASON.
+;; This is what turns "could not run it" from an excuse into evidence: each refusal is the
+;; function's OWN precondition, and none of them is "Module is frozen".
+;; ===========================================================================
+(begin-tx "5 init-supply refuses for its ONE-SHOT guard, not the freeze")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-11T00:00:00Z") })
+(env-data { "spt-gov": { "keys": ["admin-key"], "pred": "keys-all" } })
+(env-keys ["admin-key"])
+(expect-failure "init-supply: already initialized, NOT frozen"
+  "module already initialized"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init-supply
+    (read-keyset 'spt-gov)
+    [ { "account": "kf", "amount": 1.0 } ]))
+(rollback-tx)
+
+(begin-tx "5 init refuses for its CHAIN guard, not the freeze")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-11T00:00:00Z") })
+(env-keys ["admin-key"])
+(expect-failure "tokens.init: chain-0 guard, NOT frozen"
+  "Use init-supply on chain 0"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G))   ; the design record D3 4th arg — arity only; the chain guard fires first
+(rollback-tx)
+
+(begin-tx "5 launch.init refuses for its ONE-SHOT guard, not the freeze")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-11T00:00:00Z") })
+(env-keys ["admin-key"])
+(expect-failure "launch.init: already initialized, NOT frozen"
+  "sale already initialized"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5))
+(rollback-tx)
+
+;; ===========================================================================
+;; §6 — the design record (a later change): THE SIXTEEN NEW FUNCTIONS, EVERY ONE DISPOSITIONED.
+;;
+;; 🔴 THREE OF THESE ARE THE AUDIT #7 a finding SHAPE AND ARE EXERCISED FOR THAT REASON.
+;; `schedule-snapshot` and `cancel-snapshot` are ADMIN-gated and `advance-snapshot` WRITES.
+;; a finding was exactly this: the gas station's `init` composed `GOVERNANCE`, whose body enforces
+;; `(not FROZEN-MODULE)`, so a frozen station could never be created — an operation that died
+;; at the freeze, permanently, because a frozen module cannot be upgraded to repair it.
+;; If any of these three died the same way, a frozen chain could never seal another record
+;; date, and since the design record makes a sealed record date a PRECONDITION of `declare-round`, the
+;; ENTIRE award subsystem would be dead on that chain forever. That is not something to
+;; assume from reading the caps — it is asserted here against a module compiled frozen.
+;; (`ADMIN` gates on the admin keyset and never touches FROZEN-MODULE; the point is to prove
+;; it, because a finding reached an the reviewer precisely because no test could fail.)
+;; ===========================================================================
+(begin-tx "6 the design record reads all answer on a FROZEN module")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-11T00:00:00Z") })
+;; RELATIONAL, not a magic number: §2 sealed a generation on this frozen chain, so the
+;; assertion is that the readers AGREE with each other and with the row — which is what an
+;; operator sweeping 20 frozen chains actually depends on.
+(expect "get-snapshot-gen: a generation HAS sealed on this frozen chain" true
+  (>= (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot-gen) 1))
+(expect "get-snapshot: the live generation reads back exists:true, frozen" true
+  (at 'exists (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot-gen))))
+(expect "get-snapshot-at: EPOCH means none scheduled" true
+  (= (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot-at)
+     n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.EPOCH))
+;; get-total-distributed exists BECAUSE its absence was a freeze defect: `total-distributed`
+;; was the one state field with no getter at all, and after the freeze it is unreachable.
+;; Two independent readers of the same field must agree — the getter exists BECAUSE
+;; `total-distributed` was otherwise unreachable after the freeze.
+(expect "get-total-distributed: agrees with chain-report, frozen"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-total-distributed)
+  (at 'total-distributed (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.chain-report)))
+(expect "snapshot-circulating: IS the sealed row's circ, frozen"
+  (at 'circ (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot-gen)))
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snapshot-circulating))
+;; get-snapshot NEVER aborts on a missing generation — the `exists` idiom, so a 20-chain
+;; comparator can sweep every generation on every chain in one pass on a FROZEN module.
+(expect "get-snapshot: a never-sealed generation reports exists:false, frozen"
+  { "gen": 999, "exists": false, "circ": 0.0, "base": 0.0, "rate": 0.0 }
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot 999))
+(expect "get-snapshot: generation 0 and below are out of range, not an abort" false
+  (at 'exists (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot 0)))
+(expect "gkey: the generation key helper" "7"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.gkey 7))
+(commit-tx)
+
+(begin-tx "6 the correction arithmetic is pure and answers frozen")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-11T00:00:00Z") })
+;; idx 0 reads no snapshot row, so both are total functions on a chain that never sealed.
+(expect "snap-m: a never-checkpointed row measures against rpt itself" 0.25
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snap-m 0 0.25))
+(expect "snap-corr-of: a never-checkpointed row has NO correction" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snap-corr-of 0 0.0 100.0 0.0 0.25))
+(expect "snap-open: nothing sealed, so nothing is unfolded" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snap-open 0.25))
+;; A generation IS open here, so a never-checkpointed row's checkpoint DOES fire — it
+;; freezes the pre-operation balance into the live generation. `corr` is still 0.0 (idx 0
+;; carries no correction), which is the half that matters for the arithmetic.
+(expect "plan-snap: an unchecked row has no correction to crystallize, frozen" 0.0
+  (at 'corr (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.plan-snap 0 0.0 100.0 90.0 0.0 0.0)))
+(expect "plan-snap: and it checkpoints into the LIVE generation, frozen"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot-gen)
+  (at 'index (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.plan-snap 0 0.0 100.0 90.0 0.0 0.0)))
+(commit-tx)
+
+(begin-tx "6 the operator reads answer frozen — chain-report is the founder's one call")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-11T00:00:00Z") })
+;; The bar and the tool that reports it must agree — one implementation, two callers.
+(expect "round-funding-bar: IS what funding-needed reports, frozen"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.round-funding-bar 0.01)
+  (at 'required (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.funding-needed 0.01)))
+(expect "funding-needed: a shortfall is never negative, frozen" true
+  (>= (at 'shortfall (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.funding-needed 0.01)) 0.0))
+;; chain-report wraps its reserve reads in `try` precisely so it answers on the nineteen
+;; SPOKES, where the launch reserve row does not exist. A frozen spoke is where an operator
+;; needs it most, and an aborting read there would be unfixable.
+(expect "chain-report: answers in one call on a frozen module, and agrees"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot-gen)
+  (at 'generation (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.chain-report)))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; 🔴 THE THREE THAT WRITE. If these die at freeze the award subsystem dies with them.
+;; ---------------------------------------------------------------------------
+(begin-tx "6 advance-snapshot: PERMISSIONLESS and WRITES, and it still runs frozen")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-11T00:00:00Z") })
+(env-keys [])                       ; no keys at all — it must not need any
+(expect "advance-snapshot: no-ops cleanly on a frozen module, unsigned" "no-seal"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot))
+(commit-tx)
+
+(begin-tx "6 schedule-snapshot: ADMIN-gated, and the freeze does NOT revoke it")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-11T00:00:00Z") })
+(env-keys ["admin-key"])
+(expect "schedule-snapshot: a record date can still be named on a FROZEN module"
+  "record date scheduled"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+    (time "2026-06-13T00:00:00Z")))
+;; ...and the only way back is still open too. Both or neither: a schedulable-but-not-
+;; cancellable record date on a frozen module would be a permanent mis-dating.
+(expect "cancel-snapshot: and it is still cancellable on a FROZEN module"
+  "record date cancelled"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cancel-snapshot))
+(rollback-tx)
+
+(begin-tx "6 and the ADMIN gate is still a real gate on a frozen module")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-11T00:00:00Z") })
+(env-keys [])
+;; Surviving the freeze must not mean becoming permissionless — the negative is the other
+;; half of the claim, and without it "it still runs frozen" could be true for a stranger too.
+(expect-failure "schedule-snapshot: a stranger is still refused, frozen"
+  "Keyset failure"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+    (time "2026-06-13T00:00:00Z")))
+(rollback-tx)
+
+;; 🔴 THE BANNER NAMES ITS OWN LIMIT (a later change / `L4-03`). It used to read "every enumerated
+;; function survives the freeze", full stop — which an operator reads as a freeze clearance, and
+;; which was false: §1a measures a real outage in the window between freezing the token and
+;; re-deploying the sale. Every claim below is scoped to what this file actually executes.
+(print "smartpacts-frozen-invariant suite PASSED — every enumerated function survives the freeze ONCE THE SALE IS RE-LINKED (§1a measures the outage before it; the bless rescue that removes the window is node-measured by bless-drill.ts D1/D2, a later change); upgrade still refused on both modules. NOT a freeze clearance — the operator runbook gates the operator runbook.")

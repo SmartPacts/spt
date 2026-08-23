@@ -1,0 +1,106 @@
+name: ci
+
+# ===========================================================================
+# EVERYTHING THIS REPO CLAIMS, RUN ON EVERY PUSH.
+#
+# What runs here is exactly what runs locally: `pact/test/run-tests.sh` and
+# `.github/scripts/pact-static-check.sh`, unchanged, with no CI-only subset.
+# A CI that runs a reduced set teaches you to trust a green tick that means
+# less than you think.
+#
+# Nothing here reaches a network other than the pinned engine download. There
+# is no deploy step, no key, and no secret: this workflow cannot publish or
+# sign anything.
+# ===========================================================================
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # PINNED BY CONTENT, NOT BY TAG. A tag is mutable and a release asset can be
+  # replaced; the sha256 is what makes "CI ran Pact 5.4ce" a fact rather than a
+  # hope. Re-pin only when deliberately moving engine version, and re-measure
+  # BOTH values.
+  PACT_URL: https://github.com/kda-community/pact-5/releases/download/5.4ce/pact-5.4ce-b769-ubuntu-24.04.tar.gz
+  PACT_TARBALL_SHA256: 7370d33fa1e69474921bdd853a56c608c9eee89f73fe0a4f2e7215a7ce065849
+  PACT_BINARY_SHA256: 6c329662af8b06b8bf3b93fa886557769d9948ddd2899b94f465fe89f6339b16
+
+jobs:
+  ci:
+    # 24.04 is not cosmetic: the pinned tarball is the ubuntu-24.04 build.
+    # Changing the runner without re-pinning gives you a binary that may not run.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Pact 5.4ce (content-pinned)
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -o pact.tar.gz "$PACT_URL"
+          echo "${PACT_TARBALL_SHA256}  pact.tar.gz" | sha256sum -c -
+          mkdir -p pact-dist && tar xzf pact.tar.gz -C pact-dist
+          echo "${PACT_BINARY_SHA256}  pact-dist/pact" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin" && install -m755 pact-dist/pact "$HOME/.local/bin/pact"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Engine identity
+        run: |
+          set -euo pipefail
+          command -v pact
+          pact --version
+          # Every python gate FAILS CLOSED without python3. Prove it is here rather
+          # than discovering it as ten identical failures further down.
+          python3 --version
+
+      # Tier 1 loads every .pact/.repl through the engine; Tier 2 is a pattern scan.
+      # VIOLATIONs are a hard fail. WARNs are reviewed by a human and never gate.
+      - name: Static gate
+        run: .github/scripts/pact-static-check.sh
+
+      # The deploy namespace is embedded in the module sources as string literals.
+      # The expected value is READ from the recorded artifact baseline rather than
+      # restated here — restating it would make this gate compare a constant with itself.
+      - name: Namespace gate (source literals vs the recorded namespace)
+        run: |
+          set -euo pipefail
+          NS="$(python3 -c 'import json;print(json.load(open("verification/artifact-baseline.json"))["ns"])')"
+          test -n "$NS"
+          tools/check-namespace.sh "$NS"
+
+      # THE TWO VARIANTS ARE THE SAME CODE, PROVEN RATHER THAN ASSERTED.
+      #   1. stripping the annotated source reproduces deploy-bytes/ byte for byte
+      #   2. the sha256 of each deploy-bytes file matches deploy-bytes/SHA256SUMS
+      # Pact's module hash covers parsed code only — comments are outside it — so the
+      # annotated copy and the deploy bytes carry the SAME module hash. That equality
+      # is what step 3 (run-tests.sh, artifact-baseline) checks against the record.
+      - name: Two variants are the same code
+        run: |
+          set -euo pipefail
+          for M in SPT SPT-launch; do
+            python3 .github/scripts/strip-for-deploy.py "pact/modules/$M.pact" > "/tmp/$M.stripped"
+            diff -u "deploy-bytes/$M.pact" "/tmp/$M.stripped" \
+              || { echo "::error::deploy-bytes/$M.pact is not the strip of pact/modules/$M.pact"; exit 1; }
+          done
+          ( cd deploy-bytes && sha256sum -c SHA256SUMS )
+
+      # The umbrella: every REPL suite, every must-fail fixture, and every python gate
+      # they invoke (expect-failure arity, the founder-page promise gate, the deploy
+      # budget + strip/hash equality, the whole-surface DML manifest, the artifact
+      # baseline pin, and the frozen-module fixtures).
+      - name: Full suite and gates
+        run: pact/test/run-tests.sh
+
+      # PUBLICATION HYGIENE, ENFORCED FOREVER RATHER THAN ONCE. The scrub that made
+      # this repo publishable is only as durable as the check that repeats it.
+      - name: Publication hygiene
+        run: .github/scripts/public-hygiene-check.sh

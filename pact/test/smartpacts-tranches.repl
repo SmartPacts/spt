@@ -1,0 +1,344 @@
+;; ===========================================================================
+;; SPT TRANCHE TIME-LOCKS (the design record) — founder / treasury / liquidity.
+;; Proves: locks created at init with the source-derived calendar; pre-cliff release
+;; fails; partial linear release is exact + monotonic; vest-end releases exactly the
+;; remainder (Σ = total, no dust); released SPT enters the float (circulating +,
+;; award-accruing, votable); unknown tranche + double-past-full are rejected;
+;; per-release gas is well under the 150k ceiling. Run from pact/test/.
+;; T (calendar origin) = setup block-time T00:00:00Z.
+;; Reserves are on chain 0; releases happen on chain 0.
+;; ===========================================================================
+(load "setup.repl")
+
+(begin-tx "tranche rows created at init with the pre-committed calendar")
+;; init-supply (in setup) created 3 rows; verify balances + schedule origins.
+(expect "founder reserve 10k"   10000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-ACCOUNT))
+(expect "treasury reserve 55k"  55000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-ACCOUNT))
+(expect "liquidity reserve 15k" 15000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.LIQUIDITY-ACCOUNT))
+(expect "reserves sum to full 100k with launch 20k"
+  100000.0
+  (+ (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-ACCOUNT)
+     (+ (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-ACCOUNT)
+        (+ (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.LIQUIDITY-ACCOUNT)
+           (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-ACCOUNT)))))
+(expect "founder cliff-end T+365d"    (time "2027-06-01T00:00:00Z") (at 'cliff-end (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-tranche "founder:k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0")))
+(expect "founder vest-end T+1460d"    (time "2030-05-31T00:00:00Z") (at 'vest-end  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-tranche "founder:k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0")))
+(expect "treasury cliff-end T+365d"   (time "2027-06-01T00:00:00Z") (at 'cliff-end (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-tranche "treasury")))
+(expect "treasury vest-end T+1825d"   (time "2031-05-31T00:00:00Z") (at 'vest-end  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-tranche "treasury")))
+(expect "liquidity cliff-end T+90d"   (time "2026-08-30T00:00:00Z") (at 'cliff-end (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-tranche "liquidity")))
+(expect "liquidity vest-end T+730d"   (time "2028-05-31T00:00:00Z") (at 'vest-end  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-tranche "liquidity")))
+(expect "founder released starts 0"   0.0 (at 'released (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-tranche "founder:k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0")))
+(commit-tx)
+
+;; --- a later amendment (a later change): the module-held tranches are DISBURSED, never released ------
+;; The two fixed tranches leave only through `disburse-tranche`. `release-tranche` refuses
+;; them by NAME, before it computes an amount — so the refusal says why, instead of the
+;; true-but-wrong "nothing releasable" a pre-cliff call would otherwise produce.
+(begin-tx "treasury and liquidity are not releasable AT ALL")
+(env-chain-data { "chain-id": "0", "block-time": (time "2028-05-31T00:00:00Z") })  ; liquidity FULLY vested
+(expect-failure "release-tranche refuses liquidity by name, even fully vested"
+  "SPT only founder allocations are released; treasury and liquidity are disbursed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.release-tranche "liquidity"))
+(expect-failure "release-tranche refuses treasury by name"
+  "SPT only founder allocations are released; treasury and liquidity are disbursed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.release-tranche "treasury"))
+;; ...and the converse: a FOUNDER allocation has no disbursable balance (category error).
+(expect-failure "tranche-available refuses a founder allocation"
+  "SPT only the treasury and liquidity tranches have a disbursable balance"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.tranche-available
+    "founder:k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"))
+;; 🔴 a later change: `DISBURSE` IS NOW `@managed` ON `amount`, SO EVERY CALL BELOW IS DRIVEN BY AN
+;; `env-sigs` CLIST NAMING THE EXACT CAPABILITY — `env-keys` alone now fails with "Managed
+;; capability not installed" before any of this file's own checks can answer. That is not a
+;; test-harness detail: it IS the operating model, and a test that bypassed it with
+;; `test-capability` would stop modelling how the founder actually signs.
+;; 🔴 WHERE A TEST IS ABOUT SOMETHING ELSE (vesting, tranche name, target validity, precision)
+;; THE BUDGET IS DELIBERATELY GENEROUS, so the refusal under test is the one that fires rather
+;; than the meter. The meter's own binding is pinned by name in smartpacts-admin-tiers.repl §F.
+(env-sigs [{ "key": "admin-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "founder:k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0" "sender00" 1.0)] }])
+(expect-failure "disburse-tranche refuses a founder allocation"
+  "SPT only the treasury and liquidity tranches are disbursed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche
+    "founder:k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0" "sender00" 1.0))
+(rollback-tx)
+
+;; --- before cliff: nothing available, nothing releasable ---
+(begin-tx "pre-cliff release/disburse fails")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-29T00:00:00Z") })  ; 1 day before liquidity cliff
+(env-sigs [{ "key": "admin-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "liquidity" "k:c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7" 1.0) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "treasury" "sender00" 1.0)] }])
+(expect "liquidity has nothing available at 0" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.tranche-available "liquidity"))
+(expect "treasury has nothing available at 0" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.tranche-available "treasury"))
+;; 🔴 THE CALENDAR BOUND at its hardest boundary: one day before the cliff even the smallest
+;; representable amount is refused. This is what keeps Am.2 a WHERE-decision, never a WHEN.
+(expect-failure "nothing disbursable before the liquidity cliff — not even 1e-12"
+  "SPT disbursement exceeds the vested available amount"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche "liquidity" "k:c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7" 0.000000000001))
+(expect-failure "nothing disbursable before the treasury cliff"
+  "SPT disbursement exceeds the vested available amount"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche "treasury" "sender00" 1.0))
+(expect-failure "nothing releasable before founder cliff"
+  "nothing releasable"   (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.release-tranche "founder:k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"))
+;; STATE UNCHANGED — the reserves did not move under any of the refusals above.
+(expect "the liquidity reserve is untouched" 15000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.LIQUIDITY-ACCOUNT))
+(expect "the treasury reserve is untouched" 55000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-ACCOUNT))
+(rollback-tx)
+
+;; --- unknown tranche rejected (fixed 3-row key space) ---
+(begin-tx "unknown tranche rejected")
+(expect-failure "unknown tranche"
+  "No value found in table n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT_tranche-locks for key: bogus" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.release-tranche "bogus"))
+(commit-tx)
+
+;; --- a later amendment: LIQUIDITY DISBURSEMENT, on the same the design record curve ------------------
+;; The vesting numbers below are UNCHANGED from when this tranche was released to a
+;; ceremony-fixed beneficiary: the calendar is the calendar, and that is the point. What
+;; changed is WHO chooses the destination, WHEN within the vested amount — and that the
+;; target must ALREADY EXIST.
+(begin-tx "liquidity: a disbursement never creates the target account")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-08-30T00:00:00Z") })  ; 1yr after liquidity cliff
+(env-sigs [{ "key": "admin-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "liquidity" "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" 1.0)] }])
+;; 🔴 THIS IS THE WHOLE RECIPIENT-KEY STORY. The guard is read from the target's own ledger
+;; row, never supplied, so this path can never mint an account under a keyset nobody can
+;; satisfy — an internal review `L2-F1`'s freeze-forever shape is unreachable here by
+;; construction. A recipient creates their own account with their own keys first.
+(expect-failure "a disbursement to a non-existent account is refused"
+  "No value found in table n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT_accounts for key: k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche "liquidity" "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" 1.0))
+;; STATE UNCHANGED: the refusal moved nothing out of the reserve.
+(expect "the liquidity reserve is untouched by the refused disbursement" 15000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.LIQUIDITY-ACCOUNT))
+(rollback-tx)
+
+(begin-tx "liquidity partial disbursement: exact linear amount + enters float")
+(env-chain-data { "chain-id": "0", "block-time": (time "2027-08-30T00:00:00Z") })
+(env-data { "lk": { "keys": ["b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"], "pred": "keys-all" } })
+;; the market maker creates its own account, permissionlessly, with its own keys
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-account "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" (read-keyset 'lk))
+(env-sigs [{ "key": "admin-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "liquidity" "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" 20000.0)] }])
+(expect "available = 8554.6875 (exact floor-12, the the design record curve)" 8554.6875
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.tranche-available "liquidity"))
+;; 🔴 THE BOUND AT ITS EXACT EDGE: one pico-SPT over what has vested is refused.
+(expect-failure "one pico-SPT over the vested amount is refused"
+  "SPT disbursement exceeds the vested available amount"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche "liquidity" "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" 8554.687500000001))
+;; ...and the whole vested amount, to the pico-SPT, is accepted.
+(expect "disburse returns the amount" 8554.6875
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche "liquidity" "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" 8554.6875))
+(expect "the target holds it" 8554.6875
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"))
+(expect "liquidity reserve drained by exactly that" 6445.3125
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.LIQUIDITY-ACCOUNT))
+(expect "disbursed amount enters circulating" 8554.6875 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+(expect "disbursed bookkeeping updated" 8554.6875
+  (at 'released (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-tranche "liquidity")))
+(expect "and nothing more is available until more vests" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.tranche-available "liquidity"))
+;; a later change — a disbursement MOVES existing supply, so the stream must show a normal
+;; TWO-SIDED fungible-v2 transfer out of the reserve (sender is NOT "" — this is not a
+;; mint), plus the Am.2 disclosure event carrying tranche, target and the running total.
+(let ((evs (env-events true)))
+  (expect "disburse emits TRANSFER reserve -> target with the exact amount"
+    [ [n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.LIQUIDITY-ACCOUNT
+       "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+       8554.6875] ]
+    (map (lambda (e:object) (at 'params e))
+      (filter (lambda (e:object)
+                (= "n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER" (at 'name e))) evs)))
+  (expect "TRANCHE-DISBURSED carries tranche, target, amount and the running total"
+    [ ["liquidity" "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" 8554.6875 8554.6875] ]
+    (map (lambda (e:object) (at 'params e))
+      (filter (lambda (e:object)
+                (= "n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANCHE-DISBURSED" (at 'name e))) evs))))
+(commit-tx)
+
+;; --- monotonic: a later disbursement can only pay the NEW accrual ---
+(begin-tx "liquidity second disbursement = incremental only, split across two targets")
+(env-chain-data { "chain-id": "0", "block-time": (time "2028-05-31T00:00:00Z") })  ; vest-end
+(env-sigs [{ "key": "admin-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "liquidity" "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" 445.3125)] }])
+(expect "remainder to full = 15000 - 8554.6875" 6445.3125 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.tranche-available "liquidity"))
+;; MULTIPLE PARTIAL DISBURSEMENTS TO DISTINCT TARGETS — the shape Am.2 exists for.
+(expect "part one, back to the market maker" 445.3125
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche "liquidity" "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" 445.3125))
+(env-data { "mk": { "keys": ["c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7"], "pred": "keys-all" } })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-account "k:c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7" (read-keyset 'mk))
+(env-sigs [{ "key": "admin-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "liquidity" "k:c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7" 6001.0)] }])
+(expect "part two, to a DIFFERENT existing holder" 6000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche "liquidity" "k:c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7" 6000.0))
+(expect "target one holds both of its payments" 9000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"))
+(expect "target two holds its payment" 6000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "k:c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7"))
+(expect "liquidity reserve empty (sum = total, no dust)" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.LIQUIDITY-ACCOUNT))
+(expect "disbursed bookkeeping = total" 15000.0
+  (at 'released (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-tranche "liquidity")))
+(expect "nothing left to disburse, ever" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.tranche-available "liquidity"))
+(expect-failure "a fully-disbursed tranche refuses even 1e-12"
+  "SPT disbursement exceeds the vested available amount"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche "liquidity" "k:c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7" 0.000000000001))
+(commit-tx)
+
+;; --- at/after vest-end: full remainder in one shot (founder) ---
+(begin-tx "founder single release at vest-end pays exactly total")
+(env-chain-data { "chain-id": "0", "block-time": (time "2030-05-31T00:00:00Z") })  ; founder vest-end
+(expect "founder full 10000 releasable" 10000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.tranche-releasable "founder:k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"))
+(expect "release pays 10000" 10000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.release-tranche "founder:k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"))
+(expect "founder beneficiary holds 10000" 10000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"))
+(expect "founder reserve empty" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-ACCOUNT))
+;; a later change — FOUNDER dispatch branch: the sender must be the FOUNDER reserve, not one of
+;; the other two. This is what makes the three branches individually falsifiable.
+(expect "founder release emits TRANSFER from the FOUNDER reserve"
+  [ [n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-ACCOUNT
+     "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"
+     10000.0] ]
+  (map (lambda (e:object) (at 'params e))
+    (filter (lambda (e:object)
+              (= "n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER" (at 'name e)))
+            (env-events true))))
+;; nothing further to release once fully paid
+(expect-failure "founder fully released"
+  "nothing releasable" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.release-tranche "founder:k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"))
+(commit-tx)
+
+;; --- treasury after vest-end: the whole 55k is available; disbursement is GAS-MEASURED
+;; here (the one new transactional path a later amendment adds) and must sit far under the
+;; 150k KDA-CE ceiling. ---
+;; ===========================================================================
+;; 🔴 R3 — THE SALE RESERVE MAY NOT RECEIVE A DISBURSEMENT.
+;; Cold an internal review `a finding`/`a finding`, remediated by a later change.
+;;
+;; `protocol-account?` names the five accounts that may never move or receive SPT, and it
+;; DELIBERATELY EXCLUDES the LAUNCH reserve — that reserve must stay DEBITABLE so `buy`
+;; can deliver. a later change reused that predicate for the disbursement target and inherited the
+;; hole: the admin could send treasury or liquidity tokens INTO `SPT-launch`'s reserve,
+;; where they are recoverable only through the SALE module's admin — WHICH DIES AT FREEZE —
+;; and where `buy` would then sell them at a floor price calibrated for a fixed
+;; 20,000-token reserve. The audit measured the end state: 89,100 SPT (89.1 % of supply)
+;; sold for 891 KDA in one permissionless call. This is the ONE measured escape from the
+;; envelope the founder approved.
+;;
+;; THE REFUSAL IS `excluded?`, NOT A NEW ADDRESS LITERAL. An excluded target is always wrong
+;; for a disbursement regardless of this attack: the founder's decision is that disbursed
+;; tokens are ORDINARY tokens that vote and earn, and an excluded account silently holds
+;; neither. One check, semantically motivated, covering every excluded name at once.
+;;
+;; 🔴 ITS OWN ROLLED-BACK TX, and that is not decoration. This negative asserts STATE
+;; UNCHANGED, and when the check is weakened the disbursement SUCCEEDS and leaks 1 SPT into
+;; the sale — measured while writing this: the leak cascaded into six later assertions and
+;; buried the one that had actually regressed.
+;; ===========================================================================
+(begin-tx "R3: the sale reserve cannot receive a disbursement")
+(env-chain-data { "chain-id": "0", "block-time": (time "2031-06-01T00:00:00Z") })  ; past treasury vest-end
+(env-sigs [{ "key": "admin-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "treasury" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-ACCOUNT 1.0)] }])
+(expect-failure "R3: the SALE RESERVE cannot receive a disbursement"
+  "SPT disbursement target must not be an excluded account"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche
+    "treasury" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-ACCOUNT 1.0))
+;; STATE UNCHANGED — the refusal moved nothing into the sale.
+(expect "R3: the sale reserve still holds exactly its ceremony tranche" 20000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-ACCOUNT))
+(expect "R3: and the treasury reserve is untouched" 55000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-ACCOUNT))
+(rollback-tx)
+
+(begin-tx "treasury disbursement after vest-end (gas-measured)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2031-06-01T00:00:00Z") })  ; past treasury vest-end
+(env-data { "tk": { "keys": ["a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"], "pred": "keys-all" } })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-account "k:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1" (read-keyset 'tk))
+(env-sigs [{ "key": "admin-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "treasury" "k:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1" 60000.0) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "treasury" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-ACCOUNT 1.0)] }])
+(expect "treasury full 55000 available" 55000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.tranche-available "treasury"))
+;; A NON-ADMIN cannot disburse. The one discretionary power over 70% of supply is gated by
+;; the admin keyset and by nothing weaker — asserted, not assumed.
+(env-sigs [{ "key": "intruder-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "treasury" "k:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1" 1.0)] }])
+(expect-failure "a non-admin cannot disburse"
+  "Keyset failure (keys-all): [admin-ke...]"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche "treasury" "k:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1" 1.0))
+(env-sigs [{ "key": "admin-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "treasury" "k:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1" 60000.0) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "treasury" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-ACCOUNT 1.0)] }])
+;; A RESERVE may not receive a disbursement: a deposit into one has no exit on any engine,
+;; forever (a later change M-1). Without this check, disbursing the treasury into the founder
+;; reserve would permanently destroy those tokens.
+(expect-failure "a protocol reserve cannot receive a disbursement"
+  "SPT protocol accounts cannot receive a disbursement"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche "treasury" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-ACCOUNT 1.0))
+(expect-failure "a non-positive disbursement is refused"
+  "SPT disbursement amount must be positive"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche "treasury" "k:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1" 0.0))
+(expect-failure "an over-precise disbursement is refused"
+  "amount violates minimum precision"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche "treasury" "k:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1" 1.0000000000001))
+(env-gasmodel "table")
+(env-gaslimit 150000)
+(env-gas 0)
+(expect "disburse pays the whole vested 55000" 55000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.disburse-tranche "treasury" "k:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1" 55000.0))
+(expect "disburse-tranche gas under the 150k ceiling" true (< (env-gas) 150000))
+(print (format "disburse-tranche gas: {}" [(env-gas)]))
+(env-gaslimit 999999999)  ; keep table model on, but never bind later txs
+;; The TREASURY branch of the reserve dispatch — the sender must be the TREASURY reserve,
+;; not one of the other two. That is what makes the branches individually falsifiable.
+;; Read AFTER the gas assertions so env-events cannot perturb the measurement beside it.
+(expect "treasury disbursement emits TRANSFER from the TREASURY reserve"
+  [ [n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-ACCOUNT
+     "k:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+     55000.0] ]
+  (map (lambda (e:object) (at 'params e))
+    (filter (lambda (e:object)
+              (= "n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER" (at 'name e)))
+            (env-events true))))
+(expect "treasury reserve empty" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-ACCOUNT))
+;; 🔴 THE FLOAT ARITHMETIC CHANGED WITH Am.2, AND THIS IS THE LINE THAT SAYS SO.
+;; Until a later change the treasury paid a STORED, `excluded?` beneficiary, so its 55,000 never
+;; entered the float and the release was FLOAT-NEUTRAL — this assertion read 25,000. There
+;; is no stored beneficiary any more: a disbursement target is an ordinary account, so every
+;; disbursed token counts. 10,000 founder + 15,000 liquidity + 55,000 treasury = 80,000,
+;; the whole supply minus the unsold 20,000 launch reserve.
+(expect "circulating = 80000 — disbursed treasury tokens are ORDINARY tokens (Am.2)" 80000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; 🔴 INVERTED AGAIN, BY THE FOUNDER, (a later amendment / a later change).
+;;
+;; a later change / the design record D4 made this section assert that released treasury tokens could NOT
+;; vote, by storing the beneficiary and excluding it. Am.2 deletes that stored name
+;; entirely: the treasury holds its tokens INSIDE the module (excluded by DEFCONST, with no
+;; configuration to get wrong on any of the 20 chains) and, once disbursed, they are
+;; ORDINARY TOKENS that vote and earn awards. The founder approved exactly that —
+;; "admin having over 70% of control is ok and approved".
+;;
+;; This is a REAL CHANGE IN WHO CAN VOTE, not a test edit, and both doc tiers say so. The
+;; `excluded?` honesty note gets STRONGER rather than weaker: exclusion was never a property
+;; of tokens, only of names, and now the admin can deliberately put treasury tokens into a
+;; voting name. No contract can prevent or detect that; disclosure does the work.
+;; ---------------------------------------------------------------------------
+(begin-tx "disbursed treasury SPT CAN vote (a later amendment)")
+(env-chain-data { "chain-id": "0", "block-time": (add-time (time "2031-06-01T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) })
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal "TP" "post-disbursement" "d" (add-time (time "2031-06-01T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) (add-time (time "2031-06-01T00:00:00Z") 1.0) 259200)
+(commit-tx)
+(begin-tx "the disbursement target votes its tokens")
+(env-chain-data { "chain-id": "0", "block-time": (time "2031-06-02T00:00:00Z") })
+(env-sigs [{ "key": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.VOTE "k:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1")] }])
+(expect "Am.2: a disbursement target votes like any holder" "vote cast"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "k:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1" "TP" true))
+(expect "Am.2: and its full balance counts in the tally" 55000.0
+  (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "TP")))
+(expect "Am.2: the target is NOT excluded — there is no stored beneficiary any more" false
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.excluded? "k:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"))
+;; CONTROL — `excluded?` did NOT become vacuous. The RESERVES are still excluded, by
+;; defconst, on every chain. Without these, "not excluded -> false" would be equally
+;; satisfied by an `excluded?` that returns false for everything, and the reserves'
+;; exclusion — which is now the ONLY exclusion left — would be silently gone.
+(expect "CONTROL: the treasury RESERVE itself is still excluded (defconst, all 20 chains)" true
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.excluded? n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-ACCOUNT))
+(expect "CONTROL: the liquidity RESERVE itself is still excluded" true
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.excluded? n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.LIQUIDITY-ACCOUNT))
+(expect "CONTROL: the founder RESERVE itself is still excluded" true
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.excluded? n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-ACCOUNT))
+(expect "CONTROL: the launch reserve (a STORED exclusion) is still excluded" true
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.excluded? n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-ACCOUNT))
+(expect "CONTROL: an ordinary account is not excluded — the rule did not over-apply" false
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.excluded? "alice"))
+(commit-tx)
+
+(print "smartpacts-tranches the design record suite PASSED")

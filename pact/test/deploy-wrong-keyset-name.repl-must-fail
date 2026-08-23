@@ -1,0 +1,41 @@
+;; MUST-FAIL FIXTURE (a later change / an internal review a finding). Updated for the design record (a later change).
+;;
+;; The deploy footer pins BOTH admin keyset NAMES. This fixture falsifies the FIRST:
+;; (enforce (= (read-msg 'spt-gov-name) "n_48867b…e0e3.spt-gov")
+;; "spt-gov-name must be the namespace's spt-gov keyset")
+;; Its sibling `deploy-wrong-ops-keyset-name.repl-must-fail` falsifies the second. 🔴 TWO PINS
+;; NEED TWO FIXTURES: the gov enforce runs FIRST, so a single fixture that mistypes only the
+;; ops name would abort on the gov line if the gov name were also wrong, and a single fixture
+;; that mistypes both proves nothing about which pin fired. One fixture per pin, each with the
+;; other name CORRECT, is the only shape that isolates them.
+;;
+;; 🔴 IT HAD NO FALSIFYING TEST. Every one of the suites that sets these names passes the
+;; CORRECT value, so a full mutation sweep of all 124 enforce sites found this one SURVIVING:
+;; neutering it to `true` left the entire suite green. It was the only guard in either module
+;; that was reachable, uncovered, and not documented as deliberately untestable.
+;;
+;; WHAT IT DEFENDS, and why a typo here is not a small thing: `GOV-KS`/`OPS-KS` are module
+;; defconsts that name the keysets by string, and they are NOT in scope out in the deploy
+;; footer — so the literals are repeated there deliberately. Without this pin, a mistyped name
+;; in the deploy payload would `define-keyset` a keyset that no module ever reads, on the one
+;; transaction in the estate that cannot be redone, while the module's own admin gate kept
+;; pointing at a name nobody defined. Fail-loud is the whole design.
+;;
+;; A failing module `load` is a COMPILE-TIME abort that leaves the parser inside the module's
+;; namespace, so it cannot be wrapped in `expect-failure` — hence a fixture asserted from
+;; OUTSIDE on both the exit code and the error text, like its `upgrade-nokey` sibling.
+(load "setup.repl")
+(begin-tx "fresh deploy whose spt-gov-name is one character wrong")
+(env-data
+  { "ns": "n_48867b242317a0216a67f8c7ca26696b5878e0e3"
+, "upgrade": false
+ ;; The correct name ends ".spt-gov". This one ends ".spt-gvo" — a transposition, the shape a
+ ;; hand-typed ceremony input actually produces, not an obviously absurd value.
+, "spt-gov-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-gvo"
+, "spt-gov": { "keys": ["admin-key"], "pred": "keys-all" }
+ ;; The OPS name is deliberately CORRECT, so the abort can only be the gov pin.
+, "spt-ops-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-ops"
+, "spt-ops": { "keys": ["admin-key"], "pred": "keys-any" } })
+(env-keys ["admin-key"])
+(load "../modules/SPT.pact")
+(commit-tx)

@@ -1,0 +1,11 @@
+{
+  "_note": "The identity of the audited artifact. `.github/scripts/artifact-baseline.py` re-derives both module hashes from the source in this repo and refuses if either differs. See VERIFY.md for how to check these against the chain once the modules are deployed.",
+  "ns": "n_48867b242317a0216a67f8c7ca26696b5878e0e3",
+  "_ns_note": "A principal namespace, derived from the governance keyset — not a chosen name. It is written into the module source, so it is part of what the hashes below cover.",
+  "_module_hashes": {
+    "SPT": "cg8sInne-rg-JM2L1H2rcppXqBGE8NUIyBdB275RTP0",
+    "SPT-launch": "RMn_SApRndMLn4b0MGIm-CE2zWRsU3m5t4e-EnHpyTY",
+    "audit_status": "AUDITED",
+    "as_of": "2026-08. Reviewed at exactly these two hashes. A Pact module hash excludes ;; comments and @doc, so the annotated source in pact/modules/ and the stripped payload in deploy-bytes/ carry the SAME hash — that is what makes the annotated copy auditable rather than decorative."
+  }
+}

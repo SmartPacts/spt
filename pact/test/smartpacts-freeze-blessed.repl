@@ -1,0 +1,137 @@
+;; ===========================================================================
+;; smartpacts-freeze-blessed — a later change. THE FOUNDER'S FREEZE RULE, AS A TEST.
+;;
+;; 🔴 THE RULE, stated three times and now load-bearing: "freeze should only make the module no
+;; longer upgradable — ALL DEFUNS AND DEFPACTS MUST WORK AS ALWAYS."
+;;
+;; A plain `(defconst FROZEN-MODULE true)` flip VIOLATES that rule BETWEEN MODULES. Freezing
+;; `SPT` changes its module hash; `SPT-launch` is linked against the OLD
+;; hash, `enforceBlessedHashes` refuses, and `launch.buy` — a PUBLIC DEFUN — dies. No
+;; `GOVERNANCE` acquisition is involved, so run-tests.sh's grep cannot see it, and until a later change
+;; `smartpacts-frozen-invariant.repl` L4-01 asserted that outage as EXPECTED.
+;;
+;; THIS SUITE PINS THE REQUIREMENT: with ONE `(bless "<pre-freeze-token-hash>")` line in the
+;; freeze source, `buy` keeps settling with NO sale redeploy, against a module whose
+;; `FROZEN-MODULE` is `true`. Two CRITICALs close on that one line — the sale outage, and
+;; in-flight cross-chain transfers destroyed at step 1.
+;;
+;; 🔴 WHY THIS IS A SEPARATE FILE AND NOT A SECTION OF frozen-invariant. `GOVERNANCE` enforces
+;; `(not FROZEN-MODULE)`, so once a module is frozen it CANNOT be upgraded again — the blessed
+;; and unblessed freezes cannot be A/B'd in one world, and the blessed case needs a clean one.
+;;
+;; 🔴 THE FIXTURE'S BLESSED HASH IS DERIVED, NEVER TYPED. Blessing a hash CHANGES the hash, so
+;; the value is only knowable once the bytes are final; run-tests.sh loads the real module to
+;; read it and regenerates the fixture. A hand-typed hash would be stale the moment the module
+;; moved, and would fail AFTER the freeze, which has no undo.
+;; ===========================================================================
+(load "setup.repl")
+
+;; --- the sale works BEFORE any freeze: the positive control that makes the rest mean anything
+(begin-tx "P0 pre-freeze control: the sale sells")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(env-data { "bob": { "keys": ["bob-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "bob" 5000.0)] }])
+(coin.transfer-create "sender00" "bob" (read-keyset 'bob) 5000.0)
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 5.0)] }])
+(expect "P0 buy settles before the freeze" "tokens purchased"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "bob" (read-keyset 'bob) 10.0))
+(commit-tx)
+
+;; --- 🔴 B-2 STEP 0 RUNS *BEFORE* THE FREEZE. THAT ORDERING IS THE WHOLE TEST. ------------
+;; The yield's Provenance is stamped with the module hash AT STEP 0. Running step 0 after the
+;; freeze stamps the FROZEN hash, so step 1 matches the current module directly and the blessed
+;; set is never consulted — the assertion then passes with or without the bless line and proves
+;; nothing about the CRITICAL it is credited with (measured: an internal review a finding/M-5).
+;; Step 0 here stamps the PRE-freeze hash, so step 1 can only resolve through `bless`.
+(begin-tx "B-2 step 0 PRE-FREEZE: debit the sender, yielding to the target chain")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T01:00:00Z") })
+(env-data { "bob": { "keys": ["bob-key"], "pred": "keys-all" } })
+;; The defpact id IS the step-0 transaction hash, so it must be set explicitly here and quoted
+;; at the continuation — `continue-pact` cannot infer it across a tx boundary in the REPL.
+(env-hash (hash "cw3277-inflight-xchain"))
+(env-sigs [{ "key": "bob-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER_XCHAIN "bob" (create-principal (read-keyset 'bob)) 5.0 "1")] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-crosschain "bob" (create-principal (read-keyset 'bob)) (read-keyset 'bob) "1" 5.0)
+(expect "B-2 the sender really was debited at step 0, BEFORE the freeze — this is money in motion" 5.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "bob"))
+(commit-tx)
+
+;; --- THE FREEZE, CARRYING THE BLESS LINE -----------------------------------------------
+;; This is the artifact the operator runbook must put on the wire: the defconst flipped AND one bless of the
+;; pre-freeze hash. Both lines lie OUTSIDE the audited hash, by arithmetic — see the operator runbook.
+(begin-tx "FREEZE SPT WITH (bless <pre-freeze-hash>)")
+(env-data
+  { "ns": "n_48867b242317a0216a67f8c7ca26696b5878e0e3"
+, "upgrade": true
+, "spt-gov-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-gov"
+, "spt-gov": { "keys": ["admin-key"], "pred": "keys-all" }
+, "spt-ops-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-ops"
+, "spt-ops": { "keys": ["admin-key"], "pred": "keys-any" } })
+(env-keys ["admin-key"])
+(load "fixtures/frozen-blessed-SPT.pact")
+(commit-tx)
+
+(begin-tx "B-0 CONTROL: the module really IS frozen")
+;; Without this, every assertion below would pass just as well against an UNFROZEN module and
+;; this suite would report a freeze-survival property it never tested.
+(expect "B-0 SPT is FROZEN" true
+  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FROZEN-MODULE)
+;; 🔴 `test-capability`, NOT a bare `(…GOVERNANCE)`. A bare reference CONSTRUCTS a CapToken and
+;; never runs the body, so it returns a value and an expect-failure on it can never fire —
+;; measured here: it returned `CapToken(…GOVERNANCE)` and this control passed while proving
+;; nothing. That is the same defect class as P3-16d and D-2. `test-capability` ACQUIRES it,
+;; which runs `(enforce (not FROZEN-MODULE) …)`.
+(expect-failure "B-0 and a further upgrade is REFUSED — the freeze is a freeze"
+  "Module is frozen"
+  (test-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.GOVERNANCE)))
+(rollback-tx)
+
+;; --- 🔴 THE REQUIREMENT: a PUBLIC DEFUN OF ANOTHER MODULE STILL WORKS -------------------
+(begin-tx "B-1 THE RULE: buy still settles across the freeze, with NO sale redeploy")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })
+(env-data { "bob": { "keys": ["bob-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 5.0)] }])
+;; 🔴 NOTE WHAT IS *NOT* HERE: no `(load "fixtures/frozen-SPT-launch.pact")`, no sale
+;; redeploy of any kind. The sale is still the ORIGINAL module linked to the PRE-freeze token
+;; hash. That is the whole claim — the bless line removes the re-link, it does not automate it.
+(expect "B-1 buy settles against a FROZEN token, sale untouched" "tokens purchased"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "bob" (read-keyset 'bob) 10.0))
+(expect "B-1 and the buyer holds both purchases NET of the in-flight debit (10 + 10 - 5)" 15.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "bob"))
+(commit-tx)
+
+;; --- 🔴 THE SECOND CRITICAL: an in-flight cross-chain transfer is not destroyed -----------
+;; A `transfer-crosschain` whose step 0 already DEBITED the sender is money in motion. An
+;; unblessed freeze aborts step 1 with "Yield provenance does not match" and the tokens are
+;; gone — debited on the source, never credited on the target, with no undo on a frozen module.
+;;
+;; 🔴 AND THE DISPOSITION THAT HID THIS FOR MONTHS IS FALSE: frozen-invariant used to say
+;; "transfer-crosschain step 1 needs SPV — DEVNET ONLY, never runnable in the REPL". It is
+;; runnable — `continue-pact 1` runs it — which is how a CRITICAL sat unexercised. Fourth
+;; "node-only" claim disproved this week.
+(begin-tx "B-3 step 1 COMPLETES on the target chain, resolving a PRE-FREEZE hash through bless")
+(env-chain-data { "chain-id": "1", "block-time": (time "2026-06-03T01:00:01Z") })
+(env-data { "bob": { "keys": ["bob-key"], "pred": "keys-all" } })
+;; 🔴 THIS IS THE FALSIFIABLE LINE. The yield carries the PRE-freeze hash; the module is now the
+;; FROZEN one. Without `(bless <pre-freeze-hash>)` this aborts with
+;; "Yield provenance does not match, received (Provenance 1 <pre-freeze>), expected [ (Provenance 1 <frozen>) ]"
+;; and the 5.0 debited at step 0 is destroyed with no undo. Measured in both directions.
+(continue-pact 1 false (hash "cw3277-inflight-xchain"))
+;; 🔴 THE REPL TOKENS ONE DATABASE ACROSS `chain-id`, so both rows are visible here. What must
+;; be true is that the 5.0 ARRIVED — the transfer was not destroyed by the freeze.
+;; 🔴 THE RECEIVER HERE IS THE PRINCIPAL derived from bob's keyset, not the vanity name "bob".
+;; That was FORCED by a later change (which refused vanity receivers) and is now a DELIBERATE CHOICE:
+;; the founder rolled that refusal back on, so a vanity receiver would be accepted
+;; again. This suite keeps the principal because it is testing the FREEZE, and a receiver whose
+;; name and guard are locked together removes one variable from an already-complex drill.
+;; The sender row stays debited at 15.0 and the credit lands in the principal account; asserting
+;; "bob is back to 20.0" would be asserting the tokens went nowhere.
+(expect "B-3 the in-flight transfer was NOT destroyed — step 1 credited the 5.0 to the receiver" 5.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance (create-principal (read-keyset 'bob))))
+(expect "B-3 and the sender stays debited — the tokens MOVED, they did not bounce" 15.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "bob"))
+(commit-tx)
+
+(print "smartpacts-freeze-blessed: the founder's rule HOLDS with the bless line — buy survives, and an in-flight cross-chain transfer completes")

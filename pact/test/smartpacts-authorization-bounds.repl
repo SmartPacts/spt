@@ -1,0 +1,283 @@
+;; ===========================================================================
+;; a later change a finding — the three authorization/value bounds that had ZERO negative
+;; coverage. Each was measured to survive replacement by `true` with the ENTIRE
+;; suite still exiting 0 (an internal review verification / a later change F-B, F-D2, F-E).
+;;
+;; These are not arbitrary picks. Each is the WRONG one to have left untested:
+;; C-3a defcap VOTE's registered-vote-key branch — governance is the product's
+;; headline feature, and this is its authorization guard. The only
+;; existing negative runs AFTER clear-vote-key, so `active` is false and
+;; it exercises the SIBLING branch ("no vote key registered"). No test
+;; anywhere paired an ACTIVE vote key with a WRONG signer.
+;; C-3b TRANSFER_XCHAIN-mgr's installed-amount bound — its same-chain twin
+;; TRANSFER-mgr DOES have negatives. Cover-the-instance-not-the-set.
+;; Cross-chain has no rollback, so an over-spend here is unrecoverable.
+;; C-3c DELETED at a later change — it pinned MAX-ROUND-LIABILITY, which the design record
+;; Am.1 retired by measurement. See the block at the end of this file
+;; for what replaced it; the coverage did not move to another bound.
+;;
+;; 3-arg expect-failure throughout, each pinning the module's exact message.
+;; Run: cd pact/test && pact smartpacts-authorization-bounds.repl
+;; ===========================================================================
+(load "setup.repl")
+
+;; ---------------------------------------------------------------------------
+;; C-3a — an ACTIVE vote key + a WRONG signer must be refused.
+;;
+;; The gap this closes: mutating `(enforce-guard vg)` to `true` left the entire
+;; suite green, and any key could then cast a holder's full weight. The module is
+;; correct; there was simply no test that could see it break.
+;; ---------------------------------------------------------------------------
+(begin-tx "C-3a alice buys tokens so her vote has weight")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5)
+(commit-tx)
+(begin-tx "C-3a resume")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(commit-tx)
+(begin-tx "C-3a fund + buy")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 2000.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 2000.0)
+(commit-tx)
+(begin-tx "C-3a buy 3000 SPT")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key"
+        , "caps": [(coin.TRANSFER "alice" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 1500.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "alice" (read-keyset 'alice) 3000.0)
+(commit-tx)
+
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-10T00:00:00Z") })
+(begin-tx "C-3a announce a proposal alice can vote on")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal
+  "C3A" "bounds" "vote-key branch coverage"
+  (time "2026-06-10T00:00:00Z")
+  (add-time (time "2026-06-10T00:00:00Z") n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)
+  259200)                                 ; duration = MIN-PROPOSAL-DURATION (72h)
+(commit-tx)
+
+(begin-tx "C-3a alice registers a hot vote key — it is now ACTIVE")
+(env-data { "hot": { "keys": ["alice-hot"], "pred": "keys-all" } })
+(env-keys ["alice-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.set-vote-key "alice" (read-keyset 'hot))
+(expect "C-3a: the vote key is registered and active" true
+  (at 'active (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-vote-key "alice")))
+(commit-tx)
+
+;; move to inside the voting window: after open-at, before close-at
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-13T00:00:00Z") })
+
+;; 🔴 THE ASSERTION THIS FILE EXISTS FOR. `active` is TRUE, so the enforce-one
+;; reaches `(enforce-guard vg)` — the branch with no coverage. A stranger's key
+;; is neither the main guard nor the registered vote key.
+(begin-tx "C-3a A WRONG KEY cannot vote while a vote key is ACTIVE")
+(env-keys ["mallory-key"])
+(env-sigs [])
+(expect-failure "C-3a: an active vote key does not let a THIRD key vote"
+  "neither account guard nor registered vote key satisfied"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "alice" "C3A" true))
+(expect "C-3a: and no weight was recorded" 0.0
+  (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "C3A")))
+(rollback-tx)
+
+;; CONTROL — without this, the refusal above is equally consistent with "voting
+;; is broken". The registered hot key MUST still work, and the main key too.
+(begin-tx "C-3a CONTROL the registered hot key votes alice's full weight")
+(env-keys ["alice-hot"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "alice" "C3A" true)
+(expect "C-3a CONTROL: the hot key carried alice's full 3000" 3000.0
+  (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "C3A")))
+(rollback-tx)
+
+(begin-tx "C-3a CONTROL the main guard still votes even with a delegate active")
+(env-keys ["alice-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "alice" "C3A" true)
+(expect "C-3a CONTROL: the main guard is never locked out by a registration" 3000.0
+  (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "C3A")))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; C-3b — TRANSFER_XCHAIN-mgr's installed-amount bound.
+;;
+;; Only the MANAGER's accounting is testable here; the cross-chain flow itself
+;; needs SPV and is devnet-only. That is exactly the scope of the finding: a
+;; signature scoped to 1.0 must not authorize a larger cross-chain spend.
+;; ---------------------------------------------------------------------------
+(begin-tx "C-3f ACCEPTED RISK (founder 2026-08-18): a VANITY receiver is ALLOWED")
+;; 🔴 THIS TEST ASSERTED THE OPPOSITE UNTIL, AND THE INVERSION IS A FOUNDER DECISION.
+;; a later change refused a vanity cross-chain receiver, which closed the destruction path a later change had
+;; recorded as structurally unfixable. The founder ROLLED IT BACK, reasoning recorded verbatim:
+;; "if the coin contract can accept the risk of burn coins for using a none principal guard on
+;; the other end chain, we can do it as well."
+;;
+;; 🔴 SO THIS PINS AN ACCEPTED EXPOSURE, NOT A PROTECTION — that is the point. A vanity receiver
+;; is accepted here and the sender IS DEBITED. No row need exist when step 0 runs: any unsigned
+;; stranger holding no SPT can create that row on the TARGET chain AFTER step 0 is mined, for gas
+;; only. Step 1 then aborts and the tokens are HOSTAGE, not destroyed — the squatter can rotate the
+;; name to the sender's key at any time, or never, so recovery exists but is not the sender's to
+;; exercise. Step 0 is blind to the target chain either way. That is coin-v5's behaviour and now
+;; ours. (Corrected by an internal review a finding: this file previously said DESTROYED, and said it forty
+;; lines from the line that says held.)
+;; 🔴 WHY PIN IT AT ALL: so the rollback cannot be silently undone. Re-add the `is-principal`
+;; enforce and this test goes RED, which forces the change back to the founder instead of letting
+;; an audit finding quietly re-narrow a one-way operation the founder deliberately widened.
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key"
+        , "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER_XCHAIN
+                        "alice" "vanity-name" 5.0 "1")] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-crosschain
+  "alice" "vanity-name" (read-keyset 'alice) "1" 5.0)
+(expect "C-3f: step 0 ACCEPTED the vanity receiver and DEBITED alice 3000 -> 2995 (accepted risk)" 2995.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice"))
+(rollback-tx)
+
+(begin-tx "C-3g a later change CONTROL: it narrows, it does not disable — k: still settles")
+;; Without this the refusal above is compatible with cross-chain being broken outright.
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key"
+        , "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER_XCHAIN
+                        "alice" (create-principal (read-keyset 'alice)) 5.0 "1")] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-crosschain
+  "alice" (create-principal (read-keyset 'alice)) (read-keyset 'alice) "1" 5.0)
+;; Step 0 returns its yield payload, so the DEBIT is what proves it completed.
+(expect "C-3g: a principal receiver passes step 0 — alice debited 3000 -> 2995" 2995.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice"))
+(rollback-tx)
+
+(begin-tx "C-3h a later change STAYS: step 0 still refuses a MALFORMED (name, guard) pair")
+;; 🔴 THIS IS THE PROTECTION THE ROLLBACK DID **NOT** REMOVE, and it needs its own red-on-removal
+;; test now that `is-principal` is gone and can no longer mask it.
+;; `enforce-reserved` catches a PRINCIPAL-SHAPED name whose guard — SUPPLIED IN THIS SAME
+;; TRANSACTION — does not derive it. That is a pure local judgement: no target-chain read, no cost,
+;; and it refuses nothing a correct caller sends. The founder accepted the risk of a non-principal
+;; guard ON THE OTHER END CHAIN; that is a different thing from a malformed pair handed to us here.
+;; Without this line alice is DEBITED and step 1 aborts in enforce-reserved — measured at a later change,
+;; alice 3000 -> 2995 with step 0 succeeding. Deleting it re-opens that path.
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+       , "other": { "keys": ["other-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key"
+        , "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER_XCHAIN
+                        "alice" (create-principal (read-keyset 'other)) 5.0 "1")] }])
+;; a k: name derived from `other`, paired with ALICE's guard — the pair cannot be right
+(expect-failure "C-3h: a principal NAME carrying a guard that does not derive it is REFUSED"
+  "SPT reserved protocol guard violation"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-crosschain
+    "alice" (create-principal (read-keyset 'other)) (read-keyset 'alice) "1" 5.0))
+(expect "C-3h: and alice was NOT debited — the refusal happens BEFORE the debit" 3000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice"))
+(rollback-tx)
+
+(begin-tx "C-3d a later change: step 0 refuses a pair step 1 would reject — BEFORE the debit")
+;; 🔴 THE DEFECT THIS PINS (an internal review, measured): step 0 validated the receiver's NAME but
+;; never the (name, guard) PAIR. A `k:` receiver whose guard does not derive it passed step 0,
+;; the sender WAS DEBITED, and step 1's credit then aborted in `enforce-reserved` on the new row.
+;; The tokens are then HOSTAGE, not destroyed — the external audit of measured the
+;; difference and it matters: the failing continuation does NOT consume the defpact. It stays
+;; OPEN and completes the moment the target row carries the yielded guard, so whoever controls
+;; that row can release the funds at any later block — and can therefore demand payment to do
+;; so. Say "extortable", never "burned". The loss lands on a HOLDER either way, not on whoever
+;; typed the argument, which is why step 0 refuses rather than leaving it to them.
+;; A NAMED test must go red if step 0 stops refusing this, which is what these two lines are.
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+       , "wrong": { "keys": ["someone-elses-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key"
+        , "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER_XCHAIN
+                        "alice" "k:1111111111111111111111111111111111111111111111111111111111111111" 5.0 "1")] }])
+(expect-failure "C-3d: a k: receiver whose guard does not derive it is REFUSED AT STEP 0"
+  "SPT reserved protocol guard violation"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-crosschain
+    "alice" "k:1111111111111111111111111111111111111111111111111111111111111111"
+    (read-keyset 'wrong) "1" 5.0))
+;; 🔴 STATE UNCHANGED IS THE HALF THAT MATTERS. A refusal alone is compatible with the debit
+;; having happened and the abort landing after it — which is exactly the bug.
+(expect "C-3d: alice was NOT debited — the refusal precedes the debit" 3000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice"))
+(rollback-tx)
+
+(begin-tx "C-3e a later change: and a protocol account is refused at step 0 too, not only at step 1")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key"
+        , "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER_XCHAIN
+                        "alice" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-ACCOUNT 5.0 "1")] }])
+(expect-failure "C-3e: a protocol-account receiver is REFUSED AT STEP 0"
+  "protocol accounts cannot receive SPT"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-crosschain
+    "alice" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-ACCOUNT
+    (read-keyset 'alice) "1" 5.0))
+(expect "C-3e: alice was NOT debited" 3000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice"))
+(rollback-tx)
+
+(begin-tx "C-3b a 1.0-scoped xchain signature cannot move 2500")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key"
+        , "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER_XCHAIN
+                        "alice" "alice" 1.0 "1")] }])
+(expect-failure "C-3b: the installed cross-chain amount is the ceiling"
+  "cross-chain transfer exceeds installed amount"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-crosschain
+    "alice" "alice" (read-keyset 'alice) "1" 2500.0))
+(expect "C-3b: alice's balance is untouched" 3000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice"))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; ===========================================================================
+;; 🔴 C-3c IS DELETED IN FULL (a later amendment, a later change), AND IT IS THE CLEANEST CASE IN THIS
+;; CHANGE SET FOR WHY A RETIRED BOUND'S TESTS GO RATHER THAN GET RE-POINTED.
+;;
+;; Its entire subject was `MAX-ROUND-LIABILITY` — specifically the regime ABOVE the
+;; `MAX-ROUND-LIABILITY / MAX-ROUND-RATE` = 20,000 SPT crossover, where the rate bound goes
+;; vacuous and the liability bound was "the ONLY thing left standing". It was written because
+;; an internal review found that bound had FIVE pins on the rate cap and ZERO on itself (a later change F-E).
+;;
+;; Both constants are gone, so:
+;; * the crossover is not a number any more — it was a ratio of two deleted constants;
+;; * "MAX-ROUND-LIABILITY is the only bound binding above the crossover" names a refusal
+;; that cannot occur;
+;; * the CONTROL that proved the two bounds carried DIFFERENT messages is moot — there are
+;; no longer two messages, or one.
+;; Its ~100 lines of setup (whale-buys the launch reserve, disburses the liquidity tranche,
+;; funds funding generously) existed ONLY to push the float past that crossover. Setup with
+;; nothing left to set up is not coverage.
+;;
+;; 🔴 WHAT REPLACED IT IS NOT NOTHING, and it is not in this file: the design record's bar is EXACT and
+;; scales with the SEALED float, so above 20,000 SPT — the regime this section existed for —
+;; a round is now refused ON THE MONEY rather than on a constant. That refusal is pinned in
+;; `smartpacts-solvency-at-declaration.repl` §A (one 1e-12 short REFUSED, exactly covering ACCEPTED) and the
+;; fat-finger case in `a probe kept out of this repo` Z-6.
+;; ===========================================================================
+
+;; ===========================================================================
+;; 🔴 a finding a later change — THE ACTIVE-PROPOSAL CEILING. The cost of an open proposal lands on HOLDERS:
+;; `debit` walks every active proposal to release the moved tokens' votes, so each one is a
+;; permanent surcharge on EVERY transfer (~137 gas each, an internal review a finding). The index self-drains
+;; only when someone pays to close, so without a ceiling an admin who opens and abandons
+;; proposals taxes every holder forever.
+;; BOTH halves are asserted, because a ceiling nobody can clear is a worse defect than no
+;; ceiling: the refusal AND the fact that closing a finished proposal restores capacity.
+;; ===========================================================================
+(begin-tx "a finding fill the index to the ceiling")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+(map (lambda (i)
+       (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal
+         (format "CAP{}" [i]) (format "cap filler {}" [i]) "d"
+         (time "2026-06-01T00:00:00Z")
+         (add-time (time "2026-06-01T00:00:00Z") n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)
+         n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-PROPOSAL-DURATION))
+     (enumerate 1 (- n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MAX-ACTIVE-PROPOSALS (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-prop-count))))
+(expect "a finding: the index is at the ceiling" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MAX-ACTIVE-PROPOSALS
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-prop-count))
+(expect-failure "a finding: one more proposal is REFUSED — holders do not pay for an unbounded index"
+  "too many active proposals"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal
+    "OVER" "one too many" "d"
+    (time "2026-06-01T00:00:00Z")
+    (add-time (time "2026-06-01T00:00:00Z") n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-PROPOSAL-DURATION))
+(rollback-tx)
+
+(print "smartpacts-authorization-bounds: C-3a/b/c and a finding covered, with controls.")

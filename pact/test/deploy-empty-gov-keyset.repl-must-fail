@@ -1,0 +1,31 @@
+;; MUST-FAIL FIXTURE (external audit, a finding).
+;;
+;; The fresh-deploy branch validates the keyset VALUE, not just its NAME. This fixture falsifies
+;; the EMPTY-KEYSET half:
+;; (enforce (!= (take 46 gp) "w:DldRw…:") "SPT spt-gov must not be an empty keyset")
+;; Its sibling `deploy-keys1-ops-predicate.repl-must-fail` falsifies the PREDICATE half.
+;;
+;; 🔴 WHAT IT DEFENDS, and it is the worst payload in the estate. `{"keys":[],"pred":"keys-all"}`
+;; is a well-formed keyset that `define-keyset` accepts and every module loads against — and
+;; `keys-all` over ZERO keys is VACUOUSLY TRUE, so `enforce-keyset GOV-KS` passes for ANYONE.
+;; Measured by the reviewer before this check existed: `init-supply` succeeded with ZERO
+;; signatures, and `disburse-tranche` then moved the treasury to an arbitrary account. A stranger
+;; could afterwards `define-keyset` the same name and own governance permanently.
+;;
+;; The deploy is ONE-SHOT and the module FREEZES, so there is no second chance at this input.
+;; The check reuses the empty-keyset principal the module already pins as EMPTY-KEYSET-PREFIX —
+;; the literal is repeated in the footer only because the module does not exist yet out there.
+(load "setup.repl")
+(begin-tx "fresh deploy whose spt-gov keyset has NO KEYS")
+(env-data
+  { "ns": "n_48867b242317a0216a67f8c7ca26696b5878e0e3"
+, "upgrade": false
+, "spt-gov-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-gov"
+ ;; The payload under test. Well-formed, accepted by define-keyset, satisfiable by anyone.
+, "spt-gov": { "keys": [], "pred": "keys-all" }
+ ;; OPS is deliberately VALID, so the abort can only be the gov empty-keyset check.
+, "spt-ops-name": "n_48867b242317a0216a67f8c7ca26696b5878e0e3.spt-ops"
+, "spt-ops": { "keys": ["admin-key"], "pred": "keys-any" } })
+(env-keys ["admin-key"])
+(load "../modules/SPT.pact")
+(commit-tx)

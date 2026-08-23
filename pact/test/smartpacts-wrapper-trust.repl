@@ -1,0 +1,244 @@
+;; ===========================================================================
+;; smartpacts-wrapper-trust — a later change / the design record §5 wrapper-trust sweep.
+;; ---------------------------------------------------------------------------
+;; THE RULE (pact-traps §Capabilities, second attack shape): Pact has no private
+;; functions, so a public defun gated by `require-capability (CAP …)` is callable by
+;; anyone who can get CAP into scope. Every precondition must therefore live INSIDE
+;; that function, never only in its caller. This suite proves the re-assertions added
+;; by a later change actually fire.
+;;
+;; WHY THIS SUITE NEEDS AN ATTACKER MODULE. Those re-assertions are, by construction,
+;; unreachable through the public API — both legitimate callers already satisfy them.
+;; A test that drives only the public API could never make them fail, and a check that
+;; cannot fail is worth nothing. So the preconditions are exercised the way a real
+;; attacker would reach them: a FOREIGN module composes the gating capability.
+;;
+;; ENGINE REGIME — READ BEFORE CHANGING ANYTHING HERE. The bare REPL is pact 5.4, the
+;; PRE-Chainweb32 engine, where compose-capability still skips guardForModuleCall. That
+;; is deliberate and is what makes this harness possible: it is the most permissive
+;; engine, so reaching the function is easy and the assertion under test is the ENFORCE
+;; ITSELF, not the engine's cap guard. Nothing here asserts "compose is blocked" — that
+;; claim IS fork-dependent and must be pinned to a 3.2 devnet (testing-rules ).
+;; Everything asserted here holds on every engine.
+;;
+;; EVERY negative below is paired with a POSITIVE CONTROL through the same harness. Without
+;; it a broken harness (a typo'd module, a cap that no longer composes) would make each
+;; expect-failure pass for the wrong reason, and the suite would report a security property
+;; it never tested.
+;; ===========================================================================
+(load "setup.repl")
+
+(begin-tx "activate launch for seeding")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(commit-tx)
+
+(begin-tx "seed alice 2500")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1250.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1250.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 1250.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "alice" (read-keyset 'alice) 2500.0)
+(commit-tx)
+
+(begin-tx "proposal W1 + alice votes yes 2500")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal "W1" "wrapper" "d" (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) (add-time (time "2026-06-02T00:00:00Z") 1.0) 259200)
+;; the design record: voting opens at open-at, not at announcement. This suite announces and votes in
+;; one transaction, so the clock has to cross open-at in between.
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:01Z") })
+(env-keys ["alice-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "alice" "W1" true)
+(expect "seed: alice's vote is recorded at her full balance" 2500.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-weight "alice" "0" "W1"))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; The attacker: a module in its OWN namespace that composes SPT'
+;; internal permission tokens. TALLY and AGGREGATE have weak `true` bodies, so on this
+;; engine composing them just works. ADMIN has a REAL keyset body — composing it runs
+;; that body, so the ADMIN route additionally needs the admin signature (that route
+;; therefore models a future in-module caller or a hand-built admin tx, not an outsider).
+;; ---------------------------------------------------------------------------
+;; ===========================================================================
+;; THE FOREIGN HARNESS MODULE IS GONE (a later change / the design record).
+;; It existed to compose the weak `TALLY` / `AGGREGATE` caps and reach the public
+;; `apply-tally`, `release-votes-on-debit` and `record-final-tally`. All five names are
+;; deleted: the writes are inlined into the flows that authorize them, and the shared
+;; computation lives in the PURE planners `plan-tally` / `plan-final-tally`, which are
+;; public precisely because they cannot write. There is nothing left for a harness to reach,
+;; and that unreachability is asserted from OUTSIDE this file by
+;; `weakcap-writers.repl-must-fail` — a name-resolution abort kills the whole file at compile
+;; time and cannot be caught by `expect-failure`.
+;; ===========================================================================
+
+;; W-A / W-B / W-C — REWRITTEN FOR a later change / the design record.
+;;
+;; These three sections used to reach `apply-tally`, `release-votes-on-debit` and
+;; `record-final-tally` through a foreign harness composing the weak `TALLY` / `AGGREGATE`
+;; caps, and asserted that each function re-validated its own preconditions. That
+;; wrapper-trust work was real — the operator runbook an internal review confirmed the post-close `apply-tally`
+;; re-assert genuinely blocked a forge — but it could never cover the PRE-CLOSE window,
+;; because a live tally is legitimately mutable. The the reviewer measured the consequence:
+;; `yes 0.0 -> 99999.0, passed:true`, unsigned, and honest votes erased.
+;;
+;; The fix was not a better check inside those functions. It was removing them: the writes
+;; are inlined into cast-vote / debit / report-tally-hub / the SPV continuation, and the
+;; shared computation lives in the PURE planners `plan-tally` and `plan-final-tally`.
+;; So the property to test here changed shape:
+;; * "a foreign module cannot reach the writer" is now a COMPILE-TIME abort, asserted from
+;; outside this file by `weakcap-writers.repl-must-fail`;
+;; * "the validation still happens" is tested by calling the PURE planners directly, below —
+;; they are public precisely because they cannot write.
+;; ===========================================================================
+(begin-tx "W-A: plan-tally still refuses to plan a mutation of a FROZEN tally")
+(env-keys ["attacker"])
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-10T00:00:00Z") })
+(expect-failure "post-close tally plan refused" "proposal not open for tally changes"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.plan-tally "W1" 1000000.0 true))
+(expect "the frozen tally is untouched" 2500.0
+  (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "W1")))
+(rollback-tx)
+
+(begin-tx "W-A CONTROL: while W1 is OPEN the planner works and is PURE")
+(env-keys ["attacker"])
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })
+(expect "CONTROL: an open proposal plans fine" 2507.0
+  (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.plan-tally "W1" 7.0 true)))
+;; PURITY: planning changed nothing. Without this the negative above would also pass if the
+;; planner were simply broken, and a planner that writes is the whole defect being removed.
+(expect "W-A: planning wrote NOTHING" 2500.0
+  (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "W1")))
+(rollback-tx)
+
+;; ===========================================================================
+;; W-C / W-C1 / W-C2 — DELETED by a later change / the design record Decision 1.
+;;
+;; These three sections tested `plan-final-tally`: chain-id validation, the H-2
+;; close-at match, and the a later change supply bound on the running aggregate. The
+;; cross-chain aggregation they guarded no longer exists — `plan-final-tally`,
+;; `report-tally-hub`, the `report-tally-xchain` defpact, `final-aggs` and
+;; `get-final-results` are all deleted, so there is no aggregate to forge, no
+;; second chain's close-at to disagree with, and no running total to bound.
+;;
+;; This is a REDUCTION IN ATTACK SURFACE, not in coverage: the properties are not
+;; untested, the code that could violate them is gone. The wrapper-trust property
+;; this FILE exists for — pure planners that re-assert their own preconditions,
+;; with the writes inlined in the caller — is unaffected, and is still exercised
+;; by W-A/W-B above and by plan-deindex/credit-plan below.
+;; ===========================================================================
+
+;; ===========================================================================
+;; W-D (a later change) — THE INDEX WRITER NO LONGER EXISTS, and that is the assertion.
+;;
+;; This section used to reach `deindex-proposal` through the harness and score the wrong
+;; thing. Its "CONTROL" performed the real attack — a foreign module composing the writer's
+;; gate and popping a proposal — and recorded it as a PASS, under a comment claiming the
+;; ADMIN gate meant it "models a future in-module caller, not an outsider". When the gate
+;; changed to LIFECYCLE (a precondition, not an authorization) that comment silently stopped
+;; being true and the suite kept scoring the exploit green. The an internal reviewcaught it.
+;;
+;; The fix removed the function entirely (Pattern W extended to a state-transition writer),
+;; so the property to test is UNREACHABILITY, which is a compile-time abort and therefore
+;; cannot live in this file: `deindex-compose.repl-must-fail` asserts it from outside on both
+;; the exit code and the error text. What remains testable HERE is the behaviour that the
+;; inlined pop must preserve — the index shrinks on a legitimate transition and only then.
+;; ===========================================================================
+(begin-tx "W-D: the index drains on a legitimate close, and only then")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-05T00:00:02Z") })  ; >= W1 close-at
+;; the design record: close-at is open-at + duration, and open-at is one second past the announcement
+;; clock here, so the deadline moved with it. The bound is still tested at/after, not before.
+(env-sigs [{ "key": "attacker", "caps": [] }])
+;; permissionless close (a later change A1) — an outsider may do the bookkeeping, and ONLY this way
+(let ((before (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-prop-count)))
+  (expect "W1 closes at/after its deadline" "proposal closed" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.close-proposal "W1"))
+  (expect "W-D: the pop happened, fused with the status update" (- before 1)
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-prop-count)))
+(expect "W-D: status and index agree" "closed" (at 'status (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.proposal-details "W1")))
+;; the transition is idempotent by status — a second close cannot pop the index again
+(expect-failure "a second close is refused" "only active can close" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.close-proposal "W1"))
+(expect "W-D: no second pop" 0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-prop-count))
+(rollback-tx)
+
+;; ===========================================================================
+;; W-D2 — `plan-deindex` is PURE and PUBLIC, so its (id, slot) re-assertion is directly
+;; reachable and directly testable. It is defence in depth: close/cancel read `slot` from
+;; the same `with-read` that yields `status`, so they cannot pass a mismatched pair. The
+;; check earns its place because the function is public — and because a slot that does not
+;; belong to `id` would, if ever applied, write the tail entry into an unrelated position
+;; and drop a still-active proposal out of the release loop.
+;; ===========================================================================
+(begin-tx "W-D2: plan-deindex refuses a slot that is not the proposal's own")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })
+(env-sigs [])
+(expect-failure "wrong slot refused" "slot does not match the proposal's recorded active-slot"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.plan-deindex "W1" 7))
+;; CONTROL: the recorded slot is accepted and the planner is PURE — it changes nothing
+(let ((before (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-prop-count)))
+  (expect "CONTROL: the recorded slot plans a pop" true
+    (at 'pop (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.plan-deindex "W1" 1)))
+  (expect "W-D2: planning wrote NOTHING (the planner is pure)" before
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-prop-count))
+  (expect "W-D2: W1 is still active after planning" "active"
+    (at 'status (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.proposal-details "W1"))))
+(rollback-tx)
+
+;; ===========================================================================
+;; W-E — record-live-vote is GONE, so a voter can no longer choose their own weight.
+;; It was a VOTE-gated public defun taking `weight` and `chain` as PARAMETERS while
+;; every precondition (active, open, not excluded, weight = real balance, chain =
+;; this chain) lived only in cast-vote. The external-call assertion that used to
+;; stand here could not be kept: naming a member that does not exist is a COMPILE-time
+;; abort, which expect-failure cannot catch and which would take this whole suite
+;; down while reading like a pass.
+;; ===========================================================================
+(begin-tx "W-E record-live-vote removed; weight is module-derived")
+(let ((code (at 'code (describe-module "n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT"))))
+  (expect "CONTROL: the scanner is reading real module source" true (contains "(defun cast-vote" code))
+ ;; Needle is the DEFINITION form, not the bare name: cast-vote's comment still explains
+ ;; what record-live-vote was and why it went, and a scanner that matched prose would fire
+ ;; on the documentation rather than on the code. (It did, on first run — which is the
+ ;; positive control above earning its place.)
+  (expect "no record-live-vote defun exists" false (contains "(defun record-live-vote" code)))
+;; The property it used to be able to break, asserted behaviourally: a vote is always
+;; exactly the voter's current balance, never a caller-chosen number.
+(env-keys ["alice-key"])
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "alice" "W1" false)
+(expect "recorded weight == balance, always" 2500.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-weight "alice" "0" "W1"))
+(expect "and the balance really is that" 2500.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice"))
+(rollback-tx)
+
+
+;; ===========================================================================
+;; W-F (an internal reviewa finding) — the must-fail fixture asserts a NAME is gone; this asserts the
+;; REPLACEMENT holds. A foreign module on the pre-Chainweb32 engine (the most permissive
+;; one there is) gets exactly what the design intends: it can READ a plan and do nothing
+;; with it, because the write lives inside close/cancel and prop-index is module-scoped.
+;; ===========================================================================
+(begin-tx "W-F: a foreign module can read a plan and cannot apply it")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:00Z") })
+(env-sigs [])
+(env-keys ["attacker"])
+(let ((count-before (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-prop-count))
+      (slot-before (at 'active-slot (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.proposal-details "W1")))
+      (status-before (at 'status (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.proposal-details "W1"))))
+ ;; the planner is public and pure — a stranger may call it, and it changes nothing
+  (expect "W-F: a stranger can compute a plan" true (at 'pop (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.plan-deindex "W1" 1)))
+  (expect "W-F: the count is untouched" count-before (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-prop-count))
+  (expect "W-F: the recorded slot is untouched" slot-before
+    (at 'active-slot (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.proposal-details "W1")))
+  (expect "W-F: the status is untouched" status-before
+    (at 'status (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.proposal-details "W1"))))
+;; and the only path that DOES write is still bounded for everyone — a stranger cannot
+;; force an early close to reach it
+(expect-failure "W-F: a stranger still cannot close early" "cannot close before voting has ended"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.close-proposal "W1"))
+(expect "W-F: nothing was popped" 1 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-prop-count))
+(rollback-tx)
+
+(print "smartpacts-wrapper-trust suite PASSED")

@@ -1,0 +1,908 @@
+;; ===========================================================================
+;; smartpacts-record-date — THE RECORD DATE (the design record / a later change).
+;;
+;; the design record changes the ORDER, not the accrual: seal the float FIRST, choose the rate
+;; SECOND, against a denominator that can no longer move. This suite proves the
+;; mechanism and, deliberately, proves the two places where I had to CORRECT the ADR
+;; while implementing it. Both corrections are pinned by a NAMED test that goes RED
+;; when the fix is removed — the ADR's own residual-risk section demands exactly that
+;; for `snap-corr`, whose derivation is the load-bearing part.
+;;
+;; 🔴 THE SPIKES THAT PRODUCED the design record's EVIDENCE ARE GONE (they lived in /tmp, and
+;; the project notes forbids copying a scratch module into this repo). The ADR says the
+;; scenarios must be "rebuilt properly as named tests" — this file is that rebuild.
+;; A number quoted from the ADR is NOT evidence here; every assertion below is
+;; computed from the contract in this run.
+;;
+;; WHAT THE PRE-the design record MODULE DID WRONG, reproduced as arithmetic rather than
+;; asserted: `declare-round` checked `pool >= floor12(declared-liability + rate *
+;; get-circulating)` AT DECLARATION, and `get-circulating` kept growing until
+;; `effective-at` — `buy`, the permissionless `release-tranche`, and inbound
+;; cross-chain legs all raise it. So the bar was a FLOOR on a number that moved.
+;; DF-4 below measures the shortfall on THIS module with the fix in place and shows
+;; it is zero.
+;; ===========================================================================
+(load "setup.repl")
+
+(begin-tx "activate launch + seed alice 3000 / bob 2000  (circulating 5000)")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+       , "bob":   { "keys": ["bob-key"],   "pred": "keys-all" }
+       , "carol": { "keys": ["carol-key"], "pred": "keys-all" }
+ ;; 🔴 FRANK EXISTS FOR ONE REASON: he buys while snap-gen is STILL 0, and never
+ ;; writes again until he claims. Any holder who acquires AFTER a generation has
+ ;; sealed is checkpointed by that very credit, so `snap-index = 0` with a
+ ;; non-zero balance is unreachable for them — which is why deleting
+ ;; `snap-corr-of`'s idx = 0 branch was invisible to every other account here.
+       , "frank": { "keys": ["frank-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 4000.0) (coin.TRANSFER "sender00" "bob" 4000.0) (coin.TRANSFER "sender00" "carol" 4000.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 4000.0)
+(coin.transfer-create "sender00" "bob"   (read-keyset 'bob)   4000.0)
+(coin.transfer-create "sender00" "carol" (read-keyset 'carol) 4000.0)
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "frank" 4000.0)] }])
+(coin.transfer-create "sender00" "frank" (read-keyset 'frank) 4000.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 1500.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "alice" (read-keyset 'alice) 3000.0)
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 1000.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "bob" (read-keyset 'bob) 2000.0)
+(env-sigs [{ "key": "frank-key", "caps": [(coin.TRANSFER "frank" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 500.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "frank" (read-keyset 'frank) 1000.0)
+(expect "circulating 6000" 6000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+(expect "no generation has sealed yet" 0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot-gen))
+(commit-tx)
+
+;; ===========================================================================
+;; N-1 — A ROUND CANNOT BE DECLARED WITHOUT A SEALED RECORD DATE.
+;; ONE MODE, ONE CODE PATH, NO HYBRID: there is deliberately no fallback, because a
+;; fallback is how the pre-the design record shortfall would come back through the door marked
+;; convenience — and after the freeze it could never be removed.
+;; ===========================================================================
+(begin-tx "N-1 no sealed record date")
+(env-keys ["admin-key"])
+(expect-failure "a round with no sealed record date is refused"
+  "SPT no record date has sealed on this chain; schedule one before declaring"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round
+    "R-NOGEN" 0.02 (time "2026-06-05T00:00:00Z")))
+(rollback-tx)
+
+;; ===========================================================================
+;; N-2 / N-3 — the record date's own bounds. Same two bounds a round gets, for the
+;; same reasons: a record date with no cancel runway is a decision with no remedy,
+;; and an unbounded one is the mistyped year that killed the award subsystem.
+;; ===========================================================================
+(begin-tx "N-2 record date with no cancel runway")
+(env-keys ["admin-key"])
+(expect-failure "a record date inside two retraction leads is refused"
+  "SPT record date must leave at least two retraction leads of runway"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+    (time "2026-06-01T06:00:00Z")))
+(rollback-tx)
+
+;; 🔴 N-3 IS DELETED (the design record, a later change). It asserted a mistyped year-2099 record date was
+;; refused outright by MAX-ROUND-LEAD. That constant is gone from BOTH its consumers, and the
+;; boundary is recorded at `schedule-snapshot`: the design record predates the design record, so it never covered
+;; this path, and the deletion was extended here because the design record's own test — is the typo
+;; recoverable by the operator alone? — is satisfied MORE strongly here than on the round
+;; path. `cancel-snapshot` accepts any date more than MIN-RETRACT-LEAD away, so a 2099 record
+;; date stays cancellable for seventy-three years. N-9/N-10/N-11 below still pin that remedy,
+;; which is why deleting this one does not leave the far-future case unexamined.
+
+(begin-tx "N-4 only admin may name a record date")
+(env-keys [])
+(expect-failure "a stranger cannot schedule a record date"
+  "Keyset failure"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+    (time "2026-06-02T00:00:00Z")))
+(rollback-tx)
+
+;; ===========================================================================
+;; G-1 — SCHEDULE, then SEAL. The instant is announced with NO RATE ATTACHED; that is
+;; the whole of the founder's step 1.
+;; ===========================================================================
+(begin-tx "G-1a schedule the record date")
+(env-keys ["admin-key"])
+(expect "record date scheduled" "record date scheduled"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+    (time "2026-06-02T00:00:00Z")))
+(expect "still no generation — scheduling is not sealing" 0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot-gen))
+(commit-tx)
+
+(begin-tx "N-5 a second record date cannot be scheduled")
+(env-keys ["admin-key"])
+(expect-failure "one record date at a time"
+  "a record date is already scheduled"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+    (time "2026-06-03T00:00:00Z")))
+(rollback-tx)
+
+(begin-tx "N-6 a round cannot be declared while a record date is unsealed")
+(env-keys ["admin-key"])
+(expect-failure "declaring against an unsealed record date is refused"
+  "SPT cannot declare a round while a record date is scheduled and unsealed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round
+    "R-EARLY" 0.02 (time "2026-06-05T00:00:00Z")))
+(rollback-tx)
+
+;; --- IT SEALS LAZILY. The instant passes with NO ACTIVITY; the seal still records the
+;; --- correct float, because the float only changes at a write.
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:01Z") })
+(begin-tx "G-1b seal — permissionless, by a stranger with no keys at all")
+(env-keys [])
+(expect "advance-snapshot seals" "sealed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot))
+(expect "generation 1 is open" 1
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot-gen))
+(expect "the sealed float is the float at the instant" 6000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snapshot-circulating))
+(expect "the schedule is cleared by the seal" true
+  (= (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot-at)
+     n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.EPOCH))
+(expect "no rate is attached yet" 0.0
+  (at 'rate (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot 1)))
+(expect "advance-snapshot is idempotent — a second call does nothing" "no-seal"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot))
+(commit-tx)
+
+;; ===========================================================================
+;; 🔴 DF-1 — THE PROPERTY THE WHOLE ADR EXISTS FOR:
+;; TOTAL PAID == rate x SEALED FLOAT, with heavy churn inside the window.
+;;
+;; The float MOVES between the record instant and the round taking effect — exactly
+;; the movement that produced the measured 150 % shortfall on the pre-the design record module.
+;; Here carol buys 3,000 NEW tokens inside the window (circulating 5000 -> 8000) and
+;; alice ships 1,000 to bob. Under the design record's bar the chain would owe rate*8000 while
+;; being funded for rate*5000. Under the design record the debt is rate*5000, immovably.
+;; ===========================================================================
+(begin-tx "DF-1a churn INSIDE the window: carol buys 3000 new, alice sends bob 1000")
+(env-sigs [{ "key": "carol-key", "caps": [(coin.TRANSFER "carol" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 1500.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "carol" (read-keyset 'carol) 3000.0)
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" "bob" 1000.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "alice" "bob" 1000.0)
+(expect "circulating GREW to 9000 inside the window" 9000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+(expect "but the SEALED float did not move" 6000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snapshot-circulating))
+(commit-tx)
+
+;; --- fund against the SEALED float, using the module's own helper. `funding-needed`
+;; --- and `declare-round` MUST agree — see A-1 for the pin that they do.
+(begin-tx "DF-1b fund the exact bar")
+(env-keys ["admin-key"])
+(let ((need (at 'shortfall (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.funding-needed 0.02))))
+  (expect "the bar is rate x SEALED float (6000), not rate x current float (9000)" 120.0 need)
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT need)] }])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" need)
+  (env-keys ["admin-key"])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards need))
+(commit-tx)
+
+(begin-tx "DF-1c declare R1 against the sealed generation")
+(env-keys ["admin-key"])
+(expect "round declared" "round declared"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round
+    "R1" 0.02 (time "2026-06-03T00:00:00Z")))
+(expect "the rate is bound to generation 1" 0.02
+  (at 'rate (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot 1)))
+(commit-tx)
+
+;; ===========================================================================
+;; N-7 — a later change CLOSES HERE. A duplicate declaration used to be accepted and silently
+;; DOUBLED the chain's rate — the operator re-running a leg they thought had failed.
+;; ===========================================================================
+(begin-tx "N-7 duplicate declaration on the same record date")
+(env-keys ["admin-key"])
+(expect-failure "a second round on the same record date is REFUSED, not doubled"
+  "SPT this record date already carries a declared round"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round
+    "R1-DUP" 0.02 (time "2026-06-03T00:00:00Z")))
+(rollback-tx)
+
+(begin-tx "N-8 a record date cannot be scheduled while a round is pending-effective")
+(env-keys ["admin-key"])
+(expect-failure "no overlapping generations"
+  "SPT cannot schedule a record date while a declared round is not yet effective"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+    (time "2026-06-04T00:00:00Z")))
+(rollback-tx)
+
+;; --- the round takes effect ---
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:01Z") })
+
+(begin-tx "DF-1d EVERY holder claims; the total is measured, not assumed")
+(let* ((pool0 (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+       (a (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "alice"))
+       (b (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "bob"))
+ ;; 🔴 FRANK'S snap-index IS STILL 0 — he has not written since before the seal.
+ ;; Without the idx = 0 branch his correction reads (0.0 - balance) * (rpt - rd) =
+ ;; his ENTIRE accrual, negated, and this claim aborts "nothing to claim".
+       (f (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "frank"))
+       (paid (+ (+ a b) f)))
+ ;; carol bought INSIDE the window, so she held nothing at the record instant and is
+ ;; owed nothing — the ADR's "float arriving after the instant is free", measured.
+  (expect-failure "carol bought inside the window and is owed nothing"
+    "nothing to claim"
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "carol"))
+  (expect "alice is paid on her RECORD-INSTANT balance (3000), not her current 2000" 60.0 a)
+  (expect "bob is paid on his RECORD-INSTANT balance (2000), not his current 3000" 40.0 b)
+ ;; 🔴 THE HEADLINE. Not "close enough" — exact.
+  (expect "🔴 a never-checkpointed holder is paid in full" 20.0 f)
+  (expect "TOTAL PAID == rate x SEALED FLOAT, exactly" (* 0.02 6000.0) paid)
+  (expect "the pool funded exactly the debt: nothing left over, nothing short" 0.0
+    (- pool0 paid)))
+(commit-tx)
+
+;; ===========================================================================
+;; 🔴 DF-2 — THE O(1) LIABILITY MATCHES A NAIVE PER-HOLDER SUM.
+;; `snap-corr` is a STORED AGGREGATE and its derivation is the load-bearing part of
+;; the design record (the ADR's own residual-risk section says so). A test that merely exercises
+;; it proves nothing, so this compares the O(1) identity against a sum computed the
+;; slow way, at several points including mid-churn and mid-claim.
+;; ===========================================================================
+(begin-tx "DF-2 setup: a second generation with churn, unclaimed")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (time "2026-06-04T00:00:00Z"))
+(commit-tx)
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-04T00:00:01Z") })
+(begin-tx "DF-2a seal generation 2")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(expect "generation 2, sealed float 9000" 9000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snapshot-circulating))
+(commit-tx)
+
+(begin-tx "DF-2b fund + declare R2, then churn inside the window")
+(env-keys ["admin-key"])
+(let ((need (at 'shortfall (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.funding-needed 0.01))))
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT need)] }])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" need)
+  (env-keys ["admin-key"])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards need))
+(commit-tx)
+(begin-tx "DF-2c declare R2")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round
+  "R2" 0.01 (time "2026-06-05T00:00:00Z"))
+(commit-tx)
+
+;; naive per-holder sum, computed the slow way from the public read.
+(begin-tx "DF-2d O(1) == naive sum, INSIDE the window (correction still zero)")
+(let ((naive (fold (+) 0.0
+                (map (lambda (a:string)
+                       (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of a))
+                     ["alice" "bob" "carol" "frank"]))))
+  (expect "O(1) liability == naive per-holder sum" naive
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability)))
+(commit-tx)
+
+(begin-tx "DF-2e churn inside the R2 window, then re-check the identity")
+(env-sigs [{ "key": "bob-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "bob" "carol" 2500.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "bob" "carol" 2500.0)
+(let ((naive (fold (+) 0.0
+                (map (lambda (a:string)
+                       (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of a))
+                     ["alice" "bob" "carol" "frank"]))))
+  (expect "O(1) == naive, MID-CHURN inside an open window" naive
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability)))
+;; ===========================================================================
+;; 🔴 DF-2e2 — KILLS MUTATION 8: `snap-m` losing its `min(rpt, base+rate)` cap.
+;;
+;; R2 IS DECLARED BUT NOT YET EFFECTIVE, and bob has just written, so he carries a real
+;; `snap-balance` differing from his balance. THAT is the only state the cap governs: it
+;; is what keeps a generation's correction confined to a round that has actually landed.
+;; Without it bob's correction reads (snap-balance - balance) * rate = 2500 * 0.01 = 25.0
+;; KDA of accrual from a round NOBODY HAS BEEN PAID FOR YET, and carol's reads -25.0.
+;;
+;; 🔴 AND THIS HAD TO BE AN ABSOLUTE ASSERTION, NOT O(1)-vs-naive. Every identity check in
+;; this suite compares `award-liability` against a sum of `pending-awards-of`, and BOTH
+;; sides route through `snap-corr-of` -> `snap-m`. A bug in the cap moves both by the same
+;; amount, so the comparison agrees while both are wrong — a check that cannot fail on the
+;; thing it appears to be checking. Measured: mutation 8 was SILENT against six identity
+;; assertions and dies against this one line.
+(expect "🔴 a DECLARED-but-not-yet-effective round owes bob NOTHING" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "bob"))
+(expect "🔴 ...and owes carol nothing either — not a NEGATIVE amount" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "carol"))
+(expect "the whole chain owes nothing until R2 lands" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))
+(commit-tx)
+
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-05T00:00:01Z") })
+(begin-tx "DF-2f R2 effective: identity holds ACROSS the m-jump, before any write")
+(let ((naive (fold (+) 0.0
+                (map (lambda (a:string)
+                       (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of a))
+                     ["alice" "bob" "carol" "frank"]))))
+ ;; 🔴 THIS IS THE `snap-open` CASE. The round just became effective, `m` jumped for
+ ;; every account checkpointed in generation 2 AT ONCE, and NO transaction has run to
+ ;; fold that into snap-corr. If snap-open were wrong — or absent — this is where the
+ ;; O(1) reader and the truth diverge, and `fund-awards` would accept an underfunded pool.
+  (expect "O(1) == naive at the m-jump, with snap-corr NOT yet folded" naive
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability)))
+(commit-tx)
+
+(begin-tx "DF-2g settle happens, then the identity STILL holds")
+(env-keys [])
+(expect "the first toucher settles generation 2" "settled"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot))
+(let ((naive (fold (+) 0.0
+                (map (lambda (a:string)
+                       (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of a))
+                     ["alice" "bob" "carol" "frank"]))))
+  (expect "O(1) == naive AFTER the fold — snap-corr now carries what snap-open did" naive
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability)))
+(commit-tx)
+
+(begin-tx "DF-2h MID-CLAIM: one holder claims, identity holds for the rest")
+(let ((a (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "bob")))
+  (let ((naive (fold (+) 0.0
+                  (map (lambda (acct:string)
+                         (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of acct))
+                       ["alice" "bob" "carol" "frank"]))))
+    (expect "O(1) == naive MID-CLAIM" naive
+      (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))))
+(commit-tx)
+
+(begin-tx "DF-2i R2's total is ALSO rate x its own sealed float")
+(let* ((a (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "alice"))
+       (c (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "carol"))
+       (f (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "frank")))
+ ;; bob already claimed in DF-2h; his payout plus these two is R2's whole cost.
+  (expect "everything owed is now paid: the O(1) liability is zero" 0.0
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))
+  (expect "and the pool is empty to the last decimal — funded EXACTLY, never over" 0.0
+    (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT)))
+(commit-tx)
+
+;; ===========================================================================
+;; A-1 — `funding-needed` AND `declare-round` USE ONE IMPLEMENTATION.
+;; the handoff rule 2, paid for once already: a generator and a checker each owning a
+;; copy of the same rule cost this project a full round of work. This pins that the
+;; number the operator funds IS the number the gate enforces — to the last decimal, at
+;; a rate chosen to produce sub-1e-12 dust in the liability.
+;; ===========================================================================
+(begin-tx "A-1 the funding tool and the gate agree exactly")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (time "2026-06-06T00:00:00Z"))
+(commit-tx)
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-06T00:00:01Z") })
+(begin-tx "A-1a seal generation 3 and compare the two numbers")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(let ((r 0.000000000007))
+  (expect "funding-needed.required IS round-funding-bar, not a re-derivation"
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.round-funding-bar r)
+    (at 'required (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.funding-needed r))))
+(commit-tx)
+
+;; ===========================================================================
+;; A-2 — funding ONE TRILLIONTH short is refused. The founder's step 6: the module
+;; refuses the declaration on any chain a single 1e-12 short.
+;; ===========================================================================
+(begin-tx "A-2 provision the bar, minus 1e-12")
+(env-keys ["admin-key"])
+(let ((need (- (at 'shortfall (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.funding-needed 0.01))
+               0.000000000001)))
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT need)] }])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" need)
+  (env-keys ["admin-key"])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards need))
+(commit-tx)
+(begin-tx "A-2a and the declaration is refused")
+(env-keys ["admin-key"])
+(expect-failure "one trillionth short is still short"
+  "SPT award pool does not cover the liability this round declares"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round
+    "R3" 0.01 (time "2026-06-07T00:00:00Z")))
+(rollback-tx)
+
+;; ===========================================================================
+;; R-1 — RETRACTION REWINDS BOTH SIDES. 🔴 BOTH OR NEITHER: zeroing only the
+;; award-rounds row leaves `snap-m`'s cap at base+rate, so every account checkpointed
+;; in that generation keeps a live correction against a round that no longer pays —
+;; the accrual still pays, on money nobody funded.
+;; ===========================================================================
+(begin-tx "R-1 top up, declare R3, then retract it")
+(env-keys ["admin-key"])
+(let ((need (at 'shortfall (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.funding-needed 0.01))))
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT need)] }])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" need)
+  (env-keys ["admin-key"])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards need))
+(commit-tx)
+(begin-tx "R-1a declare then retract")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round
+  "R3" 0.01 (time "2026-06-08T00:00:00Z"))
+(expect "the generation carries the rate" 0.01
+  (at 'rate (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot 3)))
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.retract-round "R3")
+(expect "🔴 the GENERATION's rate is rewound too, not just the round" 0.0
+  (at 'rate (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot 3)))
+(expect "and the liability it promised is gone" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))
+(commit-tx)
+
+(begin-tx "R-1b a retracted generation is RE-DECLARABLE on the SAME record date")
+(env-keys ["admin-key"])
+(expect "a rate typo is corrected without re-running the ceremony" "round declared"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round
+    "R3-FIXED" 0.01 (time "2026-06-08T00:00:00Z")))
+(commit-tx)
+
+;; ===========================================================================
+;; a finding — A WRONGLY-DATED RECORD DATE IS CANCELLABLE, and cancellation has the same
+;; lead-time bound as retraction, for the same reason (a partial cancellation across
+;; 20 chains locks the divergence in rather than failing safe — verify after cancelling).
+;; ===========================================================================
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-08T00:00:01Z") })
+(begin-tx "a finding schedule then cancel")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (time "2026-06-10T00:00:00Z"))
+(expect "cancelled" "record date cancelled"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cancel-snapshot))
+(expect "and nothing sealed" 3
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot-gen))
+(commit-tx)
+
+(begin-tx "N-9 cancelling when nothing is scheduled")
+(env-keys ["admin-key"])
+(expect-failure "there is nothing to cancel"
+  "SPT there is no scheduled record date to cancel"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cancel-snapshot))
+(rollback-tx)
+
+(begin-tx "N-10 cancelling inside the lead is refused")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (time "2026-06-10T00:00:00Z"))
+(commit-tx)
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-09T23:00:00Z") })
+(begin-tx "N-10a too close to landing")
+(env-keys ["admin-key"])
+(expect-failure "a record date inside MIN-RETRACT-LEAD can no longer be cancelled"
+  "SPT record date is too close to landing to be cancelled"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cancel-snapshot))
+(rollback-tx)
+
+(begin-tx "N-11 only admin may cancel")
+(env-keys [])
+(expect-failure "a stranger cannot cancel a record date"
+  "Keyset failure"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cancel-snapshot))
+(rollback-tx)
+
+;; ===========================================================================
+;; X-1 — `chain-report` is correct on a SPOKE. It wraps the reserve reads in `try`
+;; because the launch reserve row does not exist on the nineteen spokes; without that
+;; this read would abort on 19 of 20 chains, which is the shape that made the old
+;; operator tooling useless exactly where it was needed.
+;; ===========================================================================
+(begin-tx "X-1 chain-report answers in one call")
+(let ((r (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.chain-report)))
+  (expect "it reports the live generation" 3 (at 'generation r))
+  (expect "it reports the sealed float" 9000.0 (at 'sealed-float r))
+  (expect "it reports circulating" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating)
+    (at 'circulating r))
+  (expect "it reports the liability" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability)
+    (at 'liability r))
+ ;; total-distributed had NO getter at all before the design record — unfixable after freeze.
+  (expect "it reports total-distributed" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-total-distributed)
+    (at 'total-distributed r))
+ ;; 🔴 THE KEY NAMES ARE A FROZEN PUBLIC WIRE FORMAT, AND NOTHING PINNED THEM (a later change delta
+ ;; check, B-4). `chain-report` is the founder's one call and the shape every off-chain reader
+ ;; binds to; the names freeze with the module and no upgrade can rename them afterwards. Until
+ ;; this block existed, renaming a key was caught ONLY by the module-hash and fixture-staleness
+ ;; change-detectors — which redden on ANY edit and therefore carry no semantic signal. Measured
+ ;; consequence: a later change renamed `rps`/`max-rps` to `rpt`/`max-rpt` on this very object and every
+ ;; semantic gate stayed green; had the rename MISSED this pair, the the design record non-conformance it
+ ;; existed to close would have shipped to mainnet unnoticed.
+ ;; `at` ABORTS on a missing key, so each line below goes RED the moment its key is renamed or
+ ;; dropped, and the getter comparison catches a key that survives but stops tracking its source.
+  (expect "wire format: 'rpt is present and tracks get-rpt"
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt) (at 'rpt r))
+  (expect "wire format: 'max-rpt is present and tracks max-rpt"
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.max-rpt) (at 'max-rpt r))
+ ;; The remaining eleven, so the WHOLE shape is pinned rather than the two that happened to move.
+  (expect "wire format: all 14 keys answer" 14
+    (length [ (at 'tokens-on-chain r) (at 'circulating r) (at 'funding r) (at 'pool r)
+              (at 'liability r) (at 'surplus r) (at 'rpt r) (at 'max-rpt r)
+              (at 'sealed-float r) (at 'snapshot-rate r) (at 'total-distributed r)
+              (if (at 'settled r) 1.0 0.0) (dec (at 'generation r))
+              (diff-time (at 'record-date r) (time "1970-01-01T00:00:00Z")) ])))
+(commit-tx)
+
+(print "smartpacts-record-date (core): OK")
+
+;; ===========================================================================
+;; 🔴 P-3 — THE `snap-index < snap-gen` GUARD IS LOAD-BEARING.
+;;
+;; the design record: "relaxed, a second write in the same window overwrites the frozen base with
+;; the post-trade balance — MEASURED 12.5 % overpay". Nothing above this line proves it:
+;; every earlier scenario has each account writing AT MOST ONCE per window, and with one
+;; write `<` and `<=` are algebraically identical. That is the same shape as cold audit
+;; #14 a finding, where two pinning tests and eleven audits could not see a defect that lived
+;; only in a gap they never entered.
+;;
+;; So this block makes ALICE WRITE TWICE inside one window. The TOTAL alone would still
+;; not catch it — alice's under-count and carol's over-count cancel exactly — so the
+;; assertion is on the INDIVIDUAL payout.
+;; ===========================================================================
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-10T00:00:01Z") })
+;; DRAIN FIRST. `claim-awards` pays EVERYTHING owed, not one round, and R3-FIXED is already
+;; effective and unclaimed — so a payout asserted here would be R3+R4 and the assertion below
+;; would be measuring the wrong thing. (Found by running it: expected 20.0, got 40.0.) The
+;; drain happens BEFORE the seal on purpose: a claim is a write, and a write after the seal
+;; would itself be alice's first checkpoint, moving the very base this block is about.
+(begin-tx "P-3z drain every holder so R4's payout stands alone")
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "alice")
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "bob")
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "carol")
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "frank")
+(expect "nothing is owed going into P-3" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))
+(commit-tx)
+
+(begin-tx "P-3a seal generation 4 (a record date was left scheduled by N-10)")
+(env-keys [])
+(expect "generation 4 seals" 4
+  (let ((r (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)))
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot-gen)))
+(commit-tx)
+
+(begin-tx "P-3b alice writes TWICE inside the window")
+;; ONE managed TRANSFER for 200, spent as two 100s. Re-issuing env-sigs inside a single
+;; transaction does NOT re-install a managed capability — the resource is metered once —
+;; so a second grant of 100.0 fails "TRANSFER exceeded: 100.0 requested of 0.0 managed".
+;; Two transfers under one grant is what makes this TWO WRITES, which is the point.
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" "carol" 200.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "alice" "carol" 100.0)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "alice" "carol" 100.0)
+(commit-tx)
+
+(begin-tx "P-3c fund + declare R4 against generation 4")
+(env-keys ["admin-key"])
+(let ((need (at 'shortfall (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.funding-needed 0.01))))
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT need)] }])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" need)
+  (env-keys ["admin-key"])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards need))
+(commit-tx)
+(begin-tx "P-3d declare R4")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round
+  "R4" 0.01 (time "2026-06-11T00:00:00Z"))
+(commit-tx)
+
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-11T00:00:01Z") })
+(begin-tx "P-3e alice is paid on her balance AT THE SEAL — not after her second write")
+;; alice sent 100 twice since the seal, so her balance at the seal was current + 200.
+;; Under a relaxed guard the second write re-freezes her base at (current + 100), and
+;; this expectation is short by exactly 0.01 x 100 = 1.0 KDA.
+(let* ((bal-now (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice"))
+       (at-seal (+ bal-now 200.0))
+       (paid (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "alice")))
+  (expect "🔴 payout == rate x balance-at-the-record-instant" (* 0.01 at-seal) paid))
+(commit-tx)
+
+;; ===========================================================================
+;; 🔴 P-4 — `claim-awards` MUST SETTLE FIRST, and the design record's own function table does not
+;; say so. It lists only debit and credit, on the reason "the only two sites that mutate
+;; circulating-supply" — right for those two, incomplete as a list.
+;;
+;; `claim-awards` moves neither balance nor circulating, but it DOES re-base reward-debt
+;; and crystallize the correction into pending, which removes that account from the
+;; settle identity while `circ(g) - circulating` is unchanged. If the settle then happens
+;; LATER (at the next transfer) it folds a stale number.
+;;
+;; Nothing above catches it, because every earlier scenario calls advance-snapshot or
+;; transfers BEFORE claiming. Here the FIRST touch after the round becomes effective is
+;; a claim, and a transfer follows it.
+;; ===========================================================================
+(begin-tx "P-4a schedule + seal generation 5")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (time "2026-06-13T00:00:00Z"))
+(commit-tx)
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-13T00:00:01Z") })
+(begin-tx "P-4b seal, then churn inside the window")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(env-sigs [{ "key": "carol-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "carol" "bob" 700.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "carol" "bob" 700.0)
+(commit-tx)
+(begin-tx "P-4c fund + declare R5")
+(env-keys ["admin-key"])
+(let ((need (at 'shortfall (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.funding-needed 0.01))))
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT need)] }])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" need)
+  (env-keys ["admin-key"])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards need))
+(commit-tx)
+(begin-tx "P-4d declare R5")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round
+  "R5" 0.01 (time "2026-06-14T00:00:00Z"))
+(commit-tx)
+
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-14T00:00:01Z") })
+(begin-tx "P-4e THE FIRST TOUCH after the round takes effect is a CLAIM")
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "carol")
+(commit-tx)
+
+(begin-tx "P-4f now a transfer runs — under a missing settle it folds a STALE number")
+(env-sigs [{ "key": "bob-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "bob" "alice" 50.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "bob" "alice" 50.0)
+(let ((naive (fold (+) 0.0
+                (map (lambda (a:string)
+                       (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of a))
+                     ["alice" "bob" "carol" "frank"]))))
+  (expect "🔴 O(1) == naive after a CLAIM-FIRST settle" naive
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability)))
+(commit-tx)
+
+(begin-tx "P-4g and every remaining holder is still paid exactly what they are owed")
+(let* ((la (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "alice"))
+       (lb (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "bob"))
+       (pa (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "alice"))
+       (pb (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "bob"))
+       (pf (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "frank")))
+  (expect "alice paid what the read promised" (floor la 12) pa)
+  (expect "bob paid what the read promised" (floor lb 12) pb)
+  (expect "nothing is left owed" 0.0
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability)))
+(commit-tx)
+
+;; ===========================================================================
+;; 🔴 P-5 — KILLS MUTATIONS 3 AND 5, AND BOTH WERE SILENT UNTIL THIS BLOCK EXISTED.
+;;
+;; Dropping `snap-open` from `award-liability`, and deleting `snap-corr-of`'s `idx = 0`
+;; zero branch, BOTH left this suite green through P-4. The reason is one fact about the
+;; SCENARIOS, not about the code: A TRANSFER DOES NOT MOVE `circulating` (it debits and
+;; credits the same amount), so in every window above `circ(g) - circulating` is exactly
+;; 0 and the aggregate correction is trivially zero. A green suite over a
+;; structurally-zero term proves nothing about the term — which is the same defect class
+;; as the two-argument `expect-failure` and the count-based DML gate, arriving here in
+;; the arithmetic instead of the harness.
+;;
+;; This block breaks both assumptions at once:
+;; * ERIN BUYS INSIDE THE WINDOW — NEW tokens, so `circulating` genuinely rises and
+;; `snap-open` finally has something to compute at the m-jump.
+;; * DAVE NEVER WRITES AT ALL — so his `snap-index` stays 0 across a whole round, the
+;; only state in which the `idx = 0` branch is reachable.
+;; ===========================================================================
+(begin-tx "P-5a dave and erin get KDA; dave buys BEFORE the record date")
+(env-keys ["admin-key"])
+(env-data { "dave": { "keys": ["dave-key"], "pred": "keys-all" }
+       , "erin": { "keys": ["erin-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "dave" 2000.0) (coin.TRANSFER "sender00" "erin" 2000.0)] }])
+(coin.transfer-create "sender00" "dave" (read-keyset 'dave) 2000.0)
+(coin.transfer-create "sender00" "erin" (read-keyset 'erin) 2000.0)
+(env-sigs [{ "key": "dave-key", "caps": [(coin.TRANSFER "dave" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 500.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "dave" (read-keyset 'dave) 1000.0)
+(commit-tx)
+
+(begin-tx "P-5b schedule a generation")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (time "2026-06-16T00:00:00Z"))
+(commit-tx)
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-16T00:00:01Z") })
+(begin-tx "P-5c seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "P-5d 🔴 erin BUYS inside the window — circulating actually MOVES")
+(env-sigs [{ "key": "erin-key", "caps": [(coin.TRANSFER "erin" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 750.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "erin" (read-keyset 'erin) 1500.0)
+(expect "circulating rose ABOVE the sealed float — this is not a transfer" true
+  (> (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating)
+     (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snapshot-circulating)))
+(commit-tx)
+
+(begin-tx "P-5e fund the round")
+(env-keys ["admin-key"])
+(let ((need (at 'shortfall (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.funding-needed 0.02))))
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT need)] }])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" need)
+  (env-keys ["admin-key"])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards need))
+(commit-tx)
+(begin-tx "P-5f declare it")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round
+  "R-P5" 0.02 (time "2026-06-17T00:00:00Z"))
+(commit-tx)
+
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-17T00:00:01Z") })
+(begin-tx "P-5g 🔴 O(1) == naive AT THE M-JUMP with a NON-ZERO snap-open")
+;; Nothing has run since the round became effective, so snap-corr does not yet carry the
+;; jump — and here `circ(g) - circulating` is genuinely non-zero (erin's 1500). This is
+;; the first assertion in the suite that snap-open actually has to compute something.
+(let ((naive (fold (+) 0.0
+                (map (lambda (a:string)
+                       (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of a))
+                     ["alice" "bob" "carol" "frank" "dave" "erin"]))))
+  (expect "O(1) == naive with snap-open NON-ZERO" naive
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability)))
+(commit-tx)
+
+(begin-tx "P-5h 🔴 DAVE NEVER WROTE — snap-index still 0, and he is paid in full")
+;; Without `snap-corr-of`'s idx = 0 branch his correction reads
+;; (0.0 - balance) * (rpt - reward-debt) — his ENTIRE accrual, negated — so he is paid
+;; nothing while the O(1) liability under-reports by the same amount.
+(let ((paid (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "dave")))
+  (expect "a never-checkpointed row has NO correction: rate x his full 1000" 20.0 paid))
+(commit-tx)
+
+(begin-tx "P-5h2 🔴 O(1) == naive AFTER a CLAIM was the first post-effective touch")
+;; P-5h's claim ran with the generation still UNSETTLED and a NON-ZERO aggregate
+;; correction. If `claim-awards` does not settle first, that claim re-bases its own
+;; reward-debt and crystallizes its correction while `circ(g) - circulating` is unchanged,
+;; so the LATER settle folds a number short by exactly this claimer's correction — real
+;; money owed to every OTHER holder on the chain. the design record's function table omits
+;; claim-awards; this assertion is why the implementation does not.
+(let ((naive (fold (+) 0.0
+                (map (lambda (a:string)
+                       (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of a))
+                     ["alice" "bob" "carol" "frank" "dave" "erin"]))))
+  (expect "O(1) == naive after claim-first" naive
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability)))
+(commit-tx)
+
+(begin-tx "P-5i erin bought INSIDE the window and is owed nothing")
+(expect-failure "float arriving after the record instant is free"
+  "nothing to claim"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "erin"))
+(rollback-tx)
+
+;; ===========================================================================
+;; 🔴 P-6 — A GENERATION THAT NEVER CARRIES A ROUND, FOLLOWED BY ONE THAT DOES.
+;;
+;; This shape was NOT reachable anywhere else in this suite: every generation above either
+;; carries a round or is settled before the next one's round lands. It surfaced from
+;; `smartpacts-solvency-at-declaration.repl`, where the O(1) liability read 30.0 against a per-holder sum of
+;; 20.0 — a 10.0 gap in the one identity the whole of the design record rests on.
+;;
+;; 🔴 THE MODULE WAS NOT AT FAULT, AND THAT WAS ESTABLISHED BY MEASURING BOTH DIRECTIONS
+;; RATHER THAN BY INSPECTION. With a MONOTONIC clock the identity holds to 0.0 — this block.
+;; With block-time REWOUND behind a sealed generation's `base` it breaks by exactly the
+;; affected account's accrual: reproduced deliberately, and impossible on chain, because
+;; chainweb block time only advances (see `snap-m` for why rpt cannot fall). an earlier design record had
+;; rewound ~4 days between two sections during the a later change migration; its CLOCK was
+;; repaired, not its assertions.
+;;
+;; What this block pins is the reachable half: an account credited while a rate-0 generation
+;; is open, a LATER generation's round becoming effective, and that account never writing in
+;; between. It must be paid in full, and the two liability measures must agree.
+;; ===========================================================================
+(begin-tx "P-6a seed a holder who will sit through everything")
+(env-keys ["admin-key"])
+(env-data { "heidi": { "keys": ["heidi-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "heidi" 4000.0)] }])
+(coin.transfer-create "sender00" "heidi" (read-keyset 'heidi) 4000.0)
+(commit-tx)
+
+(begin-tx "P-6b schedule a generation that will NEVER carry a round")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (time "2026-06-19T00:00:00Z"))
+(commit-tx)
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-19T00:00:01Z") })
+(begin-tx "P-6c seal it — its rate stays 0.0 for its whole life")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "P-6d heidi buys INSIDE the rate-0 generation's window")
+(env-sigs [{ "key": "heidi-key", "caps": [(coin.TRANSFER "heidi" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 500.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "heidi" (read-keyset 'heidi) 1000.0)
+(expect "the generation she was checkpointed into carries no rate" 0.0
+  (at 'rate (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot
+              (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot-gen))))
+(commit-tx)
+
+(begin-tx "P-6e a SECOND generation, and this one gets the round")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (time "2026-06-21T00:00:00Z"))
+(commit-tx)
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-21T00:00:01Z") })
+(begin-tx "P-6f seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+(begin-tx "P-6g fund it")
+(env-keys ["admin-key"])
+(let ((need (at 'shortfall (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.funding-needed 0.01))))
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT need)] }])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" need)
+  (env-keys ["admin-key"])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards need))
+(commit-tx)
+(begin-tx "P-6h declare")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round
+  "R-P6" 0.01 (time "2026-06-22T00:00:00Z"))
+(commit-tx)
+
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-22T00:00:01Z") })
+(begin-tx "P-6i 🔴 the identity holds across a STALE rate-0 snap-index")
+;; heidi's snap-index still points at the rate-0 generation and she has not written since.
+;; This is the exact state in which an earlier design record measured a 10.0 gap under a rewound clock.
+(let ((naive (fold (+) 0.0
+                (map (lambda (a:string)
+                       (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of a))
+                     ["alice" "bob" "carol" "frank" "dave" "erin" "heidi"]))))
+  (expect "O(1) == naive with a stale rate-0 generation in play" naive
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability)))
+(expect "🔴 and heidi is PAID — she held 1000 at the round's record instant" 10.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "heidi"))
+(commit-tx)
+
+(begin-tx "P-6j she can actually claim it")
+(expect "heidi claims her full 10" 10.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "heidi"))
+(commit-tx)
+
+;; ===========================================================================
+;; 🔴 N-3's REPLACEMENT — THE FAR-FUTURE RECORD DATE, PINNED INSTEAD OF ARGUED.
+;;
+;; PLACED LAST ON PURPOSE. It schedules, cancels and seals, so anywhere earlier it would
+;; move `snap-gen` and the clock out from under every section below it — measured: inserting
+;; it after N-2 reddened six later assertions that had nothing to do with it.
+;;
+;; N-3 (deleted at a later change) asserted a mistyped year-2099 record date was refused outright by
+;; `MAX-ROUND-LEAD`. Deleting that constant was right, and it was extended to `schedule-snapshot`
+;; — a consumer the design record could not have known about, since the design record created it three days later.
+;; But the justification for extending it lived in a COMMENT, and the recoverability claim it
+;; rests on has THREE links of which the suite pinned only the middle one:
+;;
+;; (1) a far-future record date BLOCKS every award declaration <- why the typo matters
+;; (2) `cancel-snapshot` accepts it 73 years out <- the remedy (N-9/10/11
+;; pin its EDGES only, and
+;; a finding cancels a 2-day date)
+;; (3) declarations WORK AGAIN afterwards <- why it IS a remedy
+;;
+;; A deletion whose justification nothing can falsify is a deletion nobody can check
+;; (the project notes Rule 14(c)). Measured: all three links hold, so the expansion beyond the design record's
+;; scope was CORRECT — and it is now asserted rather than reasoned.
+;; 🔴 Falsifiability: delete `declare-round`'s scheduled-and-unsealed refusal and N-3b goes RED.
+;; ===========================================================================
+(begin-tx "N-3a the mistyped year — a 2099 record date is ACCEPTED now, not refused")
+(env-keys ["admin-key"])
+(expect "no bound rejects it any more" "record date scheduled"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+    (time "2099-06-10T00:00:00Z")))
+(commit-tx)
+
+(begin-tx "N-3b and it BLOCKS the award subsystem — this is why the typo matters at all")
+(env-keys ["admin-key"])
+(expect-failure "a mistyped year blocks every award declaration until it is cancelled"
+  "SPT cannot declare a round while a record date is scheduled and unsealed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round
+    "N3-BLOCKED" 0.001 (time "2099-07-01T00:00:00Z")))
+(rollback-tx)
+
+(begin-tx "N-3c the remedy is REACHABLE seventy-three years out")
+(env-keys ["admin-key"])
+(expect "a 2099 record date is still cancellable — the operator can act alone" "record date cancelled"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cancel-snapshot))
+(commit-tx)
+
+;; A remedy nobody can use afterwards is not a remedy. The typo is gone, so a NEW record date
+;; must be nameable again — that is the whole recoverability claim, end to end.
+(begin-tx "N-3d the subsystem RECOVERS: a fresh record date is nameable again")
+(env-keys ["admin-key"])
+(expect "scheduling works again once the typo is cancelled" "record date scheduled"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+    (add-time (at 'block-time (chain-data)) 43202)))
+(rollback-tx)
+
+(print "smartpacts-record-date: OK")

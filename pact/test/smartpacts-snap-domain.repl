@@ -1,0 +1,214 @@
+;; ===========================================================================
+;; smartpacts-snap-domain — `snap-m`'s INPUT DOMAIN, and its cap arithmetic, DIRECTLY.
+;;
+;; WHY THIS FILE EXISTS. A mutation run over the award arithmetic found that
+;; `snap-m`'s generation-index GUARD is not pinned by anything. Changing
+;;
+;; (if (= idx 0) rpt ...) -> (if (<= idx 0) rpt ...)
+;;
+;; left ALL SUITES PASS. The only direct assertion on `snap-m` in the whole repo is
+;; smartpacts-frozen-invariant.repl §6 "snap-m: a never-checkpointed row measures
+;; against rpt itself", which calls it at idx 0 — the one index both forms agree on.
+;; So the function's own @doc promise ("Aborts if that generation is not sealed")
+;; was asserted NOWHERE, and a generation index that cannot exist got a silent answer.
+;;
+;; 🔴 THE HONEST SEVERITY, STATED SO IT IS NOT OVERSOLD. `snap-index` is only ever
+;; written as 0 or as `snap-gen` (>= 1), so no payout on any reachable path changes
+;; under that mutant. What it does prove is that the DOMAIN is unpinned, and this
+;; module FREEZES: whatever a frozen module tolerates becomes its permanent spec
+;; (RFC 9413), so an index it cannot locally judge sane must be REFUSED, loudly,
+;; and that refusal must be a test rather than an accident of `int-to-str`.
+;;
+;; WHAT EACH SECTION KILLS (measured, not assumed — see the report for the diffs):
+;; §1 positive control — the idx-0 identity. Vacuum-proofs the file.
+;; §2 the sealed-generation cap, read DIRECTLY rather than through a liability sum:
+;; kills (+ base rate) -> (- base rate), base/rate confusion, and collapsing the
+;; min to either branch.
+;; §3 🔴 THE DOMAIN. Kills `(= idx 0)` -> `(<= idx 0)`, which nothing else sees.
+;; §4 an unsealed POSITIVE generation aborts too — the other half of the @doc.
+;;
+;; NOTE ON A BOUNDARY THAT IS *NOT* HERE: `(if (< rpt cap) rpt cap)` -> `(<= rpt cap)`
+;; is SEMANTICALLY EQUIVALENT — at rpt = cap both branches return the same number — so
+;; there is deliberately no assertion pretending to distinguish them.
+;; ===========================================================================
+(load "setup.repl")
+
+;; ---------------------------------------------------------------------------
+;; SEED — one holder, two sealed generations, so the second has a NON-ZERO `base`.
+;; A zero base cannot tell (+ base rate) from (- base rate) sign-wise on every input,
+;; which is exactly the kind of hole this file exists to close.
+;; ---------------------------------------------------------------------------
+(begin-tx "seed: activate the launch and give alice 3000 SPT")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 4000.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 4000.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 1500.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "alice" (read-keyset 'alice) 3000.0)
+(expect "circulating 3000" 3000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+(expect "nothing has sealed yet, so snap-gen is 0" 0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot-gen))
+(commit-tx)
+
+(begin-tx "seed: schedule record date 1")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot (time "2026-06-02T00:00:00Z"))
+(commit-tx)
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:01Z") })
+(begin-tx "seed: seal generation 1 — permissionless, base 0.0")
+(env-keys [])
+(expect "generation 1 seals" 1
+  (let ((_ (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)))
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot-gen)))
+(commit-tx)
+(begin-tx "seed: fund the bar for R1")
+(env-keys ["admin-key"])
+(let ((need (at 'shortfall (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.funding-needed 0.02))))
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT need)] }])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" need)
+  (env-keys ["admin-key"])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards need))
+(commit-tx)
+(begin-tx "seed: declare R1 at 0.02 against generation 1")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "R1" 0.02 (time "2026-06-03T00:00:00Z"))
+(commit-tx)
+
+;; R1 is effective from here on, so rpt is 0.02 and generation 2 seals with base 0.02.
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:01Z") })
+(begin-tx "seed: schedule record date 2")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot (time "2026-06-04T00:00:00Z"))
+(commit-tx)
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-04T00:00:01Z") })
+(begin-tx "seed: seal generation 2 — base is now rpt (0.02), NON-ZERO on purpose")
+(env-keys [])
+(expect "generation 2 seals" 2
+  (let ((_ (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)))
+    (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot-gen)))
+(commit-tx)
+(begin-tx "seed: fund the bar for R2")
+(env-keys ["admin-key"])
+(let ((need (at 'shortfall (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.funding-needed 0.03))))
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT need)] }])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" need)
+  (env-keys ["admin-key"])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards need))
+(commit-tx)
+(begin-tx "seed: declare R2 at 0.03 against generation 2")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "R2" 0.03 (time "2026-06-05T00:00:00Z"))
+(commit-tx)
+
+;; The seed's own shape is asserted, so a later change that stops producing a non-zero
+;; base makes THIS file go red instead of silently weakening §2.
+(begin-tx "seed check: the two sealed rows are the shape the assertions below assume")
+(expect "generation 1: base 0.0, rate 0.02"
+  { "gen": 1, "exists": true, "circ": 3000.0, "base": 0.0, "rate": 0.02 }
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot 1))
+(expect "generation 2: base 0.02 (NON-ZERO on purpose), rate 0.03"
+  { "gen": 2, "exists": true, "circ": 3000.0, "base": 0.02, "rate": 0.03 }
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot 2))
+(commit-tx)
+
+;; ===========================================================================
+;; §1 — POSITIVE CONTROL: THE idx-0 IDENTITY.
+;; At idx 0 `snap-m` reads no row at all and IS the identity on rpt. If this ever stops
+;; holding the file cannot pass vacuously, and a mutant that redirects idx 0 into the
+;; with-read (or returns a constant) dies here.
+;; ===========================================================================
+(begin-tx "§1 idx 0 is the identity on rpt")
+(expect "snap-m 0 is rpt itself, at zero" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snap-m 0 0.0))
+(expect "snap-m 0 is rpt itself, below every sealed cap" 0.005
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snap-m 0 0.005))
+;; 🔴 ABOVE EVERY SEALED CAP. idx 0 is NOT capped by any generation — a mutant that
+;; routes idx 0 through the cap would answer 0.05 here, not 7.5.
+(expect "snap-m 0 is rpt itself, far ABOVE every sealed cap" 7.5
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snap-m 0 7.5))
+(commit-tx)
+
+;; ===========================================================================
+;; §2 — THE SEALED-GENERATION CAP, READ DIRECTLY.
+;; smartpacts-record-date.repl DF-2e2 already kills "the cap is gone" through the liability
+;; sum. This asserts the cap's VALUE against the row it is built from, which is a
+;; different claim: min(rpt, base + rate), with base non-zero on generation 2.
+;; ===========================================================================
+(begin-tx "§2 min(rpt, base + rate) on a sealed generation")
+;; --- generation 1: cap = 0.0 + 0.02 = 0.02
+(expect "gen 1, rpt BELOW the cap: rpt wins" 0.001
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snap-m 1 0.001))
+(expect "gen 1, rpt ABOVE the cap: the cap wins" 0.02
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snap-m 1 5.0))
+;; --- generation 2: cap = 0.02 + 0.03 = 0.05, and BOTH terms are load-bearing.
+(expect "gen 2, rpt ABOVE the cap: the cap is base PLUS rate" 0.05
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snap-m 2 5.0))
+;; The same number derived from the ROW rather than typed, so a change to the seed or to
+;; how a generation records base/rate cannot leave the literal above quietly wrong.
+(expect "gen 2 cap == (base + rate) of the row it is built from"
+  (+ (at 'base (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot 2))
+     (at 'rate (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot 2)))
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snap-m 2 5.0))
+;; 🔴 AND IT IS NEITHER TERM ALONE. Collapsing the cap to `base` or to `rate` — the two
+;; single-token slips a real implementer makes — answers 0.02 or 0.03 here.
+(expect "gen 2 cap is NOT base alone" false
+  (= 0.02 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snap-m 2 5.0)))
+(expect "gen 2 cap is NOT rate alone" false
+  (= 0.03 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snap-m 2 5.0)))
+(expect "gen 2, rpt BETWEEN gen 1's cap and gen 2's: rpt still wins" 0.04
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snap-m 2 0.04))
+;; The two generations must NOT answer the same — a mutant reading a fixed generation
+;; (or `gkey 0`) instead of `idx` would.
+(expect "the two sealed generations cap DIFFERENTLY" false
+  (= (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snap-m 1 5.0)
+     (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snap-m 2 5.0)))
+(commit-tx)
+
+;; ===========================================================================
+;; 🔴 §3 — THE DOMAIN. THIS IS THE SECTION THAT KILLS `(= idx 0)` -> `(<= idx 0)`.
+;;
+;; A negative generation index does not exist and can never be written. With the guard
+;; written `=`, `snap-m` routes it into `gkey`, `int-to-str` refuses it, and the whole
+;; transaction ABORTS — which is the @doc's promise. With the guard written `<=` it is
+;; answered as though it were the never-checkpointed case, silently, forever.
+;;
+;; The 3-arg form is mandatory here: a 2-arg `expect-failure` would pass on ANY failure
+;; and this file would then also "pass" on a typo'd module reference.
+;; ===========================================================================
+(begin-tx "§3 a NEGATIVE generation index is refused, not answered")
+(expect-failure "snap-m -1: a negative generation aborts, it is not treated as idx 0"
+  "int-to-str error: cannot show negative integer"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snap-m -1 0.25))
+;; -1 is the off-by-one; a second, larger negative proves the refusal is the DOMAIN and
+;; not one unlucky value.
+(expect-failure "snap-m -7: still refused"
+  "int-to-str error: cannot show negative integer"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snap-m -7 0.25))
+;; And at an rpt that is BELOW every cap, so no mutant can claim the abort came from
+;; the cap comparison rather than from the index.
+(expect-failure "snap-m -1 at a tiny rpt: still refused"
+  "int-to-str error: cannot show negative integer"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snap-m -1 0.0))
+;; The same refusal, one layer down, so the message above is pinned to a REAL cause and
+;; not to a coincidence of wording.
+(expect-failure "gkey itself is what refuses a negative generation"
+  "int-to-str error: cannot show negative integer"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.gkey -1))
+(rollback-tx)
+
+;; ===========================================================================
+;; §4 — THE OTHER HALF OF THE @doc: an UNSEALED positive generation aborts too.
+;; `get-snapshot` deliberately answers `exists: false` for these; `snap-m` deliberately
+;; does NOT, because a correction priced against a generation that never sealed would be
+;; a payout computed from nothing. The two behaviours are opposite ON PURPOSE and both
+;; are asserted, here and in smartpacts-frozen-invariant.repl §5.
+;; ===========================================================================
+(begin-tx "§4 an unsealed generation is refused")
+(expect "generation 3 has never sealed" false
+  (at 'exists (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot 3)))
+(expect-failure "snap-m 3: an unsealed generation aborts rather than answering 0"
+  "No value found in table"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snap-m 3 0.25))
+(rollback-tx)

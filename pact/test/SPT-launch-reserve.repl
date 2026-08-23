@@ -1,0 +1,173 @@
+;; ===========================================================================
+;; a later change / the operator runbook finding 11 — the launch reserve account cannot be mistyped.
+;;
+;; `excluded?` decides whether an account may vote, whether it accrues awards, and
+;; whether it counts toward circulating-supply. Three of its four members are defconsts
+;; derived by create-principal; the fourth, the launch reserve, was a bare string handed to
+;; `init` per chain with NO check and NO setter. One typo on one of 20 chains therefore
+;; mis-classified an account on that chain, permanently and invisibly.
+;;
+;; Deriving it inside SPT is IMPOSSIBLE — measured, both directions, in
+;; SPT.enforce-launch-reserve's comment: SPT-launch already depends on
+;; SPT, so the reverse reference is a load-time cycle and neither module can
+;; be deployed first. The remedy is therefore two-sided:
+;; TOKENS side: `init` / `init-supply` bind the NAME to the GUARD (validate-principal),
+;; so the name cannot be independently mistyped. Typo negatives live in
+;; SPT-init.repl, which starts from an uninitialized state.
+;; launch side: `SPT-launch.init` asserts the value tokens actually recorded equals
+;; THIS module's own LAUNCH-RESERVE-ACCOUNT. That negative lives HERE, because
+;; it needs tokens initialized with a DIFFERENT but perfectly well-formed
+;; account — the residue the tokens-side check cannot see.
+;;
+;; 🔴 a later change / a later amendment D6 (founder, ) CHANGED WHAT THIS FILE PROVES.
+;; `SPT` now PINS the expected reserve principal as a source literal
+;; (LAUNCH-RESERVE-PIN) and refuses anything else, on all 20 chains, with no dependency on the
+;; sale module being deployed. That closes an internal review `L3-F1` — the design record D1 put the sale on
+;; chain 0 only, so the launch-side cross-check ran ONCE instead of twenty times while the spoke
+;; pair arrived via tx data, leaving 19 chains with no on-chain detector of a well-formed
+;; impostor.
+;;
+;; THE PIN IS ONLY LEGITIMATE WHILE §0 BELOW EXISTS. The recorded objection to hand-building
+;; the principal was that it would SILENTLY diverge from `create-principal`; §0 is what makes
+;; divergence loud. Delete it and the pin becomes the thing it was accepted to replace.
+;;
+;; This file starts from setup-noinit.repl (modules loaded, nothing initialized). The REPL
+;; keeps ONE database for every chain-id and setup-noinit cannot be loaded twice (its
+;; interfaces are not upgradeable), so the mismatch scenario runs inside a tx that is
+;; ROLLED BACK — and the rollback is then asserted rather than assumed.
+;; ===========================================================================
+(load "setup-noinit.repl")
+
+;; ===========================================================================
+;; 0) 🔴 THE NAMED DIVERGENCE TEST — the condition a later amendment D6 attaches to the pin.
+;; It goes RED the moment the literal in SPT and the value SPT-launch
+;; DERIVES stop being the same string, whichever side moved: the pin's namespace, the sale
+;; module's name, or the module-guard name inside launch-reserve-guard. Both mutations are
+;; proven RED in an internal document later change.md.
+;;
+;; It also pins the F2 REPATCH HAZARD. The pin embeds the namespace, exactly like ADMIN-KS
+;; and the deploy-footer keyset-name enforce, so a mainnet repatch that moves the namespace
+;; must move all four together — and if it moves three, THIS goes red.
+;; ===========================================================================
+(begin-tx "PIN vs DERIVED")
+(expect "LAUNCH-RESERVE-PIN is exactly SPT-launch's create-principal value"
+  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-ACCOUNT
+  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.LAUNCH-RESERVE-PIN)
+;; 🔴 AND THE SAME COMPARISON AS A HARD ABORT, WHICH IS NOT BELT-AND-BRACES. MEASURED while
+;; revert-proving this file (a later change): pact BUFFERS `expect` failures and prints them only
+;; after a successful load — so when divergence ALSO makes a later `init` in this same file
+;; abort, the fatal error is the only thing printed and the named FAILURE line is DROPPED.
+;; The suite still goes red, but the operator reads "init failed" instead of "the pin
+;; diverged", which is the wrong diagnosis on the one check the pin's legitimacy rests on.
+;; A top-level enforce aborts HERE, first, with the reason.
+(enforce (= n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-ACCOUNT
+            n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.LAUNCH-RESERVE-PIN)
+  "PIN DIVERGENCE: SPT.LAUNCH-RESERVE-PIN is no longer SPT-launch's derived LAUNCH-RESERVE-ACCOUNT")
+;; ...and the same equality stated from the GUARD, so a change to create-principal's format
+;; for module guards is caught even if both constants moved together.
+(expect "the pin is the principal of SPT-launch's reserve guard" true
+  (validate-principal n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G
+                      n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.LAUNCH-RESERVE-PIN))
+(commit-tx)
+
+;; ===========================================================================
+;; 1) NEGATIVE — a DIFFERENT well-formed principal pair is refused by the TOKEN.
+;;
+;; 🔴 THIS WAS A POSITIVE UNTIL a later change, AND THE POSITIVE WAS THE FINDING. It asserted that
+;; `tokens.init` ACCEPTS FUNDING-ACCOUNT/FUNDING-G — internally consistent (FUNDING-ACCOUNT
+;; really is FUNDING-G's principal), so validate-principal was satisfied and the token simply
+;; recorded the wrong account. It was CONVERTED, not deleted: the belief it encoded is the one
+;; a later amendment D6 overturns, and the estate's rule is that a test recording a superseded
+;; belief must be made to state the new truth where a reader will trip over it.
+;; ===========================================================================
+(begin-tx "tokens refuses a valid-but-WRONG principal pair")
+(env-chain-data { "chain-id": "1", "block-time": (time "2026-06-01T00:00:00Z") })
+(env-data { "tk": { "keys": ["a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"], "pred": "keys-all" } })
+(env-keys ["admin-key"])
+;; 🔴 THE ACCOUNT HALF OF THIS NEGATIVE IS GONE BECAUSE IT BECAME UNREPRESENTABLE (a finding).
+;; It used to pass an impostor PAIR — a wrong account with its own matching guard. `init` takes
+;; no account now, so the only thing an impostor can still supply is the GUARD, and that is what
+;; this pins: a well-formed guard for a DIFFERENT module-owned account, refused on a spoke with
+;; no sale module present.
+(expect-failure "an impostor GUARD is refused on a SPOKE, with no sale module present"
+  "launch reserve guard does not derive the pinned SPT-launch reserve principal"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-G))
+;; STATE UNCHANGED — not merely "an error fired". The chain must be left fully uninitialized
+;; so the correct deploy can still land on it.
+;; 🔴 PROBED THROUGH `get-circulating`, NOT `get-launch-reserve` (a finding, ). The launch
+;; reserve is a defconst now and its getter reads NO state, so it can never fail — a probe
+;; built on it would report a clean chain forever, including on a half-initialized one.
+;; `get-circulating` still reads the `state` singleton, so it is the honest oracle here.
+(expect-failure "chain 1 has no tokens state row"
+  "No value found in table n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT_state for key: state"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+;; ...so the sale cannot initialize on that chain either — it aborts on the MISSING state row
+;; now, one layer earlier than the equality check it used to hit.
+(expect-failure "the sale cannot initialize on a chain the token refused to initialize"
+  "No value found in table n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT_state for key: state"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5))
+(rollback-tx)
+
+;; 🔴 WHAT THIS FILE NO LONGER PROVES, STATED RATHER THAN QUIETLY DROPPED.
+;; `SPT-launch.init`'s equality enforce ("SPT was initialized with a
+;; different launch reserve account") had its negative HERE, and that negative required the token
+;; to have recorded a wrong-but-well-formed value. The pin makes that state unreachable: tokens
+;; can only ever record LAUNCH-RESERVE-PIN. The enforce is RETAINED (a later amendment §3) and its job
+;; has CHANGED — it now catches the pin and the DEPLOYED sale disagreeing about identity, i.e.
+;; a namespace or module-name divergence, which a single-namespace REPL cannot stage: both
+;; sides are the same constant here. This is the same disposition the module already applies to
+;; `(enforce (<= slot n))` — a branch that cannot fail cannot be proven by a negative test, and
+;; is kept anyway. The property that replaces the lost negative is §0, which asserts precisely
+;; the equality that makes this branch vacuous, and goes red the moment it stops holding.
+
+;; ===========================================================================
+;; 2) POSITIVE — the matching pair, on a spoke chain, and what it records.
+;; ===========================================================================
+(begin-tx "init on chain 1 with the launch module's own account + guard")
+(env-chain-data { "chain-id": "1", "block-time": (time "2026-06-01T00:00:00Z") })
+(env-keys ["admin-key"])
+;; 🔴 the design record D1 CEREMONY SHAPE, exercised on purpose: after D1 the launch module does NOT
+;; exist on a spoke chain, so the deploy engine reads the reserve pair from CHAIN 0 over
+;; /local and passes them through TX DATA — the module guard decodes via the stable codec
+;; (env-data roundtrips it "to mimic prod"; tx data parses through the same
+;; StableEncoding PactValue instance, pact-request-api RPC.hs:76). This positive therefore
+;; calls init EXACTLY the way runbook.ts builds the spoke tx: read-msg for the pair. If this
+;; shape ever stops decoding, the whole D1 spoke ceremony is broken — that is what this pin
+;; is for. (a later amendment / a later change removed init's other two arguments — the D3 beneficiary
+;; pair — so the spoke tx now carries tx DATA only, no keyset at all.)
+;; a finding: the ACCOUNT no longer rides the tx — only the guard does.
+(env-data
+  { "launch-reserve-guard":   n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init
+  (read-msg 'launch-reserve-guard))
+;; 🔴 THE PIN-VERSUS-DERIVATION CHECK, and it got STRONGER when the column went. The token
+;; answers from its own hard-coded LAUNCH-RESERVE-PIN now, so this compares that literal
+;; against the sale module's `create-principal` value. It goes RED if the hand-built pin and
+;; the real derivation ever disagree — which is the whole reason a hand-built principal is
+;; allowed to exist in this module at all.
+(expect "the token's PIN equals SPT-launch's own derived reserve principal"
+  n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-ACCOUNT
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-launch-reserve))
+;; ...and it is genuinely excluded, which is the behaviour the finding is actually about.
+(expect "the recorded launch reserve is excluded from float/voting/awards" true
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.excluded?
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-ACCOUNT))
+;; the design record D3's POSITIVE CONTROL is DELETED here (a later amendment / a later change) together with the
+;; stored beneficiary, its getter and its event — see the module's state schema. What this
+;; block still proves is the D1 spoke ceremony shape, which is unchanged and is the reason
+;; the block exists. Nothing was repointed: a control for a deleted feature is not a test.
+;; 🔴 The spoke `init` now takes TWO arguments, and this is the pin that says so — an extra
+;; argument here would be an arity error, not a silent pass.
+(commit-tx)
+
+(begin-tx "SPT-launch.init now accepts the matching chain")
+(env-chain-data { "chain-id": "1", "block-time": (time "2026-06-01T00:00:00Z") })
+(env-keys ["admin-key"])
+(expect "the sale initializes once both sides agree" "sale initialized"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5))
+(expect "and the price it recorded is the one supplied" 0.5
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.get-price))
+(commit-tx)
+
+(print "SPT-launch-reserve a later change suite PASSED")

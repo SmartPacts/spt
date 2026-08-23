@@ -1,0 +1,9 @@
+SPT — Smart Pacts Token
+Copyright 2026 Smart Pacts
+
+Licensed under the Apache License, Version 2.0 (the "License"); see LICENSE.
+
+This product includes a vendored copy of Kadena's `coin` contract and the
+`fungible-v2`, `fungible-xchain-v1` and `gas-payer-v1` interfaces, under
+pact/test/fixtures/. Those files are the work of Kadena and are included so the
+test suite can run without a network. They are not part of the SPT artifact.

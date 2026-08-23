@@ -1,0 +1,327 @@
+;; ===========================================================================
+;; SPT REPL test suite — fungible-v2 surface, FLOAT awards, founder
+;; vesting, funding, and the audit-fix solvency check. Run from pact/test/.
+;; ===========================================================================
+(load "setup.repl")
+
+;; ---------------------------------------------------------------------------
+;; init-supply outcome
+;; ---------------------------------------------------------------------------
+(begin-tx "init outcome")
+(expect "treasury 55k" 55000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-ACCOUNT))
+(expect "founder 10k"  10000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-ACCOUNT))
+(expect "liquidity 15k" 15000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.LIQUIDITY-ACCOUNT))
+(expect "launch reserve 20k" 20000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-ACCOUNT))
+(expect "circulating 0" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+(expect "precision 12" 12 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.precision))
+(commit-tx)
+
+(begin-tx "double init-supply rejected")
+(env-keys ["admin-key"])
+;; a later change: this env-data is load-bearing and was MISSING. setup.repl:46 replaces the whole
+;; env-data object, dropping `spt-admin`, so every (read-keyset 'spt-gov) below aborted with
+;; "read-keyset failure" BEFORE init-supply was entered — and because the assertion was the
+;; 2-argument expect-failure, which matches ANY failure, it passed while testing nothing.
+;; Same defect as SPT-init.repl:42 (a later change §3), in a second file.
+(env-data { "spt-gov": { "keys": ["admin-key"], "pred": "keys-all" } })
+(expect-failure "already initialized" "module already initialized"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init-supply
+    (read-keyset 'spt-gov)
+    [ { "account": "kf", "amount": 1.0 } ]))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; fungible-v2: enforce-unit / create-account / rotate / details
+;; ---------------------------------------------------------------------------
+(begin-tx "enforce-unit")
+(expect "12-place amount ok" true (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.enforce-unit 1.000000000001))
+(expect-failure "over-precise amount rejected"
+  "amount violates minimum precision" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.enforce-unit 1.0000000000001))
+(commit-tx)
+
+(begin-tx "create-account + details + rotate")
+(env-data { "u": { "keys": ["u-key"], "pred": "keys-all" }, "u2": { "keys": ["u2-key"], "pred": "keys-all" } })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-account "ursula" (read-keyset 'u))
+(expect "new account balance 0" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "ursula"))
+(expect "details account" "ursula" (at 'account (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.details "ursula")))
+(env-keys ["u-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.rotate "ursula" (read-keyset 'u2))
+(expect "guard rotated" (read-keyset 'u2) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-guard "ursula"))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Seed the float via the launch (alice 3000, bob 2000) — the legitimate float-entry
+;; path (the design record removed create-funder-allocation). sender00 pre-funds each buyer's
+;; KDA; the buyer signs its own coin.TRANSFER into the launch proceeds account.
+;; ---------------------------------------------------------------------------
+(begin-tx "activate launch for seeding")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(commit-tx)
+
+(begin-tx "seed holders via launch (alice 3000, bob 2000)")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+       , "bob": { "keys": ["bob-key"], "pred": "keys-all" } })
+;; fund buyers with KDA from sender00 (cost = amt * 0.5)
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1500.0) (coin.TRANSFER "sender00" "bob" 1000.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1500.0)
+(coin.transfer-create "sender00" "bob"   (read-keyset 'bob)   1000.0)
+;; buyers purchase SPT from the launch reserve
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 1500.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "alice" (read-keyset 'alice) 3000.0)
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 1000.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "bob" (read-keyset 'bob) 2000.0)
+(expect "alice 3000" 3000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice"))
+(expect "bob 2000" 2000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "bob"))
+(expect "circulating now 5000" 5000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Awards round 1 — float base; treasury excluded; real KDA claim
+;; ---------------------------------------------------------------------------
+(begin-tx "receive funding 100 KDA")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT 100.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" 100.0)
+(expect "funding account holds 100 KDA" 100.0 (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT))
+(commit-tx)
+
+;; the design record: an award round is DECLARED (rate + effective-at, global) and FUNDED per chain.
+;; a later amendment (a later change): effective-at must be STRICTLY IN THE FUTURE, so a round is
+;; declared ahead of its date and only lifts rpt once block-time passes it. The
+;; not-yet-effective assertion below is the positive half of that rule.
+;;
+;; the design record (a later change) INVERTED THE ORDER OF THESE TWO TRANSACTIONS. `declare-round` now
+;; refuses unless this chain's pool ALREADY covers the liability the round creates, so the
+;; funding leg comes FIRST. This suite used to declare against an empty pool and fund
+;; afterwards; that sequence is now rejected, which is the whole point of the ADR.
+(begin-tx "the design record: fund the pool BEFORE the round is declared")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+;; Nothing is owed yet (rpt 0), so fund-awards' own bar is 0 and any deposit is legal.
+;; 100 KDA is exactly what R1 will cost: rate 0.02 x circulating 5000.
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 100.0)
+(expect "pool holds 100 KDA before anything is promised" 100.0
+  (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+(expect "and nothing is owed yet" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability))
+(commit-tx)
+
+;; 🔴 The the design record seal moves block-time forward 12h, so it runs from an EARLIER clock:
+;; every date below is asserted against this suite's own calendar.
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-05-31T00:00:00Z") })
+;; ---- the design record (a later change): A ROUND NEEDS A SEALED RECORD DATE ----------------------
+;; Schedule one clear of the 12h runway (2 x MIN-RETRACT-LEAD), let it land, seal it.
+;; The seal runs with NO KEYS on purpose: `advance-snapshot` is permissionless, and a
+;; chain with no activity must still be sealable by anyone.
+(begin-tx "the design record: name the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (add-time (at 'block-time (chain-data)) 43202))
+(commit-tx)
+(env-chain-data
+  { "chain-id": (at 'chain-id (chain-data))
+, "block-time": (add-time (at 'block-time (chain-data)) 43203) })
+(begin-tx "the design record: seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "declare award round 1 (rate 0.02, effective 1d out) — pool covers it EXACTLY")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-01T00:00:00Z") })
+;; the design record boundary, ACCEPT side: the bar is floor12(declared-liability + rate*circulating)
+;; = floor12(0 + 0.02*5000) = 100.0 KDA, and the pool holds exactly 100.0. `>=` accepts.
+;; The REFUSE side (one 1e-12 step short) is pinned in smartpacts-solvency-at-declaration.repl §A.
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "R1" 0.02 (time "2026-06-02T00:00:00Z"))
+(expect "declared but NOT yet effective: global rpt still 0" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+(expect "global rpt now 0.02 (round effective)" 0.02 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+(commit-tx)
+
+;; 🔴 THIS NEGATIVE NEEDS ITS OWN SEALED GENERATION, and that is not bookkeeping. Gen 1
+;; already carries R1, so without a fresh one `declare-round` refuses with "this record
+;; date already carries a declared round" — MEASURED — and `expect-failure` matches by
+;; SUBSTRING, so the test would go green while never reaching the POOL check it exists to
+;; pin. R1 is effective by 06-02, which is what makes a second generation sealable.
+;; ---- the design record (a later change): A ROUND NEEDS A SEALED RECORD DATE ----------------------
+;; Schedule one clear of the 12h runway (2 x MIN-RETRACT-LEAD), let it land, seal it.
+;; The seal runs with NO KEYS on purpose: `advance-snapshot` is permissionless, and a
+;; chain with no activity must still be sealable by anyone.
+(begin-tx "the design record: name the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (add-time (at 'block-time (chain-data)) 43202))
+(commit-tx)
+(env-chain-data
+  { "chain-id": (at 'chain-id (chain-data))
+, "block-time": (add-time (at 'block-time (chain-data)) 43203) })
+(begin-tx "the design record: seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "the design record: a SECOND round cannot be declared while the pool is spoken for")
+(env-keys ["admin-key"])
+;; The pool's 100 KDA is now entirely owed against R1, so declared-liability is 100 and a
+;; second 0.02 round would need 200. Refused BEFORE the promise exists — no round row, no
+;; count bump. Runs in its own rollback-tx because it asserts state UNCHANGED afterwards:
+;; `expect-failure` leaks writes through commit-tx (measured at a later change, 12,500 KDA moved).
+(expect-failure "a round the pool cannot cover is refused"
+  "SPT award pool does not cover the liability this round declares"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "R1-TOO-MUCH" 0.02 (time "2026-06-05T00:00:00Z")))
+(expect "no round was recorded — the count is still 1" 1
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-round-count))
+(expect "and rpt is untouched" 0.02 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+(rollback-tx)
+
+(begin-tx "round 1 accrual (the pool was funded before the promise was made)")
+(env-keys ["admin-key"])
+;; NOTE: the former `fund-awards 50 -> "pool underfunded"` negative that stood here is
+;; NOT DELETED — it is UNCONSTRUCTIBLE in this position now. Funding precedes declaring, so
+;; pool >= liability holds by construction and no deposit can be short. That branch is only
+;; reachable in the regime the design record explicitly does NOT cover — the float growing between a
+;; round's declaration and its effective-at — and it is pinned there, with the residual
+;; named, in smartpacts-solvency-at-declaration.repl §C. Moved, not dropped.
+(expect "alice pending 60" 60.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "alice"))
+(expect "bob pending 40"   40.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "bob"))
+(expect "treasury accrues 0 (excluded)" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TREASURY-ACCOUNT))
+(expect "launch reserve accrues 0 (excluded)" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-ACCOUNT))
+;; 🔴 a later change: THE OTHER TWO RESERVES, and they were UNPINNED ANYWHERE until now. Founder promise
+;; P-111 says the contract's own accounts — treasury, market-making, founder, sale reserve — ALWAYS
+;; earn zero, and it was certified PROVEN by the treasury line alone. Two of the four named accounts
+;; had no assertion in any suite, so dropping FOUNDER-ACCOUNT or LIQUIDITY-ACCOUNT from `excluded?`
+;; would have left P-111 green. Same class as P-147/P-160/P-076/D-2: a promise about four things
+;; pinned by an assertion about one. `excluded?` covers all four in code; only the EVIDENCE was
+;; short, which is exactly what Rule 14(c) forbids.
+(expect "founder reserve accrues 0 (excluded)" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-ACCOUNT))
+(expect "liquidity reserve accrues 0 (excluded)" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.LIQUIDITY-ACCOUNT))
+(commit-tx)
+
+(begin-tx "non-admin fund-awards + declare-round rejected")
+(env-keys ["intruder-key"])
+(expect-failure "GOV TIER: a stranger is refused at ADMIN-GOV (fund-awards)"
+  "Keyset failure (keys-all): [admin-ke...]" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 100.0))
+;; future effective-at, so this isolates the KEYSET gate — a past timestamp would leave it
+;; ambiguous which enforce rejected the call (ADMIN is acquired first, but do not rely on it).
+(expect-failure "GOV TIER: a stranger is refused at ADMIN-GOV (declare-round)"
+  "Keyset failure (keys-all): [admin-ke...]" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "X" 0.01 (time "2026-06-01T09:00:00Z")))
+(commit-tx)
+
+(begin-tx "permissionless claim alice -> real KDA (paid to her guard principal)")
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "alice")
+;; A-C fix: awards land at (create-principal guard), squat-proof, not the raw name.
+(expect "alice received 60 KDA at her guard principal" 60.0 (coin.get-balance (create-principal (read-keyset 'alice))))
+(expect "alice pending reset to 0" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "alice"))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; reward-debt init — late joiner gets 0 for a round funded before they held
+;; ---------------------------------------------------------------------------
+(begin-tx "alice transfers 1000 to fresh carol AFTER round 1")
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" "carol" 1000.0)] }])
+(env-data { "carol": { "keys": ["carol-key"], "pred": "keys-all" } })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create "alice" "carol" (read-keyset 'carol) 1000.0)
+(expect "carol 1000" 1000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "carol"))
+(expect "carol pending 0 (joined after round 1)" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "carol"))
+(expect "circulating unchanged 5000 (holder->holder)" 5000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+(commit-tx)
+
+(begin-tx "round 2 -> carol earns only round 2 (the design record: funded first, then declared)")
+;; pool holds 40 (100 funded - 60 claimed by alice); round 2 (rpt 0.02->0.04) needs the pool to
+;; cover the 40 already owed PLUS this round's 0.02*5000 = 100, i.e. 140. Deposit 160 to reach
+;; 200, which is comfortably over the bar and leaves the post-round liability of 200 covered.
+;; The deposit runs BEFORE the declaration (the design record) — reversing these two now fails.
+;;
+;; 🔴 AND IT RUNS IN ITS OWN TRANSACTION, WHICH IS NOT COSMETIC. `fund-awards` calls
+;; `install-capability` (coin.TRANSFER funding->pool), and Pact 5 DISABLES UNSCOPED
+;; SIGNATURES FOR THE REST OF THE TRANSACTION the moment any `install-capability` runs —
+;; `checkSigCaps`, pact-5 `Pact/Core/Environment/Utils.hs:126-139`: "if you installed a
+;; capability from code then we disable unscoped sigs". MEASURED on pact 5.4, all four
+;; directions: two admin calls back-to-back with no install = OK; fund-awards then
+;; declare-round under `env-keys` = `Keyset failure (keys-all): [admin-ke...]` raised by
+;; ADMIN; RE-ISSUING `env-keys` in between does NOT clear it (the flag is eval state, not
+;; signature state); and the same order under a signature SCOPED to FUND-AWARDS + ADMIN
+;; SUCCEEDS. So the two legal shapes are one-op-per-transaction (what the operator runbook does, and what
+;; the design record's own "two transactions per chain" means) or a scoped signature. This is a real
+;; on-chain behaviour, not a REPL artifact, and the design record is what made it reachable: under the
+;; old declare-then-fund order the admin call always came before the install.
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT 160.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" 160.0)
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards 160.0)
+(expect "pool 200 before the promise; 40 of it already owed against R1" 200.0
+  (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+(commit-tx)
+
+;; 🔴 The the design record seal moves block-time forward 12h, so it runs from an EARLIER clock:
+;; every date below is asserted against this suite's own calendar. R1 is
+;; effective by 06-02, which is what lets a SECOND generation be sealed at all: the design record
+;; refuses to schedule while a declared round is still pending-effective.
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:00Z") })
+;; ---- the design record (a later change): A ROUND NEEDS A SEALED RECORD DATE ----------------------
+;; Schedule one clear of the 12h runway (2 x MIN-RETRACT-LEAD), let it land, seal it.
+;; The seal runs with NO KEYS on purpose: `advance-snapshot` is permissionless, and a
+;; chain with no activity must still be sealable by anyone.
+(begin-tx "the design record: name the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot
+  (add-time (at 'block-time (chain-data)) 43202))
+(commit-tx)
+(env-chain-data
+  { "chain-id": (at 'chain-id (chain-data))
+, "block-time": (add-time (at 'block-time (chain-data)) 43203) })
+(begin-tx "the design record: seal it")
+(env-keys [])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot)
+(commit-tx)
+
+(begin-tx "round 2 declared, in its own tx (see the install-capability note above)")
+(env-keys ["admin-key"])
+;; 🔴 R2 lands on 06-04, not 06-03: its generation cannot seal until R1 is EFFECTIVE
+;; (06-02), the seal itself costs 12h, and declare-round then needs another 12h of
+;; runway. Serialising rounds is the design record's decision; the date moved rather than any bound.
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round "R2" 0.02 (time "2026-06-04T00:00:00Z"))
+(expect "R2 declared but not yet effective: rpt still 0.02" 0.02 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-04T00:00:00Z") })
+(expect "global rpt now 0.04 (two rounds)" 0.04 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+(expect "carol earns 1000*0.02 = 20 (round 2 only)" 20.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "carol"))
+(expect "and the pool covers the whole 200 now owed — funded before it was promised" true
+  (>= (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT)
+      (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability)))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Funding withdrawal (admin)
+;; ---------------------------------------------------------------------------
+(begin-tx "withdraw-funding")
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT 50.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" 50.0)
+(commit-tx)
+
+;; 🔴 a later change (founder, ): WITHDRAW-FUNDING is now `@managed amount`. It was made
+;; managed because an UNSCOPED 2-of-3 gov signature moved KDA for an amount and a destination
+;; it never named — measured on a node, mined. So the signature must NAME the capability with
+;; this exact destination, and the total it names is a real spending limit the contract
+;; enforces. This is the NAMED test that goes RED the moment the `@managed` is removed.
+;; Its OWN rollback-tx: the refusal must leave the funding account untouched, and (measured)
+;; `expect-failure` leaks an `install-capability` through a commit when the refusal moves.
+(begin-tx "a later change: an UNSCOPED gov signature cannot drive withdraw-funding")
+(env-keys ["admin-key"])
+(expect-failure "a later change: an UNSCOPED gov signature cannot drive withdraw-funding at all"
+  "Managed capability not installed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.withdraw-funding "sender00" 50.0))
+(expect "the refused withdrawal moved nothing" 50.0
+  (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT))
+(rollback-tx)
+
+;; POSITIVE CONTROL: the same call succeeds once the signature names the cap with the SAME
+;; destination and the SAME amount. Without this the negative above would also pass if
+;; withdraw-funding were broken outright.
+(begin-tx "withdraw-funding, signature SCOPED to WITHDRAW-FUNDING")
+(env-sigs [{ "key": "admin-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.WITHDRAW-FUNDING "sender00" 50.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.withdraw-funding "sender00" 50.0)
+(expect "funding drained after withdrawal" 0.0 (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT))
+(commit-tx)
+
+(print "SPT REPL suite PASSED")

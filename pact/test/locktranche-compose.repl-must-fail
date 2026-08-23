@@ -1,0 +1,60 @@
+;; ===========================================================================
+;; MUST-FAIL FIXTURE — a later change / the operator runbook an internal review a finding.
+;;
+;; `lock-tranche` was a public defun gated only by `(require-capability (ADMIN))`.
+;; Its docstring said "PRIVATE (init-supply only)", which is a comment, not a
+;; property — Pact has no private functions. So whenever an admin signature was
+;; present in a transaction, a foreign module composed ADMIN and called it.
+;;
+;; MEASURED BEFORE THE FIX, and this fixture is the NAME half of the proof: with
+;; `env-keys ["admin-key"]` present, the plant returned "tranche locked", a row
+;; `"evil"` with a 999,999.0 total was readable, and a forged TRANCHE-LOCKED was
+;; emitted — on the event the module itself designates "the public disclosure
+;; anchor". This file loads successfully against that module.
+;;
+;; 🔴 A NAME-PIN IS NOT THE WHOLE PROOF, AND THAT IS WHY THERE IS A SECOND HALF.
+;; Audit #6's lead finding was a deleted name pinned exactly like this while a
+;; foreign module composed the ENCLOSING CAPABILITY and reached the same writes.
+;; The ROUTE half lives in `a probe kept out of this repo`, which composes ADMIN —
+;; the destination's own capability — and measures what it can still reach.
+;; Read them as one proof; neither is sufficient alone.
+;;
+;; If this file ever starts SUCCEEDING again, a named tranche writer has returned.
+;; ===========================================================================
+(load "setup.repl")
+
+(begin-tx "the attacker: compose ADMIN and reach for the named writer")
+(env-data { "ak": { "keys": ["ltattacker"], "pred": "keys-all" } })
+(env-keys ["ltattacker"])
+(define-namespace "ltns" (read-keyset 'ak) (read-keyset 'ak))
+(namespace "ltns")
+(module ltrob G
+ ;; Real governance: the attack composes SPT's ADMIN-GOV, not this module's own gate.
+ ;; 🔴 the design record (a later change): this MUST name a cap that EXISTS. Left as the retired `ADMIN`, the
+ ;; module fails to resolve the cap and the fixture aborts on the CAP name instead of on
+ ;; `lock-tranche` — passing run-tests.sh's must-fail check while asserting nothing about the
+ ;; deleted function. Measured: that is exactly what happened before this line was updated.
+  (defcap G () (enforce-guard (read-keyset 'ak)))
+  (defcap A () (compose-capability (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.ADMIN-GOV)))
+  (defun plant:string (t:string b:string g:guard tot:decimal)
+    (with-capability (A)
+ ;; <<< THE NAME THE ATTACKER REACHES FOR — must not exist >>>
+      (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.lock-tranche
+        t b g tot (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.curr-time) 1 2))))
+(commit-tx)
+
+(begin-tx "the plant, riding a transaction that already carries an admin signature")
+(env-data { "eg": { "keys": ["evilkey"], "pred": "keys-all" } })
+(env-keys ["admin-key"])
+;; NO `try` HERE, DELIBERATELY. `try` forces a read-only context, so wrapping a
+;; write-path attack in it makes the insert fail with "Operation disallowed in
+;; read-only or sys-only mode" — which reads exactly like a block and is an
+;; artifact. That false negative appeared in an internal review's own first probe and again
+;; in mine while writing this fixture. Never wrap a write attack in `try`.
+(ltns.ltrob.plant "evil" (create-principal (read-keyset 'eg)) (read-keyset 'eg) 999999.0)
+;; Non-vacuity: against the UNFIXED module the plant succeeds and this read answers
+;; from a row nobody authorized, so the file exits 0 and run-tests.sh reports the
+;; attack live again.
+(let ((r (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.tranche-releasable "evil")))
+  (print (format "PLANTED ROW READS BACK: tranche-releasable evil = {}" [r])))
+(commit-tx)

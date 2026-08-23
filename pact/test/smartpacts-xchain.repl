@@ -1,0 +1,180 @@
+;; ===========================================================================
+;; smartpacts-xchain — STEP-0 validation for transfer-crosschain (a later change).
+;; ---------------------------------------------------------------------------
+;; WHY THIS SUITE DID NOT EXIST, AND WHY THAT WAS THE BUG. The house rule
+;; "cross-chain is DEVNET-only, never REPL" is about the SPV **resume** (step 1),
+;; which genuinely cannot be exercised here. It was over-applied to the whole
+;; defpact — so `transfer-crosschain` had NO REPL coverage at all, and a missing
+;; input check on `target-chain` survived every gate until an internal review.
+;; Step 0 is ordinary local code: it acquires TRANSFER_XCHAIN, debits, and yields.
+;; Its input validation is fully testable here, and now is.
+;;
+;; THE BUG (pre-existing, HIGH): TRANSFER_XCHAIN did not check `target-chain`
+;; against coin.VALID_CHAIN_IDS. Step 0 would debit and yield to a chain that does
+;; not exist, so no continuation could ever run and the SPT was DESTROYED — by a
+;; typo, silently, with no bound on the amount. Reproduced before the fix: 100 SPT
+;; sent to chain "banana" left the sender's balance permanently 100 lower.
+;; coin-v5 carries the same check; SPT never did.
+;;
+;; Every rejection below also asserts the balance is UNCHANGED — the point is not
+;; that an error was raised, but that no value moved.
+;; ===========================================================================
+(load "setup.repl")
+
+(begin-tx "seed alice with 2500 SPT via the launch")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1250.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1250.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 1250.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "alice" (read-keyset 'alice) 2500.0)
+(expect "seed: alice holds 2500" 2500.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice"))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; X-1 NEGATIVE — a target chain that does not exist. THE a later change REGRESSION.
+;; Each rejection gets its own tx ended with rollback-tx: expect-failure does NOT
+;; roll back partial writes and commit-tx would PERSIST the leak (pact-traps).
+;; ---------------------------------------------------------------------------
+(begin-tx "X-1 bogus target-chain rejected, and nothing is debited")
+(env-data { "bogus": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER_XCHAIN "alice" "alice" 100.0 "banana")] }])
+(expect-failure "non-existent chain rejected" "target-chain is not a valid chain id"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-crosschain
+    "alice" "alice" (read-keyset 'bogus) "banana" 100.0))
+(expect "X-1: NOT ONE SPT LEFT THE ACCOUNT" 2500.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice"))
+(rollback-tx)
+
+(begin-tx "X-2 off-by-one chain id (20) rejected — VALID_CHAIN_IDS is 0..19")
+(env-data { "bogus": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER_XCHAIN "alice" "alice" 100.0 "20")] }])
+(expect-failure "chain 20 does not exist" "target-chain is not a valid chain id"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-crosschain
+    "alice" "alice" (read-keyset 'bogus) "20" 100.0))
+(expect "X-2: balance untouched" 2500.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice"))
+(rollback-tx)
+
+(begin-tx "X-3 empty target-chain rejected (subsumed by the membership check)")
+(env-data { "bogus": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER_XCHAIN "alice" "alice" 100.0 "")] }])
+(expect-failure "empty chain id rejected" "target-chain is not a valid chain id"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-crosschain
+    "alice" "alice" (read-keyset 'bogus) "" 100.0))
+(expect "X-3: balance untouched" 2500.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice"))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; X-4..X-6 — the sibling branches of the same defcap, so the enforce set is
+;; branch-complete rather than sampled.
+;; ---------------------------------------------------------------------------
+(begin-tx "X-4 same-chain rejected (a real id, so NOT caught by the membership check)")
+(env-data { "bogus": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER_XCHAIN "alice" "alice" 100.0 "0")] }])
+(expect-failure "cannot xchain to the current chain" "cannot xchain to same chain"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-crosschain
+    "alice" "alice" (read-keyset 'bogus) "0" 100.0))
+(expect "X-4: balance untouched" 2500.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice"))
+(rollback-tx)
+
+(begin-tx "X-5 non-positive amount rejected")
+(env-data { "bogus": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER_XCHAIN "alice" "alice" -100.0 "1")] }])
+(expect-failure "negative cross-chain amount rejected" "cross-chain amount must be positive"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-crosschain
+    "alice" "alice" (read-keyset 'bogus) "1" -100.0))
+(expect "X-5: balance untouched" 2500.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice"))
+(rollback-tx)
+
+(begin-tx "X-6 over-precise amount rejected")
+(env-data { "bogus": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER_XCHAIN "alice" "alice" 0.0000000000001 "1")] }])
+(expect-failure "sub-precision cross-chain amount rejected" "amount violates minimum precision"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-crosschain
+    "alice" "alice" (read-keyset 'bogus) "1" 0.0000000000001))
+(expect "X-6: balance untouched" 2500.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice"))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; X-7 POSITIVE CONTROL — mandatory. Without it every rejection above could be
+;; passing because step 0 is unreachable in the REPL for some unrelated reason,
+;; and the suite would report a defence it never exercised.
+;; ---------------------------------------------------------------------------
+(begin-tx "X-7 CONTROL: a VALID target chain is accepted and really debits")
+(env-data { "ok": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER_XCHAIN "alice" (create-principal (read-keyset 'ok)) 100.0 "1")] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-crosschain
+  "alice" (create-principal (read-keyset 'ok)) (read-keyset 'ok) "1" 100.0)
+(expect "CONTROL: step 0 ran and debited exactly 100" 2400.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice"))
+(expect "CONTROL: the debited tokens left this chain's circulating supply" 2400.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+;; Step 1 (the SPV resume that credits the target chain) is NOT testable here and is
+;; deliberately not asserted — it is devnet-only (test/harness/src/cw32-48-phase2-xchain.ts).
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; X-8 — STEP 0 RELEASES THE DEPARTING TOKENS' VOTE (the design record / a defect, a later change).
+;; The release loop lives in `debit`, and step 0 debits — a SHARED path with plain
+;; `transfer`, which the vgrief suite pins. But "shared path" is a belief until a
+;; named test fails without it: this was the one leg only the DELETED a deleted driver
+;; devnet driver ever asserted, and that driver's last run predates the a later change
+;; release-formula fix — so without this test the property had NO current pin.
+;; the design record makes the same assertion IMPOSSIBLE on a devnet inside one session
+;; (open-at is >= 48 REAL hours after the announcement lands), so the REPL, which
+;; can warp block-time, is where this pin lives now.
+;; ---------------------------------------------------------------------------
+(begin-tx "X-8a announce XR (the design record lifecycle: gap exactly MIN-REVIEW-GAP)")
+(env-keys ["admin-key"])
+(env-chain-data { "chain-id": "0", "block-time": (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP)) })
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.create-proposal "XR" "xchain release" "d"
+  (add-time (time "2026-06-02T00:00:00Z") (* -1.0 n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.MIN-REVIEW-GAP))
+  (add-time (time "2026-06-02T00:00:00Z") 1.0) 259200)
+(commit-tx)
+
+(begin-tx "X-8b vote, then step 0 — the departing tokens leave the tally")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T01:00:00Z") })
+(env-keys ["alice-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.cast-vote "alice" "XR" true)
+(expect "X-8 precondition: alice's full 2500 is in the tally" 2500.0
+  (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "XR")))
+(env-data { "ok": { "keys": ["alice-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER_XCHAIN "alice" (create-principal (read-keyset 'ok)) 100.0 "1")] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-crosschain
+  "alice" (create-principal (read-keyset 'ok)) (read-keyset 'ok) "1" 100.0)
+(expect "X-8: step 0 released exactly the departed 100 from alice's vote" 2400.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.vote-weight "alice" "0" "XR"))
+(expect "X-8: the tally dropped with it" 2400.0
+  (at 'yes (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-results "XR")))
+(expect "X-8: and the balance debit really happened" 2400.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "alice"))
+(rollback-tx)
+
+;; ===========================================================================
+;; PART 2 — DELETED by a later change / the design record Decision 1.
+;;
+;; It covered `report-tally-xchain` step 0: chain check, reportability, the frozen
+;; tally read and the yield. That defpact is DELETED with the whole cross-chain
+;; aggregation, so there is no step 0 left to test.
+;;
+;; The lesson PART 2 encoded still stands, and is why PART 1 above must never be
+;; trimmed the same way: "cross-chain is devnet-only" is a statement about the SPV
+;; RESUME. A defpact's step 0 is ordinary local code and IS testable here — treating
+;; a whole defpact as untestable is how step 0 went uncovered in the first place.
+;;
+;; FOR THE DEVNET HARNESS: removing a defpact is exactly the kind of change that is
+;; not REPL-faithful. `transfer-crosschain` is now the ONLY defpact in the module,
+;; and its step indices and pact-id behaviour must be re-proven end-to-end on a
+;; multi-chain devnet rather than inferred from this file passing — that driver is
+;; test/harness/src/cw32-48-phase2-xchain.ts (items 7-13, mined SPV).
+;; ===========================================================================
+
+(print "smartpacts-xchain step-0 suite PASSED")

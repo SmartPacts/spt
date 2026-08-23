@@ -1,0 +1,231 @@
+;; ===========================================================================
+;; smartpacts-snap-corr-arith — THE RECORD-DATE CORRECTION IS PINNED TO THE LAST DIGIT.
+;;
+;; 🔴 WHY THIS FILE EXISTS. A mutation run against `snap-corr-of`
+;; (SPT.pact, "one account record-date correction") found that the award
+;; ARITHMETIC was REACHED by roughly 1,120 assertions and PERTURBED by none. Five
+;; deliberate mutants — wrapping the correction in `(round … 12)`, `(floor … 12)`,
+;; `(round … 8)`, `(round … 4)` and `(round … 0)` — all SURVIVED the full suite. The
+;; worst of them rounds every holder's correction to WHOLE TOKENS and 35 suites stayed
+;; green.
+;;
+;; An instrumentation probe measured the root cause rather than guessing at it: an
+;; `enforce` that aborts whenever `snap-corr-of` returns a non-integer NEVER FIRED across
+;; the whole repo. Every record-date correction this suite had ever computed was a whole
+;; number of KDA, so no test could distinguish the real formula from a rounded one. The
+;; negative control (the same probe with `!=`) reddened twelve suites, so the site was
+;; reached thousands of times — it was reached with uninteresting inputs.
+;;
+;; This file supplies the missing inputs. Balances carry MINIMUM-PRECISION = 12 decimals
+;; and a rate multiplies them, so a correction legitimately lands at up to 24 decimal
+;; places; a module that FREEZES must be right at all of them. Every assertion below is
+;; an EXACT equality against a value computed by hand from the documented formula
+;;
+;; corr = (snap-balance - balance) * (m - reward-debt), m = min(rpt, base + rate)
+;;
+;; and each one goes RED under at least one of the five surviving mutants. §B kills all
+;; five through the ORDINARY transfer path, with production-shaped balances and no
+;; direct call at all, which is the coverage that was actually missing.
+;; ===========================================================================
+(load "setup.repl")
+
+;; ---------------------------------------------------------------------------
+;; SEED. alice 3000 / bob 2000 via the launch (circulating 5000), then alice hands
+;; diane 100.5 — a holder whose balance is NOT a whole number, which is what every
+;; existing award suite lacks. This happens BEFORE any record date, so nothing here
+;; depends on the correction it is about to measure.
+;; ---------------------------------------------------------------------------
+(begin-tx "seed alice 3000 / bob 2000, then alice -> diane 100.5")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.init 0.5)
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.resume-sale)
+(env-data { "alice": { "keys": ["alice-key"], "pred": "keys-all" }
+       , "bob":   { "keys": ["bob-key"],   "pred": "keys-all" }
+       , "diane": { "keys": ["diane-key"], "pred": "keys-all" } })
+(env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" "alice" 1500.0) (coin.TRANSFER "sender00" "bob" 1000.0)] }])
+(coin.transfer-create "sender00" "alice" (read-keyset 'alice) 1500.0)
+(coin.transfer-create "sender00" "bob"   (read-keyset 'bob)   1000.0)
+(env-sigs [{ "key": "alice-key", "caps": [(coin.TRANSFER "alice" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 1500.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "alice" (read-keyset 'alice) 3000.0)
+(env-sigs [{ "key": "bob-key", "caps": [(coin.TRANSFER "bob" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.proceeds-account) 1000.0)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.buy "bob" (read-keyset 'bob) 2000.0)
+(env-sigs [{ "key": "alice-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "alice" "diane" 100.5) ] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer-create "alice" "diane" (read-keyset 'diane) 100.5)
+(expect "circulating 5000" 5000.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-circulating))
+(expect "diane holds a FRACTIONAL balance" 100.5 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "diane"))
+(expect "rpt starts at 0" 0.0 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; POSITIVE CONTROL — before a generation has sealed, `snap-corr-of` is exactly 0.0 on
+;; its idx = 0 branch whatever the other four arguments say. If this file were ever
+;; passing vacuously (module not loaded, function renamed, arguments silently ignored)
+;; this line would not evaluate at all.
+;; ---------------------------------------------------------------------------
+(begin-tx "positive control: the idx = 0 branch is exactly zero")
+(expect "no generation has sealed yet" 0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot-gen))
+(expect "idx 0 is 0.0 regardless of the other arguments" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snap-corr-of 0 100.5 0.0 0.0 0.01))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Seal generation 1 (float 5000), fund it, and bind rate 0.01 to it. base = rpt at the
+;; seal = 0.0, so `snap-m 1 rpt` is min(rpt, 0.01) — the ceiling every pin below uses.
+;; ---------------------------------------------------------------------------
+(begin-tx "schedule the record date")
+(env-keys ["admin-key"])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.schedule-snapshot (time "2026-06-02T00:00:00Z"))
+(commit-tx)
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-02T00:00:01Z") })
+(begin-tx "seal generation 1")
+(env-keys [])
+(expect "advance-snapshot seals" "sealed"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.advance-snapshot))
+(expect "sealed float is 5000" 5000.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snapshot-circulating))
+(commit-tx)
+
+(begin-tx "fund the bar for a 0.01 round")
+(env-keys ["admin-key"])
+(let ((need (at 'shortfall (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.funding-needed 0.01))))
+  (expect "the bar is rate x sealed float" 50.0 need)
+  (env-sigs [{ "key": "admin-key", "caps": [(coin.TRANSFER "sender00" n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FUNDING-ACCOUNT need)] }])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.receive-funding "sender00" need)
+  (env-keys ["admin-key"])
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.fund-awards need))
+(commit-tx)
+
+(begin-tx "declare R1 at 0.01 against generation 1")
+(env-keys ["admin-key"])
+(expect "round declared" "round declared"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.declare-round
+    "R1" 0.01 (time "2026-06-03T00:00:00Z")))
+(expect "generation 1 carries base 0.0" 0.0
+  (at 'base (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot 1)))
+(expect "generation 1 carries rate 0.01" 0.01
+  (at 'rate (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-snapshot 1)))
+(commit-tx)
+
+;; ===========================================================================
+;; §A — THE FORMULA, PINNED DIRECTLY, AT FOUR MAGNITUDES.
+;;
+;; `snap-corr-of` is a public pure read, so it can be measured without staging a
+;; transfer for every case. Each expected value is the hand-computed product; the
+;; comment on each line names the mutants it refuses.
+;; ===========================================================================
+(begin-tx "A-1 the correction keeps every decimal place the operands carry")
+;; A-1a DUST BELOW 1e-12. (0.7 - 0.0) * (0.01 - 0.009999999999) = 0.7 * 1e-12.
+;; Kills round-12 (-> 0.000000000001), floor-12 / round-8 / round-4 / round-0 (-> 0.0).
+(expect "correction below 1e-12 survives to the last digit" 0.0000000000007
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snap-corr-of 1 0.7 0.0 0.009999999999 0.01))
+;; A-1b TWELVE-DECIMAL SPREAD x a 6-decimal balance: 234.567891 * 0.000001.
+;; Kills round-8 (-> 0.00023457), round-4 and round-0 (-> 0.0).
+(expect "a 12-decimal correction is not rounded to 8" 0.000234567891
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snap-corr-of 1 1234.567891 1000.0 0.009999 0.01))
+;; A-1c ORDINARY HOLDER, 8 decimals: 1234.567891 * 0.01.
+;; Kills round-4 (-> 12.3457) and round-0 (-> 12.0).
+(expect "an 8-decimal correction is not rounded to 4" 12.34567891
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snap-corr-of 1 1234.567891 0.0 0.0 0.01))
+;; A-1d THE PLAINEST CASE THERE IS: 100.5 tokens across a record date at 0.01/token.
+;; Kills round-0 (-> 1.0), which silently docks 0.005 KDA from this holder.
+(expect "100.5 tokens at 0.01 is 1.005, not 1" 1.005
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snap-corr-of 1 100.5 0.0 0.0 0.01))
+;; The ceiling itself, so a failure above can be attributed to the product and not to `snap-m`.
+(expect "snap-m caps at base + rate" 0.01
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snap-m 1 0.02))
+(expect "snap-m is rpt while the round is not yet effective" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snap-m 1 0.0))
+;; SIGN AND OPERAND ORDER: an account that GAINED tokens across the record date carries a
+;; NEGATIVE correction. `(- bal snap-bal)` instead of `(- snap-bal bal)` flips this.
+(expect "a holder who gained inside the window carries a negative correction" -1.005
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snap-corr-of 1 0.0 100.5 0.0 0.01))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; A-2 NEGATIVE — the function aborts on a generation that has not sealed here. Its own
+;; @doc promises exactly this, and it is the guard that stops a correction being computed
+;; against a base/rate that does not exist. Own rollback-tx: it reads the state row.
+;; ---------------------------------------------------------------------------
+(begin-tx "A-2 a correction against an unsealed generation aborts")
+(expect-failure "generation 2 has not sealed on this chain"
+  "No value found in table"
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.snap-corr-of 2 100.5 0.0 0.0 0.01))
+(rollback-tx)
+
+;; ===========================================================================
+;; §B — 🔴 THE SAME FIVE MUTANTS, KILLED THROUGH THE ORDINARY TRANSFER PATH.
+;;
+;; No direct call to `snap-corr-of` appears in this section. diane holds 100.5 at the
+;; record instant and sends ONE unit of the smallest representable amount (1e-12,
+;; MINIMUM-PRECISION) to bob inside the window. That leaves her with
+;;
+;; snap-balance 100.5, balance 100.499999999999, reward-debt 0.0
+;;
+;; and once R1 is effective her accrual is
+;;
+;; 100.499999999999 * 0.01 + (100.5 - 100.499999999999) * (0.01 - 0.0)
+;; = 1.00499999999999 + 0.00000000000001
+;; = 1.005
+;;
+;; — the amount she is owed on the balance she actually held at the record instant. The
+;; SECOND term is 1e-14. Round or floor it at twelve decimals and it vanishes, and diane
+;; is paid 1.00499999999999; round it at zero and she is paid 1.0. The equality below is
+;; therefore RED under every one of the five survivors, and it never mentions the
+;; function they mutate.
+;; ===========================================================================
+(begin-tx "B-1 diane sends 1e-12 to bob INSIDE the window")
+(env-sigs [{ "key": "diane-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.TRANSFER "diane" "bob" 0.000000000001)] }])
+(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.transfer "diane" "bob" 0.000000000001)
+(expect "diane's balance is now 12 decimals wide" 100.499999999999
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "diane"))
+(expect "the round is NOT yet effective, so nothing has accrued" 0.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+(commit-tx)
+
+;; --- R1 takes effect ---
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-06-03T00:00:01Z") })
+
+(begin-tx "B-2 the record-date guarantee, to the last decimal place")
+(expect "rpt is the declared rate" 0.01
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-rpt))
+;; 🔴 THE HEADLINE. Paid on the RECORD-INSTANT balance, exactly: 100.5 * 0.01.
+(expect "diane is owed 100.5 * 0.01 EXACTLY, not her post-transfer balance * 0.01" 1.005
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "diane"))
+;; And state the wrong answer explicitly, so a future reader cannot mistake the pin for
+;; an approximation: the un-corrected figure differs in the 14th decimal place.
+(expect "the UNCORRECTED figure is strictly smaller" true
+  (> (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "diane")
+     (* 100.499999999999 0.01)))
+;; bob GAINED 1e-12 inside the window, so his correction is the matching negative and he
+;; is paid on 2000, not on 2000.000000000001.
+(expect "bob is owed 2000 * 0.01 EXACTLY, not his post-transfer balance * 0.01" 20.0
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "bob"))
+(expect "alice is owed 2899.5 * 0.01" 28.995
+  (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of "alice"))
+;; The three holders' accruals sum to rate x sealed float with nothing lost in between —
+;; the property the whole record-date mechanism exists for, at 14 decimal places.
+(let ((naive (fold (+) 0.0
+                (map (lambda (a:string)
+                       (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.pending-awards-of a))
+                     ["alice" "bob" "diane"]))))
+  (expect "Σ per-holder accrual == rate x SEALED FLOAT, exactly" 50.0 naive)
+ ;; and the O(1) aggregate agrees with that sum while a sub-1e-12 correction is live.
+  (expect "O(1) award-liability == naive per-holder sum, with a 1e-14 correction outstanding"
+    naive (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.award-liability)))
+(commit-tx)
+
+(begin-tx "B-3 the money actually moves: diane is PAID 1.005")
+(let* ((pool0 (coin.get-balance n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.POOL-ACCOUNT))
+       (d (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "diane"))
+       (a (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "alice"))
+       (b (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.claim-awards "bob")))
+  (expect "diane's PAID amount is 1.005" 1.005 d)
+  (expect "TOTAL PAID == rate x sealed float" 50.0 (+ (+ d a) b))
+  (expect "the pool funded exactly the debt" 0.0 (- pool0 (+ (+ d a) b)))
+ ;; The KDA lands on the PRINCIPAL of diane's stored guard, not on a like-named coin
+ ;; account — so read it where `claim-awards` actually pays it.
+  (expect "diane's KDA principal received exactly the correction-inclusive amount" 1.005
+    (coin.get-balance
+      (create-principal (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-guard "diane")))))
+(commit-tx)
