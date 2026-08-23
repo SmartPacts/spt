@@ -3,7 +3,8 @@
 Three separate claims, in increasing order of what they prove. The first two you can check right
 now. The third needs the contracts to be deployed, which at the time of writing they are not.
 
-You need the [Pact 5.4](https://github.com/kadena-io/pact-5) binary, `python3`, and `sha256sum`.
+You need the [Pact 5.4ce](https://github.com/kda-community/pact-5) binary — the Community Edition
+engine this artifact is measured against — plus `python3` and `sha256sum`.
 
 ---
 
@@ -91,5 +92,5 @@ ceiling. Prints `ALL SUITES PASS`, or names exactly which gate failed.
 - **That the tests are strong enough.** A passing suite proves the assertions hold, not that the
   assertions are demanding. Two properties in this artifact are correct as written but pinned only
   by a change detector rather than a behavioural test; the audit report names them.
-- **Anything about a network other than the one you queried.** SPT deploys to all 20 Kadena
+- **Anything about a network other than the one you queried.** SPT deploys to all 20
   chains, and each is a separate deployment. Step 3 checks the chain you point it at.

@@ -1,6 +1,6 @@
 # SPT — what it does, in plain language
 
-SPT is a token on Kadena. Two contracts ship: **the token** (holding, moving, voting,
+SPT is a token on Kadena Community Edition (kda-chain.org). Two contracts ship: **the token** (holding, moving, voting,
 awards, locked tokens, company money) and **the sale** (buying tokens with KDA).
 
 

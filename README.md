@@ -1,6 +1,6 @@
 # SPT — Smart Pacts Token
 
-SPT is a token on [Kadena](https://kadena.io) with governance and awards built into the contract
+SPT is a token on [Kadena Community Edition](https://kda-chain.org) with governance and awards built into the contract
 itself: holders vote on proposals weighted by what they hold, and awards accrue in KDA and never
 expire. It is two Pact modules, a fixed supply of 100,000, and no mint path after setup.
 
@@ -46,7 +46,9 @@ VERIFY.md         how to check this repository against the chain, once deployed
 
 ## Run the tests yourself
 
-You need the [Pact 5.4](https://github.com/kadena-io/pact-5) binary on your PATH, plus `python3`.
+You need the [Pact 5.4ce](https://github.com/kda-community/pact-5) binary on your PATH, plus `python3`.
+That is the Community Edition engine — the one this artifact is measured against, and the one CI
+pins by content hash. See [kda-chain.org](https://kda-chain.org).
 
 ```bash
 cd pact/test && ./run-tests.sh
