@@ -192,22 +192,24 @@
       ;; direction, which is legal, and asserts the token was given THIS module's reserve guard
       ;; rather than some other well-formed principal. A mismatch on any chain stops that
       ;; chain's init loudly, before a token or KDA moves.
-      ;; 🔴 SINCE THE TOKEN STOPPED STORING THIS, THIS CHECK GOT STRONGER, NOT WEAKER. It
-      ;; used to compare the sale's derived principal against a value the token had been HANDED
-      ;; at its own init. It now compares it against the token's hard-coded PIN — so it is the
-      ;; on-chain half of the pin-versus-derivation check, and it fires if the hand-built literal
-      ;; and this module's `create-principal` ever disagree. That is exactly what makes a
-      ;; hand-built principal legitimate, and it runs on the hub at sale init.
+      ;; 🔴 WHAT MAKES THIS CHECK STRONG: it compares against the token's hard-coded PIN, not
+      ;; against a value the token was HANDED at its own init. Comparing against a handed-in value
+      ;; would only prove the two inits agreed with each other, which a single mistyped argument
+      ;; satisfies. Comparing against the pin makes this the on-chain half of the
+      ;; pin-versus-derivation check: it fires if the hand-built literal and this module's
+      ;; `create-principal` ever disagree. That is exactly what makes a hand-built principal
+      ;; legitimate rather than a guess, and it runs on the hub at sale init.
       ;; 🔴 Let-bound before the enforce — see the read-only-mode rule in `set-price`.
       (let ((recorded (SPT.get-launch-reserve)))
         (enforce (= recorded LAUNCH-RESERVE-ACCOUNT)
           "SPT was initialized with a different launch reserve account"))
       ;; 🔴 AND THE TOKEN MUST ACTUALLY BE INITIALIZED ON THIS CHAIN — ASSERTED, NOT INCIDENTAL.
-      ;; This used to come for free: the check above read the token's STORED launch reserve, so a
-      ;; chain with no token state row aborted on the missing row. That value became a defconst,
-      ;; and the getter stopped touching the database — which silently removed the ordering
-      ;; guarantee and let the sale initialize on a chain where the token had not. Caught by
-      ;; `SPT-launch-reserve.repl`, which asserted the old abort.
+      ;; The check above cannot carry this. `SPT.get-launch-reserve` returns a code constant and
+      ;; touches no table, so it answers identically on a chain where the token has never run its
+      ;; own init — which would let the sale initialize against a token with no state row, on a
+      ;; chain where nothing can then be bought. The ordering must therefore be asserted here
+      ;; rather than inherited from a read that happens to hit the database. A named test fails
+      ;; if this assertion is removed.
       ;; `get-circulating` reads the `state` singleton, so it is the honest probe for "the token
       ;; ran its own init here". Let-bound, like every other pre-enforce read.
       (let ((tok-circ (SPT.get-circulating)))

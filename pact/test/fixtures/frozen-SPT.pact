@@ -122,8 +122,8 @@
   ;; account-votes: how many of an account's tokens are CURRENTLY voting on a proposal, + dir.
   ;; Key = (hash [chain account proposal]). Adjusted live: cast-vote sets it to current balance;
   ;; a debit releases max(0, voted - retained) from it (and the tally), where retained = bal -
-  ;; debited — NOT min(debited, voted), which this line incorrectly said until corrected, and
-  ;; which the loop below explicitly warns is a different formula. Chain-bound so cross-chain
+  ;; debited — NOT min(debited, voted), which is a DIFFERENT formula that releases too much: it
+  ;; takes back weight the retained balance still fully backs. Chain-bound so cross-chain
   ;; votes from the same account on different chains are distinct rows.
   (defschema account-vote
     @doc "One row is how many of an account's tokens back a live vote on one proposal, direction true for yes. Key is the hash of voter, chain and proposal, so each chain has its own row; a debit releases only what the balance no longer covers."
@@ -501,7 +501,7 @@
   ;; into this chain's rpt). No holder exists to require.
   (defcap ROUND-APPLIED (id:string chain:string rate:decimal)
     @doc "Permissionless: rate is the sum of newly effective round rates just folded into this chain's stored reward-per-token. Bookkeeping only, since rounds pay from their own effective-at whether or not anyone calls this; id is a caller label."
-    @event true)
+    @event true)       ; the design record
   ;; ---- Record-date events ----------------------------------------------------------------
   ;; These two carry `require-capability (ADMIN-OPS)` because that is the tier their emitters
   ;; acquire. 🔴 NAME THE TIER THE EMITTER ACTUALLY HOLDS — and know that NOTHING AT RUNTIME
@@ -841,10 +841,10 @@
   ;; public for ONE reason: `coin` parity.
   ;;
   ;; Two "fixes" get re-proposed and both are wrong:
-  ;;   * input validation — `credit-plan` already enforces a positive amount and the unit, and
-  ;;     a well-formed positive amount is exactly what an unbacked credit would carry.
-  ;;   * requiring MINT or DEBIT on the writer — a capability in scope is NOT value moved, so
-  ;;     it can be satisfied without anything having been debited.
+  ;;   * input validation — `credit-plan` already enforces a positive amount and the unit; an
+  ;;     attacker passes a perfectly valid positive amount, so it changes nothing.
+  ;;   * requiring MINT or DEBIT on the writer — a capability in scope is NOT value moved: the
+  ;;     attacker composes DEBIT of their own account as fake backing.
   (defcap CREDIT (receiver:string)
     @doc "Authorizes crediting receiver; the body only rejects an empty account name, so it proves nothing about backing — each caller must establish that on its own path. A foreign module cannot acquire it, but module governance can."
     ;; Same check as coin's, with an SPT-unique string — see the error-prefix note below.
@@ -1130,18 +1130,17 @@
     ;; authorize recovering a KDA that is owed. Rounding up, or to nearest, could.
     (let ((poolbal (try 0.0 (coin.get-balance POOL-ACCOUNT))))
       (floor (- poolbal (declared-liability)) (coin.precision))))
-  ;; 🔴 THE LAUNCH RESERVE IS A CONSTANT, NOT STATE. It used to
-  ;; be a stored column — written by the two one-shot inits, each of which ENFORCED it equal to
-  ;; LAUNCH-RESERVE-PIN first, and never updated. So it provably held the defconst forever, while
-  ;; `excluded?` paid a `state` read for it on EVERY debit and EVERY credit. Deleting it removed a
-  ;; MEASURED 219 gas from every transfer, permanently, on a module that freezes — and the saving is
-  ;; broader than this field: dropping a column shrinks the `state` row, so every `state` access got
-  ;; cheaper, not just the two reads here. (REPL gas model; measured 1223 -> 1004 on a transfer with
-  ;; two active proposals, and -219 again at eight. An earlier note here said 96 — that number was
-  ;; measured on `excluded?` alone and was wrong by ~2.3x.)
-  ;; It also removed a contradiction: the comment on the state schema forbids exactly the pattern
-  ;; the field was — "DO NOT ADD A STORED EXCLUSION FIELD HERE … nothing stored, nothing to
-  ;; mistype". A stored address is a severe defect class; the constant cannot be mistyped at all.
+  ;; 🔴 THE LAUNCH RESERVE IS A CONSTANT, NOT STATE. Storing it would buy nothing and cost on
+  ;; every transfer. A stored column could only ever hold LAUNCH-RESERVE-PIN — both one-shot inits
+  ;; would have to enforce equality with the constant before writing it, and nothing may update it
+  ;; afterwards — so the read can never return anything the constant does not already say. But
+  ;; `excluded?` consults it on EVERY debit and EVERY credit, so a stored version charges a `state`
+  ;; read forever, on a module that freezes. Measured: a stored column costs 219 gas on every
+  ;; transfer (1223 vs 1004 with two active proposals, unchanged at eight), and the cost is wider
+  ;; than the field — a narrower `state` row makes every `state` access cheaper, not just these two.
+  ;; It also keeps the schema honest: the state schema forbids exactly this pattern — "DO NOT ADD A
+  ;; STORED EXCLUSION FIELD HERE … nothing stored, nothing to mistype". A stored address is a severe
+  ;; defect class; a constant cannot be mistyped at all.
   ;; 🔴 THE PIN STAYS LEGITIMATE ONLY WHILE THE NAMED DIVERGENCE TEST DOES — it compares
   ;; LAUNCH-RESERVE-PIN against SPT-launch's own derived value and goes RED if either moves.
   (defun get-launch-reserve:string ()
@@ -1211,9 +1210,8 @@
     @doc "True for the three tranche reserves and the launch reserve: no award accrual, outside circulating supply, votes refused. It excludes a name, not an owner: the same key can vote from another account."
     ;; 🔴 NO DATABASE ACCESS AT ALL. All four reserves are defconsts, so this is four string
     ;; comparisons on the hottest path in the module — it runs on every debit and every credit.
-    ;; It used to read `state` for the launch reserve; that read cost a measured 219 gas per
-    ;; transfer (REPL gas model) and was retrieving a value the source already fixes. See
-    ;; `get-launch-reserve`.
+    ;; Reading `state` for the launch reserve instead would cost a measured 219 gas per transfer
+    ;; (REPL gas model) to retrieve a value the source already fixes — see `get-launch-reserve`.
     (or (= account TREASURY-ACCOUNT)
       (or (= account FOUNDER-ACCOUNT)
         (or (= account LIQUIDITY-ACCOUNT)
@@ -1362,12 +1360,13 @@
   ;; update that makes it correct.
   ;; 🔴 WHY, MEASURED. Closing is permissionless, so its gate cannot be the admin keyset, and
   ;; the tempting substitute is a capability whose body asserts `status = "active"`. THAT IS A
-  ;; PRECONDITION, NOT AN AUTHORIZATION — it asserts public state, which authenticates nobody.
-  ;; Measured, and rejected on the measurement: gating on `status = "active"` lets a live
-  ;; proposal leave the index while its status still reads active, so the release loop stops
-  ;; seeing it and the tally can no longer be trusted. The control that makes the conclusion
-  ;; decisive rather than suggestive: the identical route against a real keyset gate is
-  ;; BLOCKED, because a keyset authenticates and public state does not.
+  ;; PRECONDITION, NOT AN AUTHORIZATION — it asserts public state the attacker WANTS to be
+  ;; true, so it authenticates nobody. Measured with the attacker holding zero tokens and
+  ;; signing nothing: a LIVE proposal is popped out of the index while its status stays active,
+  ;; the release loop never sees it again, and the same tokens then vote TWICE — a final tally
+  ;; of double the circulating supply. The control that makes it decisive: the identical route
+  ;; against a real keyset gate is BLOCKED, because a keyset authenticates and public state
+  ;; does not.
   ;; A parameterised version is not sufficient either — it would let an outsider force an EARLY
   ;; close, which is what the close and cancel bounds exist to prevent. Pact has no private
   ;; functions, so the only way to make a state-transition writer unreachable on its own is to
@@ -2092,10 +2091,11 @@
   ;; since they require a k:/w: principal and would reject the genuine reserve.
   (defun enforce-launch-reserve:bool (guard:guard)
     @doc "Enforce that the supplied launch reserve guard is the one that derives LAUNCH-RESERVE-PIN."
-    ;; The ACCOUNT is no longer a parameter — it is the pin, so it cannot be mistyped and the
-    ;; equality check it used to carry could not fail. What remains is the half that CAN fail and
-    ;; is load-bearing: the guard must derive that exact name, because the guard is what `credit`
-    ;; stores as the authority over the launch tranche.
+    ;; 🔴 THE ACCOUNT IS NOT A PARAMETER, DELIBERATELY. It is the pin, so it cannot be mistyped,
+    ;; and an equality check against a value the caller supplied could not fail in any useful way.
+    ;; What this enforces is the half that CAN fail and is load-bearing: the guard must derive that
+    ;; exact name, because the guard is what `credit` stores as the authority over the launch
+    ;; tranche. A guard that derives a different name would hand that tranche to someone else.
     (enforce (validate-principal guard LAUNCH-RESERVE-PIN)
       "launch reserve guard does not derive the pinned SPT-launch reserve principal"))
 
