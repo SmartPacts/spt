@@ -518,7 +518,7 @@ PROMISES = [
  # 🔴 a later change: P-076's PIN WAS THE WRONG ASSERTION, and it had been PROVEN on it for months.
  # It named `"neither account guard nor registered vote key satisfied"` — the VOTE GUARD's
  # message, which fires four checks before the exclusion enforce this promise is about. Cold
- # an internal review found it; MEASURED here: with `"excluded reserve cannot vote"` deleted from the
+ # a review found it; MEASURED here: with `"excluded reserve cannot vote"` deleted from the
  # module, the old assertion stayed GREEN and a foreign-composed unsigned caller cast the
  # treasury's 55,000 SPT into a live tally. Re-pointed at §EXCL in the same file, which
  # satisfies the VOTE guard FIRST and then proves the exclusion check refuses. Audit #14's

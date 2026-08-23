@@ -1,7 +1,7 @@
 ;; ===========================================================================
 ;; THE VALUE-DESCRIBING EVENTS — forgeability, per event, decided.
 ;; a later change / the operator runbook an internal review a finding. Eleven at a later change; TREASURY-BENEFICIARY-SET
-;; (the design record D3, a later change) is the twelfth — probed as VE-15 below.
+;; (the design record, a later change) is the twelfth — probed as VE-15 below.
 ;;
 ;; the design record §3b gave real bodies to five GOVERNANCE events on an explicit hygiene
 ;; rationale: "an emitted record … that anyone can fabricate actively misleads

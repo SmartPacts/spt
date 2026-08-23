@@ -72,7 +72,7 @@
  ;; comment records where the real count lives so it is not assumed to be here.
   (expect "the writer is present (the EXACTLY-ONE count is enforced in run-tests.sh)" true
     (contains "(write accounts account (at 'row p))" code))
- ;; The counters stay in the PURE planner, not scattered back across callers (the design record D2).
+ ;; The counters stay in the PURE planner, not scattered back across callers (the design record).
   (expect "credit-plan is still the one place the the design record counters are computed" true
     (contains "(defun credit-plan:object{planned-credit}" code)))
 ;; `debit` remains a public defun and remains correctly gated: DEBIT is a REAL cap

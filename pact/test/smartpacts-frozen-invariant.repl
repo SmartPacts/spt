@@ -635,12 +635,12 @@
   (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-balance "carol"))
 (commit-tx)
 
-(begin-tx "3 launch pause / set-price / resume-sale work frozen (the design record D2 order)")
+(begin-tx "3 launch pause / set-price / resume-sale work frozen (the design record order)")
 (env-chain-data { "chain-id": "0", "block-time": (time "2026-06-11T00:00:00Z") })
 (env-keys ["admin-key"])
 (expect "pause works frozen" "sale paused" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.pause))
 (expect "is-active reflects the frozen pause" false (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.is-active))
-;; the design record D2 sequence: the reprice happens while PAUSED — the only state where it is
+;; the design record sequence: the reprice happens while PAUSED — the only state where it is
 ;; legal at all — then the sale reopens. Both the operation AND the lockout must
 ;; survive the freeze: an enforce that stopped enforcing frozen would be a defect the
 ;; same way an operation that stopped working would.
@@ -677,7 +677,7 @@
   (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.set-runway 60))
 (expect "the refused frozen runway change moved nothing" 86400
   (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.get-runway))
-;; The sale must be CLOSED to move the price floor, so pause around it — the same the design record D2
+;; The sale must be CLOSED to move the price floor, so pause around it — the same the design record
 ;; sequence set-price uses, and it must survive the freeze too.
 (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.pause)
 (expect "set-min-price works frozen" "price floor updated"
@@ -747,7 +747,7 @@
 (expect-failure "tokens.init: chain-0 guard, NOT frozen"
   "Use init-supply on chain 0"
   (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init
-    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G))   ; the design record D3 4th arg — arity only; the chain guard fires first
+    n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G))   ; the design record 4th arg — arity only; the chain guard fires first
 (rollback-tx)
 
 (begin-tx "5 launch.init refuses for its ONE-SHOT guard, not the freeze")

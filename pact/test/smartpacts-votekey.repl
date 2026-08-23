@@ -225,7 +225,7 @@
 ;; ===========================================================================
 ;; 🔴 R3 — ACCEPTED RESIDUAL, PINNED. FOUNDER DECISION (a later change).
 ;;
-;; Cold an internal review found this four times independently (a finding / L1-F1 / L2-F3 / L6-F2): an `r:`
+;; Four independent review passes found this: an `r:`
 ;; principal encodes a keyset NAME and resolution is LATE, so `r:` does NOT reduce to
 ;; signatures — which is exactly what the admitted set above claims about itself. The founder
 ;; was asked whether to delete the `r:` branch (it would have REMOVED source) and chose to KEEP

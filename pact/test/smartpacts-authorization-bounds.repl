@@ -231,7 +231,7 @@
 ;; Its entire subject was `MAX-ROUND-LIABILITY` — specifically the regime ABOVE the
 ;; `MAX-ROUND-LIABILITY / MAX-ROUND-RATE` = 20,000 SPT crossover, where the rate bound goes
 ;; vacuous and the liability bound was "the ONLY thing left standing". It was written because
-;; an internal review found that bound had FIVE pins on the rate cap and ZERO on itself (a later change F-E).
+;; a review found that bound had FIVE pins on the rate cap and ZERO on itself (a later change F-E).
 ;;
 ;; Both constants are gone, so:
 ;; * the crossover is not a number any more — it was a ratio of two deleted constants;

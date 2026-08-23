@@ -21,7 +21,7 @@
     n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G
     [ { "account": "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"
    , "amount": n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-TRANCHE } ]))
-;; an internal review L3-F1 (a later change): ROLLED BACK like the D3 block below — all-negative call to the
+;; A review finding: ROLLED BACK like the D3 block below — all-negative call to the
 ;; ONE-SHOT init-supply; under a weakened check it SUCCEEDS and a commit persists the
 ;; init-state singleton, cascading into :241's happy path with the real report dropped.
 (rollback-tx)
@@ -36,7 +36,7 @@
     n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G
     [ { "account": "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"
    , "amount": n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.FOUNDER-TRANCHE } ]))
-;; an internal review L3-F1 (a later change): rolled back — same reason as the block above.
+;; A review finding: rolled back — same reason as the block above.
 (rollback-tx)
 
 ;; --- init (non-supply) is forbidden on chain 0 ---
@@ -51,7 +51,7 @@
   "Use init-supply on chain 0"
   (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.init
     n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-G))
-;; an internal review L3-F1 (a later change): rolled back — all-negative call to the one-shot `init`.
+;; A review finding: rolled back — all-negative call to the one-shot `init`.
 (rollback-tx)
 
 ;; --- a later change / the operator runbook finding 11: init binds the launch reserve NAME to its GUARD -------------
@@ -104,8 +104,8 @@
 ;; names itself. Two blocks, two boundaries — a tx boundary cannot be shared.
 (rollback-tx)
 
-;; --- the design record D3's TREASURY-BENEFICIARY block is DELETED (a later amendment / a later change) -------
-;; It tested `init`'s 3rd and 4th arguments — the the design record D4 `treasury-beneficiary` and its
+;; --- the design record's TREASURY-BENEFICIARY block is DELETED (a later amendment / a later change) -------
+;; It tested `init`'s 3rd and 4th arguments — the the design record `treasury-beneficiary` and its
 ;; guard. Both arguments, the stored field, its validator, its event and its getter are gone:
 ;; the treasury and liquidity tranches are module-held now, so there is no external name to
 ;; configure, mistype or disenfranchise anyone with. DELETED, NOT REPOINTED, and recorded in

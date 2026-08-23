@@ -99,7 +99,7 @@
 (env-sigs [{ "key": "admin-key", "caps": [(n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.DISBURSE "liquidity" "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" 1.0)] }])
 ;; 🔴 THIS IS THE WHOLE RECIPIENT-KEY STORY. The guard is read from the target's own ledger
 ;; row, never supplied, so this path can never mint an account under a keyset nobody can
-;; satisfy — an internal review `L2-F1`'s freeze-forever shape is unreachable here by
+;; satisfy — a review finding's freeze-forever shape is unreachable here by
 ;; construction. A recipient creates their own account with their own keys first.
 (expect-failure "a disbursement to a non-existent account is refused"
   "No value found in table n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT_accounts for key: k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
@@ -299,7 +299,7 @@
 ;; ---------------------------------------------------------------------------
 ;; 🔴 INVERTED AGAIN, BY THE FOUNDER, (a later amendment / a later change).
 ;;
-;; a later change / the design record D4 made this section assert that released treasury tokens could NOT
+;; a later change / the design record made this section assert that released treasury tokens could NOT
 ;; vote, by storing the beneficiary and excluding it. Am.2 deletes that stored name
 ;; entirely: the treasury holds its tokens INSIDE the module (excluded by DEFCONST, with no
 ;; configuration to get wrong on any of the 20 chains) and, once disbursed, they are

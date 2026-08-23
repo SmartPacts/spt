@@ -43,7 +43,7 @@ exec > >(tee "$_GATELOG") 2>&1
 printf '== deploy artifact is exactly SPT + SPT-launch ==\n'
 ARTIFACT=(SPT SPT-launch)          # ships
 REPO_EXTRA=()                        # nothing here is outside the artifact
-# the design record D1 (founder, 2026-08-07): WHERE each artifact module ships. Membership and
+# the design record (founder, 2026-08-07): WHERE each artifact module ships. Membership and
 # topology are different claims — the sale is IN the artifact and deploys to the HUB
 # ONLY. The ops-deploy gate compares runbook.ts's DEPLOY_MODULES topology column
 # against this manifest; widening the sale back to every chain (or narrowing tokens)
@@ -434,7 +434,7 @@ fi
 # --- a later change / the design record: DOES THE ARTIFACT STILL DEPLOY? -------------------------
 # 🔴 THE GATE WHOSE ABSENCE WAS THE REAL DEFECT. `SPT` grew 6% past a HARD
 # 150,000-gas deploy ceiling across TWO audited items and nothing went red, because nothing
-# in this tree measured deploy cost. Cold an internal review found it by deploying on a node:
+# in this tree measured deploy cost. Cold a review found it by deploying on a node:
 # 176,205 gas = 117.5%, and the ceiling is hard (150,000 accepted, 150,001 REJECTED at
 # validation). Every other invariant here had a gate; the one deciding whether anything
 # ships at all had none.
@@ -710,7 +710,7 @@ fi
 # cannot shrink, so one suite cannot hold both the shape that SHIPS and the most
 # expensive shape the module PERMITS — and the whole finding was that only the
 # first kind was ever pinned.
-# a later change / an internal review L3-F2: the suite list is a NAMED MANIFEST checked against the disk,
+# A review finding: the suite list is a NAMED MANIFEST checked against the disk,
 # exactly like PROBES below. Before this, a smartpacts-*.repl file on disk but absent from
 # the list was silently never run — 22 pinned assertions outside the gate is this repo's
 # measured third instance of that shape (a later change), and the a later change session nearly produced
@@ -791,7 +791,7 @@ declare -A MUSTFAIL=(
   # test is the exact state an internal review a finding found the FIRST pin in, so it gets its own
   # fixture rather than sharing one — see the header of each file for why they cannot merge.
   ["deploy-wrong-ops-keyset-name.repl-must-fail"]="spt-ops-name must be the namespace's spt-ops keyset"
-  # External audit 2026-08-20 a finding: the footer pinned the keyset NAMES and took every property of
+  # An external review: the footer pinned the keyset NAMES and took every property of
   # the keyset VALUE on trust. Two payloads are catastrophic and one-shot — an EMPTY keyset (gov
   # satisfiable by anyone; init-supply measured succeeding with ZERO signatures) and `keys-1`
   # (accepted by define-keyset, kills every ops operation on that chain forever). One fixture per

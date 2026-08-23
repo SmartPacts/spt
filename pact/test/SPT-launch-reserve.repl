@@ -22,7 +22,7 @@
 ;; 🔴 a later change / a later amendment D6 (founder, ) CHANGED WHAT THIS FILE PROVES.
 ;; `SPT` now PINS the expected reserve principal as a source literal
 ;; (LAUNCH-RESERVE-PIN) and refuses anything else, on all 20 chains, with no dependency on the
-;; sale module being deployed. That closes an internal review `L3-F1` — the design record D1 put the sale on
+;; sale module being deployed. That closes a review finding — the design record put the sale on
 ;; chain 0 only, so the launch-side cross-check ran ONCE instead of twenty times while the spoke
 ;; pair arrived via tx data, leaving 19 chains with no on-chain detector of a well-formed
 ;; impostor.
@@ -127,7 +127,7 @@
 (begin-tx "init on chain 1 with the launch module's own account + guard")
 (env-chain-data { "chain-id": "1", "block-time": (time "2026-06-01T00:00:00Z") })
 (env-keys ["admin-key"])
-;; 🔴 the design record D1 CEREMONY SHAPE, exercised on purpose: after D1 the launch module does NOT
+;; 🔴 the design record CEREMONY SHAPE, exercised on purpose: after D1 the launch module does NOT
 ;; exist on a spoke chain, so the deploy engine reads the reserve pair from CHAIN 0 over
 ;; /local and passes them through TX DATA — the module guard decodes via the stable codec
 ;; (env-data roundtrips it "to mimic prod"; tx data parses through the same
@@ -153,7 +153,7 @@
 (expect "the recorded launch reserve is excluded from float/voting/awards" true
   (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT.excluded?
     n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.LAUNCH-RESERVE-ACCOUNT))
-;; the design record D3's POSITIVE CONTROL is DELETED here (a later amendment / a later change) together with the
+;; the design record's POSITIVE CONTROL is DELETED here (a later amendment / a later change) together with the
 ;; stored beneficiary, its getter and its event — see the module's state schema. What this
 ;; block still proves is the D1 spoke ceremony shape, which is unchanged and is the reason
 ;; the block exists. Nothing was repointed: a control for a deleted feature is not a test.

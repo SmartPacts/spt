@@ -55,7 +55,7 @@
 (commit-tx)
 
 ;; --- set-price + resume + buy at new price ---
-;; the design record D2 POSITIVE CONTROL (the measured-open half — a later change lesson: a refusal
+;; the design record POSITIVE CONTROL (the measured-open half — a later change lesson: a refusal
 ;; without a control is not evidence): the sale is PAUSED here (previous tx), so
 ;; set-price succeeds, then resume, then a buy lands at the NEW price. This is the
 ;; exact forced sequence D2 exists to create: pause -> reprice -> resume.
@@ -70,7 +70,7 @@
 (commit-tx)
 
 ;; ===========================================================================
-;; the design record D2 (founder, ) — THE PRICE CANNOT CHANGE WHILE THE SALE IS OPEN.
+;; the design record (founder, ) — THE PRICE CANNOT CHANGE WHILE THE SALE IS OPEN.
 ;; A mid-sale reprice is now IMPOSSIBLE rather than against policy: reaching a new
 ;; price requires a pause, and the pause is what fails any in-flight purchase, so a
 ;; buyer can never be charged a price they did not see. This is the NAMED test that
@@ -102,7 +102,7 @@
 ;; ===========================================================================
 (begin-tx "H-3: the measured exploit price is REFUSED")
 (env-keys ["admin-key"])
-;; the design record D2: set-price now refuses outright while the sale is active, so the band
+;; the design record: set-price now refuses outright while the sale is active, so the band
 ;; negatives below are reachable only from a PAUSED sale — pause first. The band is
 ;; unchanged by D2 (its boundary explicitly leaves enforce-price alone); what changed
 ;; is only WHEN a reprice attempt gets far enough to hit it.
@@ -134,7 +134,7 @@
 (begin-tx "H-3 CONTROLS: the floor is ACCEPTED at exactly MIN-PRICE (inclusive)")
 ;; Without these the negatives above would also pass if set-price rejected everything.
 ;; Still PAUSED from the H-3 tx above — which is now the only state where set-price
-;; can succeed at all (the design record D2).
+;; can succeed at all (the design record).
 (env-keys ["admin-key"])
 (expect "exactly MIN-PRICE is accepted" "price updated" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.set-price (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.get-min-price)))
 (expect "and it took effect" (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.get-min-price) (n_48867b242317a0216a67f8c7ca26696b5878e0e3.SPT-launch.get-price))
