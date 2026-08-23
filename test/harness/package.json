@@ -1,0 +1,31 @@
+{
+  "name": "spt-test-harness",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Maintained @kadena/client QA harness for smart-pacts-token \u2014 ADR-006 chain-local governance validation against the dedicated clean test devnet (:8090). Legacy pre-ADR-004 suites removed (git history has them).",
+  "scripts": {
+    "accounts": "tsx src/accounts.ts",
+    "bless-drill": "tsx src/bless-drill.ts",
+    "cw32": "tsx src/cw32-compose-devnet.ts",
+    "cw32-shapes": "tsx src/cw32-compose-shapes-devnet.ts",
+    "cw32-24": "tsx src/cw32-24-managed-budget-devnet.ts",
+    "cw32-28": "tsx src/cw32-28-spt-fork-devnet.ts",
+    "typecheck": "tsc --noEmit",
+    "cw34": "tsx src/cw34-gas-station-devnet.ts",
+    "cw35": "tsx src/cw35-gas-station-budget-devnet.ts",
+    "cw32-48": "bash run-cw32-48.sh",
+    "cw32-48-phase1": "tsx src/cw32-48-phase1-ceremony.ts",
+    "cw32-48-phase2": "tsx src/cw32-48-phase2-xchain.ts",
+    "cw32-48-governance": "tsx src/cw32-48-governance.ts",
+    "cw32-48-awards": "tsx src/cw32-48-award-planner.ts",
+    "cw32-48-item8": "tsx src/cw32-48-item8-step1-gas.ts",
+    "cw32-48-freeze": "tsx src/cw32-48-phase34-freeze-ops.ts"
+  },
+  "dependencies": {
+    "@kadena/client": "^1.18.3",
+    "@types/node": "^26.0.1",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  }
+}

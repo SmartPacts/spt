@@ -14,22 +14,22 @@ This gate is the mechanical half of that rule. It cannot judge whether a test is
 that needs mutation testing, which does not exist here and is declined deliberately (see LIMITS).
 What it CAN do is make these six things impossible:
 
- 1. A promise whose status is written by hand and drifts. (status is DERIVED from here)
- 2. A PROVEN promise whose pinning test does not exist.
- 3. A PROVEN promise whose pinning test EXISTS BUT IS NEVER RUN. (all four manifests)
- 4. A PROVEN promise whose named assertion is not in that test.
- 5. A WEAK promise hidden by demoting it out of sight. (TIER, below)
- 6. A promise silently dropped from this manifest. (EXPECTED_TOTAL + mark counts)
+  1. A promise whose status is written by hand and drifts.       (status is DERIVED from here)
+  2. A PROVEN promise whose pinning test does not exist.
+  3. A PROVEN promise whose pinning test EXISTS BUT IS NEVER RUN. (all four manifests)
+  4. A PROVEN promise whose named assertion is not in that test.
+  5. A WEAK promise hidden by demoting it out of sight.           (TIER, below)
+  6. A promise silently dropped from this manifest.               (EXPECTED_TOTAL + mark counts)
 
-🔴 TIER — why a row may be tracked without being rendered (founder, )
+🔴 TIER — why a row may be tracked without being rendered (founder, 2026-08)
 -------------------------------------------------------------------------------
 145 promises in a 338-line page is not a page a product manager can read, and Rule 15 makes
 readability the whole point of the founder tier. So each row declares a TIER:
 
- OWNER — renders a status mark beside the sentence on the page. Every gate check applies.
- TRACKED — renders nothing. EVERY OTHER CHECK STILL APPLIES: the sentence must be on the page,
- the pin must exist, the pin must be named in a runner manifest so it actually runs,
- and the pin must contain its assertion.
+  OWNER   — renders a status mark beside the sentence on the page. Every gate check applies.
+  TRACKED — renders nothing. EVERY OTHER CHECK STILL APPLIES: the sentence must be on the page,
+            the pin must exist, the pin must be named in a runner manifest so it actually runs,
+            and the pin must contain its assertion.
 
 🔴 **TRACKED IS LEGAL ONLY WHEN status == PROVEN.** That single rule is what stops TIER from
 becoming a way to hide bad news. BUILT-UNPINNED, PROCEDURE and NOT-BUILT are *forced visible*,
@@ -49,13 +49,13 @@ DISCIPLINE (each has been paid for in this repo)
 * ZERO promises inspected is a FAILURE, never a pass.
 * Fails closed on a missing file, an unreadable doc, or a promise naming an unknown status/tier.
 * SELF-TESTS RUN BEFORE EVERY SCAN. A gate whose failure branch has never been observed is a
- gate that may not have one. `--self-test` proves the two branches the founder asked for:
- a demoted unpinned promise, and a silently dropped row.
+  gate that may not have one. `--self-test` proves the two branches the founder asked for:
+  a demoted unpinned promise, and a silently dropped row.
 
 🔴 MARKS — the status set is disjoint from the page's CALLER legend, and that is load-bearing
 ---------------------------------------------------------------------------------------------
 The page marks WHO MAY CALL a function with 🟢 anyone · 🔵 the holder · 🔴 admin · ⚙️ contract.
-NOT-BUILT used 🔴 until , which collided with `admin only` on 14 table rows: the mark is
+NOT-BUILT used 🔴 until 2026-08, which collided with `admin only` on 14 table rows: the mark is
 accepted anywhere in a ±220-character window, so a NOT-BUILT row sitting near any admin function
 found an unrelated 🔴 and PASSED. A check that cannot fail is the defect Hard Rule 2 names, so
 NOT-BUILT is ⛔ and no status mark may ever be drawn from the caller set.
@@ -63,38 +63,38 @@ NOT-BUILT is ⛔ and no status mark may ever be drawn from the caller set.
 🔴 LIMITS — printed on every run, because a gate that oversells itself is worse than none
 -----------------------------------------------------------------------------------------
 * It does NOT prove a test is strong enough to catch every violation. It proves the test exists,
- runs, and contains the named assertion. Strength is established once, by hand, by MUTATING the
- module and watching that assertion go RED — and recorded in the report that did it.
+  runs, and contains the named assertion. Strength is established once, by hand, by MUTATING the
+  module and watching that assertion go RED — and recorded in the report that did it.
 * It CANNOT demand a promise nobody wrote. Silent omission — the PCO failure, where hub-only
- voting was never a false sentence but an ABSENT one — is closed by the founder walkthrough and
- by the boundary column, not by this script. EXPECTED_TOTAL closes the narrower case of a
- promise dropped from a manifest that once held it; it says nothing about one never written.
+  voting was never a false sentence but an ABSENT one — is closed by the founder walkthrough and
+  by the boundary column, not by this script. EXPECTED_TOTAL closes the narrower case of a
+  promise dropped from a manifest that once held it; it says nothing about one never written.
 * PROCEDURE promises are kept by a human following a process. No test can pin them and this gate
- does not pretend otherwise; it only checks the page says so plainly, and forces them visible.
+  does not pretend otherwise; it only checks the page says so plainly, and forces them visible.
 * 🔴 **IT VERIFIES THE ANCHOR IS ON THE PAGE — NEVER THAT THE PROMISE STILL REFLECTS IT.** A promise
- whose sentence was REWRITTEN survives here silently: the manifest keeps the old wording, the
- anchor still resolves to some sentence, and every other check passes. Measured — four
- rows carried text the page had already corrected, including one asserting the public could buy
- "as soon as the contract is set up" while PROVEN-pinned to `"inactive until resumed"`, a test
- proving the OPPOSITE. A deliberate re-derivation of eight such rows had missed all four, because
- it re-derived their STATUS against the new page and never re-read their TEXT.
- **Check 4 at a real floor is the only mechanical detector of this class** — a rewritten sentence
- drags the promise and the anchor apart, and nothing else notices. That is why the floor is a
- floor: at 0.20 not one row could fail, and the class was invisible.
+  whose sentence was REWRITTEN survives here silently: the manifest keeps the old wording, the
+  anchor still resolves to some sentence, and every other check passes. Measured 2026-08 — four
+  rows carried text the page had already corrected, including one asserting the public could buy
+  "as soon as the contract is set up" while PROVEN-pinned to `"inactive until resumed"`, a test
+  proving the OPPOSITE. A deliberate re-derivation of eight such rows had missed all four, because
+  it re-derived their STATUS against the new page and never re-read their TEXT.
+  **Check 4 at a real floor is the only mechanical detector of this class** — a rewritten sentence
+  drags the promise and the anchor apart, and nothing else notices. That is why the floor is a
+  floor: at 0.20 not one row could fail, and the class was invisible.
 * 🔴 **CHECK 4'S CEILING: it catches GROSS mismatches, never PLAUSIBLE-BUT-WRONG assignments.**
- It found an anchor sitting inside the caller legend and a "SPT *can* be moved between chains"
- promise on the "**What SPT cannot do**" label. It does NOT find a promise parked on a sentence
- from the same subject area, because the metric — shared tokens over the ANCHOR's tokens —
- rewards a short, generic anchor: a founder-vesting promise scored 50% on "Sell tokens for KDA at
- a fixed price" via {fixed, token}, and a 10,000-KDA-cap promise scored 67% on "Pay awards in
- KDA" via {award, kda}. Both render a ✅ on a sentence making a different claim, which is the
- precise thing this gate exists to prevent, and both pass.
- Raising the floor, Jaccard, IDF-weighting and top-3-distinctive were each measured and NONE
- separates these from legitimate anchors. **So the remedy is not a better score — it is not
- leaving the choice to a score.** The generator assigns by STABLE MATCHING rather than greedily
- maximising a noisy number, and the "In one minute" bullets — the page's own promise list — are
- HAND-ASSIGNED 1:1 and never scored at all. Check 4 is the backstop for gross errors; correct
- ASSIGNMENT is what makes an anchor right, and no threshold here can be read as proving one.
+  It found an anchor sitting inside the caller legend and a "SPT *can* be moved between chains"
+  promise on the "**What SPT cannot do**" label. It does NOT find a promise parked on a sentence
+  from the same subject area, because the metric — shared tokens over the ANCHOR's tokens —
+  rewards a short, generic anchor: a founder-vesting promise scored 50% on "Sell tokens for KDA at
+  a fixed price" via {fixed, token}, and a 10,000-KDA-cap promise scored 67% on "Pay awards in
+  KDA" via {award, kda}. Both render a ✅ on a sentence making a different claim, which is the
+  precise thing this gate exists to prevent, and both pass.
+  Raising the floor, Jaccard, IDF-weighting and top-3-distinctive were each measured and NONE
+  separates these from legitimate anchors. **So the remedy is not a better score — it is not
+  leaving the choice to a score.** The generator assigns by STABLE MATCHING rather than greedily
+  maximising a noisy number, and the "In one minute" bullets — the page's own promise list — are
+  HAND-ASSIGNED 1:1 and never scored at all. Check 4 is the backstop for gross errors; correct
+  ASSIGNMENT is what makes an anchor right, and no threshold here can be read as proving one.
 
 EXIT: 0 all promises consistent · 1 a promise is false/unpinned/unrun/hidden · 2 tooling failure.
 """
@@ -108,6 +108,21 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 DOC = os.path.join(ROOT, 'docs/SPT-WHAT-IT-DOES.md')
 SUITE_RUNNER = os.path.join(ROOT, 'pact/test/run-tests.sh')
 TEST_DIR = os.path.join(ROOT, 'pact/test')
+DEVNET_DIR = os.path.join(ROOT, 'test/harness/src')
+
+# 🔴 DEVNET-TIER PINS. A few properties cannot be pinned by a .repl at all, and pretending
+# otherwise is how a promise ends up ✅ against a test that asserts nothing. The clearest case is
+# a CROSS-CHAIN ARRIVAL: `resume` needs an SPV proof that a node produced from a mined block on
+# the source chain, and the REPL has one database and no SPV — a REPL version would either fail
+# to compile or silently assert only the departure.
+#
+# Such a promise may be pinned to a NAMED DEVNET DRIVER instead. It gets the same two checks a
+# .repl pin gets — the file must exist, and it must contain the named assertion — but it cannot be
+# in a REPL runner manifest, so the registry below replaces that check: only a driver listed here
+# may pin, so a stray .ts cannot. These do NOT run in `run-tests.sh`; they run against a node.
+DEVNET_DRIVERS = {
+    'spt-xchain-devnet.ts',
+}
 
 # The legend on the page necessarily contains every mark. Counting marks would double-count it,
 # so it is delimited and excluded — explicitly, rather than by a magic offset nobody can audit.
@@ -165,10 +180,10 @@ MIN_ANCHOR_MATCH = 0.40
 # would be the same concession made silently, forever, to every future row as well.
 # An exemption for a row that PASSES is itself an error — stale exemptions rot into blanket ones.
 ANCHOR_EXEMPT = {
- # Each of these is a RECORDED assignment — a human read the page and chose the sentence — that
- # check 4 scores below the floor because the page states the promise in different words. That
- # is the documented ceiling of the metric, not a defect in the anchor, and the fix for it is
- # one argued row here rather than a lower floor for everything.
+    # Each of these is a RECORDED assignment — a human read the page and chose the sentence — that
+    # check 4 scores below the floor because the page states the promise in different words. That
+    # is the documented ceiling of the metric, not a defect in the anchor, and the fix for it is
+    # one argued row here rather than a lower floor for everything.
     'P-022': "the page carries this inside the CLOCK sentence — 'The clock starts the moment the "
              "contract is set up, and the schedule cannot be changed afterwards' — so it tokens "
              "only {schedule, changed} with a promise phrased 'after setup'. No other sentence "
@@ -220,10 +235,10 @@ def _stem(w):
 def _tokens(text):
     """Content words, stemmed so inflections unify.
 
- 🔴 Without this the check FALSE-POSITIVES, which is fatal for it: "founder amounts must sum to
- 10,000" scored 0% against "The founders — each a plain address with its own amount", which
- states exactly that promise. A correspondence check that cries wolf gets tuned to nothing.
- """
+    🔴 Without this the check FALSE-POSITIVES, which is fatal for it: "founder amounts must sum to
+    10,000" scored 0% against "The founders — each a plain address with its own amount", which
+    states exactly that promise. A correspondence check that cries wolf gets tuned to nothing.
+    """
     out = set()
     for w in re.findall(r"[a-z0-9]+", text.lower()):
         if w in _STOP or len(w) < 3:
@@ -249,20 +264,20 @@ TIERS = ('OWNER', 'TRACKED')
 # 🔴 The rule that makes TIER safe. Only a PROVEN row may be hidden from the page.
 TRACKABLE = {'PROVEN'}
 
-# The mapping pass (workflow `promise-test-mapping`, 6 agents + adversarial verify, )
+# The mapping pass (workflow `promise-test-mapping`, 6 agents + adversarial verify, 2026-08)
 # found 145 founder-falsifiable promises on this page; 9 were duplicates returned by more than
 # one section agent and are merged in the manifest below, by name. Anchoring to the EXTERNAL number
 # rather than to len(PROMISES) is the point: a manifest compared against itself always agrees,
 # and a TRACKED row can be dropped without any mark going missing to betray it.
 EXPECTED_TOTAL = 153   # 154 -> 153: P-160b RETIRED (a later change). It described three money-movers the
- # contract did NOT enforce; the founder made them @managed, so the absence it
- # named is gone and the row goes with it. P-160 now covers all four.
+                       # contract did NOT enforce; the founder made them @managed, so the absence it
+                       # named is gone and the row goes with it. P-160 now covers all four.
 
 # 🔴 a later change / the design record REMOVED TWO ROWS: P-065 ("an award round can never promise more than
 # 0.5 KDA per token") and P-072 ("a round's effective date can be at most 1 year in the future").
 # Both named page promises that are DELETED from SPT-WHAT-IT-DOES.md in the same commit, because
 # the constants behind them are gone — a later amendment attempted the harm the rate cap named
-# and it did not reproduce (`pact/test/a probe kept out of this repo`). A manifest row whose promise the
+# and it did not reproduce (`pact/test/zz-probe-maxrate.repl`). A manifest row whose promise the
 # page no longer makes, or whose pin names a refusal that can no longer happen, is a check that
 # cannot fail. P-066 ("one round can never commit more than 10,000 KDA") went with them.
 # 🔴 AND ONE ROW WAS ADDED, P-143: the promise that REPLACED the caps — a mistyped rate is
@@ -278,59 +293,65 @@ EXPECTED_TOTAL = 153   # 154 -> 153: P-160b RETIRED (a later change). It describ
 # `pin` and `assertion` are required for PROVEN and must be empty for every other status.
 # A promise is added here when it is a statement the FOUNDER could judge true or false.
 PROMISES = [
- # 🔴 145 -> 132. The mapping's six section agents worked OVERLAPPING ranges and returned the
- # same promise more than once; 13 rows are duplicates, merged here and named so the delta from
- # EXPECTED_TOTAL is auditable rather than quiet. Two carried CONFLICTING statuses from
- # different agents and the WEAKER was kept, because a promise is only as strong as its
- # weakest honest reading:
- # "No SPT can ever be burned" -> folded into the 100,000-supply row (the corrected
- # page states mint-and-burn in ONE sentence)
- # "The one real way to lose tokens" -> folded into the cross-chain stranding row
- # "There is no undo" (x2, identical) -> BUILT-UNPINNED vs NOT-BUILT; kept NOT-BUILT
- # "The contract never decides a vote" -> PROCEDURE vs BUILT-UNPINNED; kept PROCEDURE
- # "Withdrawing company funding/money" -> identical promise, identical status
- # "Nobody can redirect a founder's lock" -> folded into the founder-address row
- # "SPT is sold at a price that cannot change while open" -> folded into the price row
- # "A disbursement can never go to a protocol account" -> folded into the superset row
-# "Awards accumulate ... selling does not forfeit them" -> folded into the never-expire row
- #
- # 🔴 STATUS RE-DERIVED for 8 rows the mapping rated against the PRE-CORRECTION page. The
- # mapping finished 15:39; commit d7740cc rewrote those sentences at 15:40. A status computed
- # against text that no longer exists is exactly the drift this gate exists to stop, so each
- # was re-read against the CURRENT sentence — including the two supply "cannot"s, which are
- # BUILT-UNPINNED because the page now states them as conditional on the platform fork and no
- # suite can assert a fixed-engine property on an earlier engine.
- #
- # TIER follows the founder's rule : function-table rows are TRACKED and keep only
- # their caller legend; guarantee prose and the red callouts are OWNER. Weak statuses are
- # forced OWNER by the gate itself, so this choice only ever applies to PROVEN rows.
- #
- # 🔴 EIGHT ROWS WERE PINNED ON ENGINE STRINGS, AND THAT WAS NOT MERELY WEAK — IT BOUND THE
- # WRONG TESTS. "Keyset failure" is emitted by the engine, not this module: it appears in many
- # files, so the resolver matched the FIRST occurrence and P-027 ("value exits are admin-only")
- # ended up pinned to a resume-sale test, P-056 ("only the admin can announce a proposal") to a
- # funding test. A non-unique assertion does not just risk a vacuous pin; it silently binds an
- # unrelated one, and the gate cannot tell the difference because the string IS present.
- #
- # There is NO SPT-prefixed message for admin authority — the modules gate admin with
- # `enforce-keyset ADMIN-KS` (token :665/:667), whose failure text belongs to the engine. So the
- # choice per row was: re-pin on something unique to the TEST, or downgrade.
- # P-085 / P-098 (the 70,000-token admin discretion) and P-131 keep PROVEN, re-pinned on their
- # expect-failure LABEL, which is unique to the file and names the right behaviour. The
- # labels' own expected text is still the engine string, so the TEST is no stronger than it
- # was — what changed is that the gate now goes red if that test is deleted or renamed,
- # instead of staying green on any other keyset failure anywhere in the tree.
- # P-027, P-034, P-039, P-056, P-100 are DOWNGRADED to BUILT-UNPINNED: their pins named tests
- # that do not test them, so there was never a pin to keep.
- #
- # 🔴 OWNER ROWS ANCHOR TO A DISTINCT PROSE SENTENCE, never a table cell. P-034 previously
- # anchored to the CALLER LEGEND ("signature · 🔴 admin only ·") and drew a ✅ inside it; the
- # legend is not a promise, and a mark there is a status nobody derived. Marks now land at the
- # START of the sentence they qualify, one per sentence, so a mark can never sit mid-clause or
- # pair up with another. TRACKED rows still anchor anywhere, including table rows, because they
- # render nothing.
- # (id, the PROMISE, doc-phrase VERBATIM on the page, status, tier, pin, assertion)
-    ('P-001', "SPT can be held and moved on any of Kadena's 20 chains.",                                   'Hold and move tokens, on any of the 20 chains',                                                 'BUILT-UNPINNED', 'OWNER',   '',                            ''),
+    # 🔴 145 -> 132. The mapping's six section agents worked OVERLAPPING ranges and returned the
+    # same promise more than once; 13 rows are duplicates, merged here and named so the delta from
+    # EXPECTED_TOTAL is auditable rather than quiet. Two carried CONFLICTING statuses from
+    # different agents and the WEAKER was kept, because a promise is only as strong as its
+    # weakest honest reading:
+    #   "No SPT can ever be burned"            -> folded into the 100,000-supply row (the corrected
+    #                                             page states mint-and-burn in ONE sentence)
+    #   "The one real way to lose tokens"      -> folded into the cross-chain stranding row
+    #   "There is no undo" (x2, identical)     -> BUILT-UNPINNED vs NOT-BUILT; kept NOT-BUILT
+    #   "The contract never decides a vote"    -> PROCEDURE vs BUILT-UNPINNED; kept PROCEDURE
+    #   "Withdrawing company funding/money"    -> identical promise, identical status
+    #   "Nobody can redirect a founder's lock" -> folded into the founder-address row
+    #   "SPT is sold at a price that cannot change while open" -> folded into the price row
+    #   "A disbursement can never go to a protocol account"    -> folded into the superset row
+#   "Awards accumulate ... selling does not forfeit them"  -> folded into the never-expire row
+    #
+    # 🔴 STATUS RE-DERIVED for 8 rows the mapping rated against the PRE-CORRECTION page. The
+    # mapping finished 15:39; commit d7740cc rewrote those sentences at 15:40. A status computed
+    # against text that no longer exists is exactly the drift this gate exists to stop, so each
+    # was re-read against the CURRENT sentence — including the two supply "cannot"s, which are
+    # BUILT-UNPINNED because the page now states them as conditional on the platform fork and no
+    # suite can assert a post-fork property on a pre-fork engine.
+    #
+    # TIER follows the founder's rule (2026-08): function-table rows are TRACKED and keep only
+    # their caller legend; guarantee prose and the red callouts are OWNER. Weak statuses are
+    # forced OWNER by the gate itself, so this choice only ever applies to PROVEN rows.
+    #
+    # 🔴 EIGHT ROWS WERE PINNED ON ENGINE STRINGS, AND THAT WAS NOT MERELY WEAK — IT BOUND THE
+    # WRONG TESTS. "Keyset failure" is emitted by the engine, not this module: it appears in many
+    # files, so the resolver matched the FIRST occurrence and P-027 ("value exits are admin-only")
+    # ended up pinned to a resume-sale test, P-056 ("only the admin can announce a proposal") to a
+    # funding test. A non-unique assertion does not just risk a vacuous pin; it silently binds an
+    # unrelated one, and the gate cannot tell the difference because the string IS present.
+    #
+    # There is NO SPT-prefixed message for admin authority — the modules gate admin with
+    # `enforce-keyset ADMIN-KS` (token :665/:667), whose failure text belongs to the engine. So the
+    # choice per row was: re-pin on something unique to the TEST, or downgrade.
+    #   P-085 / P-098 (the 70,000-token admin discretion) and P-131 keep PROVEN, re-pinned on their
+    #     expect-failure LABEL, which is unique to the file and names the right behaviour. The
+    #     labels' own expected text is still the engine string, so the TEST is no stronger than it
+    #     was — what changed is that the gate now goes red if that test is deleted or renamed,
+    #     instead of staying green on any other keyset failure anywhere in the tree.
+    #   P-027, P-034, P-039, P-056, P-100 are DOWNGRADED to BUILT-UNPINNED: their pins named tests
+    #     that do not test them, so there was never a pin to keep.
+    #
+    # 🔴 OWNER ROWS ANCHOR TO A DISTINCT PROSE SENTENCE, never a table cell. P-034 previously
+    # anchored to the CALLER LEGEND ("signature · 🔴 admin only ·") and drew a ✅ inside it; the
+    # legend is not a promise, and a mark there is a status nobody derived. Marks now land at the
+    # START of the sentence they qualify, one per sentence, so a mark can never sit mid-clause or
+    # pair up with another. TRACKED rows still anchor anywhere, including table rows, because they
+    # render nothing.
+    # (id, the PROMISE, doc-phrase VERBATIM on the page, status, tier, pin, assertion)
+    # 🔴 PINNED AT THE DEVNET TIER, because the arrival leg has no REPL expression: `resume` needs
+    # an SPV proof from a mined block on the source chain, and the REPL has one database and no SPV.
+    # The driver mines BOTH legs against a node and reads BOTH ledgers. Measured 0 -> 1: holder
+    # 10 -> 6 on the source, 0 -> 4 on the target, circulating -4/+4 netting to zero, and the two
+    # balances summing to what they summed to before. Deployment to all 20 chains is proven
+    # separately by the full deploy rehearsal.
+    ('P-001', "SPT can be held and moved on any of the 20 chains, and moved between them.",              'Hold and move tokens, on any of the 20 chains',                                                 'PROVEN',   'OWNER',   'spt-xchain-devnet.ts',        'TARGET ledger credited exactly'),
     ('P-003', 'Holders vote yes or no on a proposal, and a vote counts for exactly the number of tokens the holder holds.', 'Let holders vote yes/no on proposals',                                                          'PROVEN',         'OWNER',   'smartpacts-governance.repl',  'yes 2500'),
     ('P-004', 'Awards are paid in KDA, build up across rounds until claimed, and anyone can trigger a claim.', 'Pay awards in KDA, which accumulate until claimed',                                             'PROVEN',         'OWNER',   'smartpacts-award-fairness.repl', 'dave now earns R3+R4 = 1000*(0.01+0.03) = 40'),
     ('P-099', 'A buyer pays KDA and receives tokens at the price the sale is currently set to.',           'Sell tokens for KDA at a fixed price.',                                                         'PROVEN',         'OWNER',   'SPT-launch.repl',      'buyer got 1000 SPT'),
@@ -348,104 +369,104 @@ PROMISES = [
     ('P-142', 'A repeated announcement against the same record date is refused, not doubled.',             '**A repeated announcement against the same date is refused, not silently doubled.**',           'PROVEN', 'OWNER', 'smartpacts-record-date.repl', 'a second round on the same record date is REFUSED, not doubled'),
     ('P-143', 'A mistyped award rate is refused outright, because the money for it is not there.', '**A mistyped rate is refused outright, because the money for it is not there.**', 'PROVEN', 'OWNER', 'smartpacts-award-safety.repl', 'one admin tx can no longer destroy the award subsystem — refused on the MONEY'),
     ('P-144', 'An award round must take effect at least 12 hours after it is announced.', '**The effective date must be at least 12 hours away.**', 'PROVEN', 'OWNER', 'smartpacts-promises.repl', 'page: the 12h effective-at floor is twice the retract lead'),
- # ---- the design record, the two admin keyset tiers (a later change) --------------------------------------
- # Every one of these is pinned to smartpacts-admin-tiers.repl, which is the ONLY suite that
- # can see a tier downgrade: signing with more keys always satisfies a weaker predicate, so
- # the other 61 suites stay green when an operation moves from gov to ops.
-    ('P-145', 'Anything that moves money out of the contract, or that cannot be undone, needs two of the three signing devices.', '**Two of your three devices** must both sign the same transaction.', 'PROVEN', 'OWNER', 'smartpacts-admin-tiers.repl', 'GOV REFUSES one device'),
- # 🔴 a later change RE-ANCHORED. The old anchor was 'ONE device is enough for ADMIN-OPS' on set-price
- # — an operation that is no longer one-device, and whose assertion is now a COMMENT explaining
- # the inversion. The gate refused a comment-only anchor, exactly as a later change intended. The
- # PROMISE is unchanged and is now MORE accurate than when it was written: what stays at one
- # device is precisely the set that can be undone. Anchored to `cancel-snapshot`, where a single
- # device clears a stall the same single device can create.
-    ('P-146', 'Everyday operations that can be undone need only one of the three devices.', '**Any one** of your three devices is enough.', 'PROVEN', 'OWNER', 'smartpacts-admin-tiers.repl', 'the SAME one-device tier clears the stall it can create'),
- # 🔴 CORRECTED . This row read "cannot take money out" and that was FALSE, measured:
- # one ops device, one transaction — pause, cut the price to the floor, resume, buy — took the
- # entire 20,000-SPT sale reserve for 200 KDA (worth 10,000 at a 0.5 price). Reproduced
- # independently before the page was touched.
- # 🔴 AND THE PIN PROVED LESS THAN THE PROMISE CLAIMED, which is why nothing caught it: the
- # anchor was 'GOV REFUSES one device on withdraw-funding', which tests KDA leaving the funding
- # account and says NOTHING about the sale reserve. A promise about all money, certified by an
- # assertion about one account. Fourth instance of this class (P-160, P-076, D-2, now P-147).
- # The promise is narrowed to what the gov tier actually refuses, and re-anchored to the
- # LARGEST of those refusals — disburse-tranche, which guards 70,000 SPT.
- # The sale-reserve residual is NOT covered by this row: it is G-1/G-2 in the same suite, and
- # the page states it in full rather than promising it away.
+    # ---- the design record, the two admin keyset tiers (a later change) --------------------------------------
+    # Every one of these is pinned to smartpacts-admin-tiers.repl, which is the ONLY suite that
+    # can see a tier downgrade: signing with more keys always satisfies a weaker predicate, so
+    # the other 61 suites stay green when an operation moves from gov to ops.
+    ('P-145', 'Anything that moves money out of the contract, or that cannot be undone, needs two of the three signing devices.', '**Two of the three devices** must both sign the same transaction.', 'PROVEN', 'OWNER', 'smartpacts-admin-tiers.repl', 'GOV REFUSES one device'),
+    # 🔴 a later change RE-ANCHORED. The old anchor was 'ONE device is enough for ADMIN-OPS' on set-price
+    # — an operation that is no longer one-device, and whose assertion is now a COMMENT explaining
+    # the inversion. The gate refused a comment-only anchor, exactly as a later change intended. The
+    # PROMISE is unchanged and is now MORE accurate than when it was written: what stays at one
+    # device is precisely the set that can be undone. Anchored to `cancel-snapshot`, where a single
+    # device clears a stall the same single device can create.
+    ('P-146', 'Everyday operations that can be undone need only one of the three devices.', '**Any one** of the three devices is enough.', 'PROVEN', 'OWNER', 'smartpacts-admin-tiers.repl', 'the SAME one-device tier clears the stall it can create'),
+    # 🔴 CORRECTED 2026-08. This row read "cannot take money out" and that was FALSE, measured:
+    # one ops device, one transaction — pause, cut the price to the floor, resume, buy — took the
+    # entire 20,000-SPT sale reserve for 200 KDA (worth 10,000 at a 0.5 price). Reproduced
+    # independently before the page was touched.
+    # 🔴 AND THE PIN PROVED LESS THAN THE PROMISE CLAIMED, which is why nothing caught it: the
+    # anchor was 'GOV REFUSES one device on withdraw-funding', which tests KDA leaving the funding
+    # account and says NOTHING about the sale reserve. A promise about all money, certified by an
+    # assertion about one account. Fourth instance of this class (P-160, P-076, D-2, now P-147).
+    # The promise is narrowed to what the gov tier actually refuses, and re-anchored to the
+    # LARGEST of those refusals — disburse-tranche, which guards 70,000 SPT.
+    # The sale-reserve residual is NOT covered by this row: it is G-1/G-2 in the same suite, and
+    # the page states it in full rather than promising it away.
     ('P-147', 'A single lost or stolen device can cause delay and cannot publish new code, and cannot move company tokens, take KDA out of the funding account, or touch the award pot.', '**A lost or stolen device cannot publish new code**, and cannot move company tokens, take KDA', 'PROVEN', 'OWNER', 'smartpacts-admin-tiers.repl', 'A-5 GOV REFUSES one device on disburse-tranche'),
     ('P-148', 'Whichever device can create a delay can also clear it, alone.', '**Whichever device can create one of those delays can also clear it, alone.**', 'PROVEN', 'OWNER', 'smartpacts-admin-tiers.repl', 'the SAME one-device tier clears the stall it can create'),
- # 🔴 RE-ANCHORED . The claim is that the OPERATION-TO-TIER MAPPING is fixed at
- # freeze, and the mechanism for that is simply that the mapping lives in code and frozen
- # code cannot change — so the honest pin is the upgrade REFUSAL, not a string sitting in a
- # comment in the frozen-invariant suite (which proves operations still WORK when frozen, a
- # different property). Same fixture as P-127 because it is the same mechanism.
- # 🔴 BOUNDARY, stated because a reader will assume more: this fixes WHICH OPERATIONS need
- # two devices. It does NOT fix WHICH DEVICES are in each tier — `define-keyset` is a
- # standalone transaction, not module-gated, so keyset rotation survives the freeze.
+    # 🔴 RE-ANCHORED 2026-08. The claim is that the OPERATION-TO-TIER MAPPING is fixed at
+    # freeze, and the mechanism for that is simply that the mapping lives in code and frozen
+    # code cannot change — so the honest pin is the upgrade REFUSAL, not a string sitting in a
+    # comment in the frozen-invariant suite (which proves operations still WORK when frozen, a
+    # different property). Same fixture as P-127 because it is the same mechanism.
+    # 🔴 BOUNDARY, stated because a reader will assume more: this fixes WHICH OPERATIONS need
+    # two devices. It does NOT fix WHICH DEVICES are in each tier — `define-keyset` is a
+    # standalone transaction, not module-gated, so keyset rotation survives the freeze.
     ('P-149', 'Which operations need two devices and which need one is fixed forever once the contract is locked.', '**Which operations need two devices and which need one is fixed forever once the contract is', 'PROVEN', 'OWNER', 'frozen-upgrade-token.repl-must-fail', 'Module is frozen'),
     ('P-150', 'Using the backup device last is a habit, not something the contract enforces.', '**Using the backup device last is a habit, not something the contract enforces.**', 'PROCEDURE', 'OWNER', '', ''),
- # ---- the design record part 2, the two settable limits (a later change) ----------------------------------
-    ('P-151', 'You can make the notice period longer, and you can never make it shorter than 12 hours.', '**You can now make the notice period LONGER, and you can never make it shorter than 12 hours.**', 'PROVEN', 'OWNER', 'smartpacts-admin-tiers.repl', 'even TWO devices cannot lower the runway past MIN-RUNWAY'),
- # 🔴 a later change REWRITTEN — A PRODUCT CHANGE, NOT A WORDING FIX. The promise read "Using a limit
- # takes one device; moving a limit takes two." That framing described the tiers exactly until
- # , when `set-price` — the archetypal "use a limit" operation — moved to two devices
- # after a review chained it into taking the whole sale reserve. The operate-vs-move pair no
- # longer describes the split, and asserting a pair that no longer exists would be worse than
- # asserting none (the same call recorded at a finding in the tier suite). The line that DOES describe
- # it now is whether the action can be taken back. Anchor unchanged: `set-min-price` is still a
- # one-device refusal and still the sharpest single case.
+    # ---- the design record part 2, the two settable limits (a later change) ----------------------------------
+    ('P-151', 'You can make the notice period longer, and you can never make it shorter than 12 hours.', '**The notice period can be made LONGER, and can never be made shorter than 12 hours.**', 'PROVEN', 'OWNER', 'smartpacts-admin-tiers.repl', 'even TWO devices cannot lower the runway past MIN-RUNWAY'),
+    # 🔴 a later change REWRITTEN — A PRODUCT CHANGE, NOT A WORDING FIX. The promise read "Using a limit
+    # takes one device; moving a limit takes two." That framing described the tiers exactly until
+    # 2026-08, when `set-price` — the archetypal "use a limit" operation — moved to two devices
+    # after a review chained it into taking the whole sale reserve. The operate-vs-move pair no
+    # longer describes the split, and asserting a pair that no longer exists would be worse than
+    # asserting none (the same call is recorded in the tier suite). The line that DOES describe
+    # it now is whether the action can be taken back. Anchor unchanged: `set-min-price` is still a
+    # one-device refusal and still the sharpest single case.
     ('P-152', 'Anything that moves money out of the company\'s control, or creates a promise the contract must honour, takes two devices — even when it is routine work.', '**Anything that moves money out of the company\'s control, or creates a promise the contract must', 'PROVEN', 'OWNER', 'smartpacts-admin-tiers.repl', 'GOV REFUSES one device on set-min-price'),
- # 🔴 The value moved 1e-6 -> 1e-5 on the founder's call (, a later amendment). The ANCHOR
- # moved with it deliberately: a manifest row that kept the old number would have gone on
- # matching nothing while the page said something else, and this gate's whole job is that the
- # page and the pin agree. The pin is now C-4b, which refuses 1e-6 BY NAME — the previous
- # floor — because a finding's other probes (1e-7, 1e-12) sit below both values and cannot tell them
- # apart, and its control reads the constant symbolically and adapts silently.
+    # 🔴 The value moved 1e-6 -> 1e-5 on the founder's call (2026-08, a later amendment). The ANCHOR
+    # moved with it deliberately: a manifest row that kept the old number would have gone on
+    # matching nothing while the page said something else, and this gate's whole job is that the
+    # page and the pin agree. The pin is now C-4b, which refuses 1e-6 BY NAME — the previous
+    # floor — because the other probes (1e-7, 1e-12) sit below both values and cannot tell them
+    # apart, and its control reads the constant symbolically and adapts silently.
     ('P-153', 'The price floor can never be set below 0.00001 KDA per token, by any key, before or after the freeze.', 'Never below 0.00001 KDA per token', 'PROVEN', 'TRACKED', 'smartpacts-admin-tiers.repl', 'the OLD 1e-6 floor is now REFUSED'),
     ('P-154', 'Both settable limits still move after the contract is frozen, so a limit adjustable today stays adjustable forever.', 'Both settable limits still move after the contract is frozen', 'PROVEN', 'TRACKED', 'smartpacts-frozen-invariant.repl', 'set-runway works frozen'),
- # ---- an internal review a finding (a later change): a tier is not a disbursement scope -------------------
+    # ---- an internal review a finding (a later change): a tier is not a disbursement scope -------------------
     ('P-158', 'Moving locked company tokens names its own tranche, amount and destination, so a signature for anything else cannot move them.', '**Every operation that moves money out now names its own amount and destination.**', 'PROVEN', 'OWNER', 'smartpacts-admin-tiers.repl', 'an (ADMIN-GOV) clist is REFUSED on disburse-tranche'),
- # ---- an internal review a finding's RESIDUAL (a later change): the other three value-movers -------------
- # 🔴 THE PIN IS THE *REFUSAL*, NOT THE ACCEPTANCE. §E's brick checks (E-2/E-5/E-8) prove the
- # scoped signature still works, but a page claiming a signature "cannot be used for another"
- # is only falsified by an (ADMIN-GOV) clist being turned away. Named separately from P-158
- # because the two closed in different change sets and a single row would let either half
- # regress under the other's evidence.
- # 🔴 RE-ANCHORED (a later change). This row was PROVEN against 'E-1 an (ADMIN-GOV) clist is REFUSED
- # on withdraw-funding' — a DIFFERENT function, and an assertion with nothing to do with the
- # AMOUNT clause this promise makes. Measured: strip `@managed` from DISBURSE, and this gate
- # exited 0 with the promise still certified PROVEN while the property was broken. The suite
- # did catch it (12 failures from the §F pins); the MANIFEST did not, which is the half that
- # renders the ✅ on the founder page.
- # That is an internal review's a finding class — a status derived from a pin that cannot fail — reproduced
- # in the row created for the very change that was meant to make this promise true, one
- # session after the identical defect was repaired for P-076. The anchor now names the §F
- # assertion that reproduces an internal review's 150-call abuse, so removing @managed reddens the
- # gate and the page mark disappears with the property.
- # 🔴 CAUGHT A THIRD TIME, , BY THE FIRST EXTERNAL AUDIT — and the two notes above are
- # the record of the first two. The row was PROVEN and the PROMISE ITSELF WAS FALSE: it claimed
- # the property for FOUR money-movers while its anchor (§F a finding) exercises only DISBURSE, the one
- # of the four that is @managed. The other three enforce GOV-KS directly and are NOT managed, so
- # an UNSCOPED gov signature drives any of them for any amount to any destination — MEASURED ON
- # A NODE, MINED, both clists empty on the wire, tx Kw8h9FdI4ESaYB4fwMum6o1Wfn602CvDdvsgpFpjvQI.
- # No re-anchoring could have fixed this: every candidate pin in §E asserts a REFUSAL of a
- # WRONGLY-scoped signature, and not one of them asks what an UNSCOPED signature does. The pin
- # was not weak — the SENTENCE covered more than the code did.
- # Split rather than re-anchored: P-160 keeps the enforced half (DISBURSE), P-160b states the
- # unenforced half honestly. A single row would let the true half certify the false one, which
- # is exactly how this survived three rounds.
- # 🔴 P-160b RETIRED (a later change, founder ) — A PRODUCT CHANGE, NOT A TIDY-UP. It existed
- # for a few hours to state honestly that three of the four money-movers were NOT enforced by the
- # contract. The founder chose to fix the contract instead of the wording, so WITHDRAW-FUNDING,
- # RECOVER-SURPLUS and WITHDRAW-PROCEEDS are now @managed like DISBURSE and the property it
- # described no longer exists. That is why it is deleted rather than downgraded: a promise about
- # an absence must not outlive the absence.
- # P-160 now covers ALL FOUR, and its anchor moved to the sentence that says so. The pin is still
- # the DISBURSE reproduction, which is honest about what it proves — §F a finding reddens if @managed is
- # stripped from DISBURSE. The three new managers get their own pins in the tiers suite.
+    # ---- an internal review a finding's RESIDUAL (a later change): the other three value-movers -------------
+    # 🔴 THE PIN IS THE *REFUSAL*, NOT THE ACCEPTANCE. §E's brick checks (E-2/E-5/E-8) prove the
+    # scoped signature still works, but a page claiming a signature "cannot be used for another"
+    # is only falsified by an (ADMIN-GOV) clist being turned away. Named separately from P-158
+    # because the two closed in different change sets and a single row would let either half
+    # regress under the other's evidence.
+    # 🔴 RE-ANCHORED (a later change). This row was PROVEN against 'E-1 an (ADMIN-GOV) clist is REFUSED
+    # on withdraw-funding' — a DIFFERENT function, and an assertion with nothing to do with the
+    # AMOUNT clause this promise makes. Measured: strip `@managed` from DISBURSE, and this gate
+    # exited 0 with the promise still certified PROVEN while the property was broken. The suite
+    # did catch it (12 failures from the §F pins); the MANIFEST did not, which is the half that
+    # renders the ✅ on the founder page.
+    # That is an internal review's a finding class — a status derived from a pin that cannot fail — reproduced
+    # in the row created for the very change that was meant to make this promise true, one
+    # session after the identical defect was repaired for P-076. The anchor now names the §F
+    # assertion that reproduces an internal review's 150-call abuse, so removing @managed reddens the
+    # gate and the page mark disappears with the property.
+    # 🔴 CAUGHT A THIRD TIME, 2026-08, BY THE FIRST EXTERNAL AUDIT — and the two notes above are
+    # the record of the first two. The row was PROVEN and the PROMISE ITSELF WAS FALSE: it claimed
+    # the property for FOUR money-movers while its anchor (§F a finding) exercises only DISBURSE, the one
+    # of the four that is @managed. The other three enforce GOV-KS directly and are NOT managed, so
+    # an UNSCOPED gov signature drives any of them for any amount to any destination — MEASURED ON
+    # A NODE, MINED, both clists empty on the wire, tx Kw8h9FdI4ESaYB4fwMum6o1Wfn602CvDdvsgpFpjvQI.
+    # No re-anchoring could have fixed this: every candidate pin in §E asserts a REFUSAL of a
+    # WRONGLY-scoped signature, and not one of them asks what an UNSCOPED signature does. The pin
+    # was not weak — the SENTENCE covered more than the code did.
+    # Split rather than re-anchored: P-160 keeps the enforced half (DISBURSE), P-160b states the
+    # unenforced half honestly. A single row would let the true half certify the false one, which
+    # is exactly how this survived three rounds.
+    # 🔴 P-160b RETIRED (a later change, founder 2026-08) — A PRODUCT CHANGE, NOT A TIDY-UP. It existed
+    # for a few hours to state honestly that three of the four money-movers were NOT enforced by the
+    # contract. The founder chose to fix the contract instead of the wording, so WITHDRAW-FUNDING,
+    # RECOVER-SURPLUS and WITHDRAW-PROCEEDS are now @managed like DISBURSE and the property it
+    # described no longer exists. That is why it is deleted rather than downgraded: a promise about
+    # an absence must not outlive the absence.
+    # P-160 now covers ALL FOUR, and its anchor moved to the sentence that says so. The pin is still
+    # the DISBURSE reproduction, which is honest about what it proves — §F a finding reddens if @managed is
+    # stripped from DISBURSE. The three new managers get their own pins in the tiers suite.
     ('P-160', 'For every operation that moves money out, the contract itself refuses a signature that does not name the operation, its destination and its amount — so a signature for one cannot be used for another, a different amount, or a different destination, and an unscoped signature cannot drive any of them.', '**Every operation that moves money out now refuses a signature that does not name the\noperation, its destination and its amount.**', 'PROVEN', 'OWNER', 'smartpacts-admin-tiers.repl', 'a finding the 150-call loop under ONE 100.0 clist entry is REFUSED'),
- # ---- an internal review a finding (a later change): closed by DISCLOSURE, a later amendment ------------------
-    ('P-159', 'A proposal can only be withdrawn before its voting opens, never once it has started.', '**You can only withdraw a proposal before its voting opens — never once it has started**', 'PROVEN', 'OWNER', 'smartpacts-proposal-lifecycle.repl', 'cancel at the instant voting opens is refused'),
+    # ---- an internal review a finding (a later change): closed by DISCLOSURE, a later amendment ------------------
+    ('P-159', 'A proposal can only be withdrawn before its voting opens, never once it has started.', '**A proposal can only be withdrawn before its voting opens — never once it has started**', 'PROVEN', 'OWNER', 'smartpacts-proposal-lifecycle.repl', 'cancel at the instant voting opens is refused'),
     ('P-126', 'The contract is not frozen yet.',                                                           '**It is not frozen yet.**',                                                                     'PROVEN',         'OWNER',   'smartpacts-upgrade-emergency.repl', '../modules/SPT.pact'),
     ('P-011', 'A transfer sent to the wrong address cannot be reversed.',                                  '**Recover a lost key**, or reverse a transfer sent to the wrong address.',                      'BUILT-UNPINNED', 'OWNER',   '',                            ''),
     ('P-012', 'The contract cannot prove who owns what beyond a single account, because one person can hold several accounts.', '**Prove who owns what beyond one account.**',                                                   'PROCEDURE',      'OWNER',   '',                            ''),
@@ -459,26 +480,26 @@ PROMISES = [
     ('P-020', 'Market-making/liquidity tokens unlock nothing for 3 months, then a little each day until year 2.', 'Nothing for 3 months',                                                                          'PROVEN',         'TRACKED', 'smartpacts-tranches.repl',    'liquidity cliff-end T+90d'),
     ('P-022', 'The unlock schedule can never be changed after setup.',                                     'The clock starts the moment the contract is set up, and the schedule cannot be changed',        'BUILT-UNPINNED', 'OWNER',   '',                            ''),
     ('P-023', "Each founder's tokens unlock independently — one founder taking their tokens does not touch anyone else's.", "Each founder's tokens",                                                                         'PROVEN',         'OWNER',   'smartpacts-founder-allocations.repl',     "f2's row is untouched: released still 0"),
- # 🔴 P-024 REVERSED at the design record (a later change). It promised the opposite — "a multi-signature
- # founder account can never be set up" — and that is now false. Rewritten rather than
- # deleted, because the founder was told the old thing and the page has to say it changed.
+    # 🔴 P-024 REVERSED at the design record (a later change). It promised the opposite — "a multi-signature
+    # founder account can never be set up" — and that is now false. Rewritten rather than
+    # deleted, because the founder was told the old thing and the page has to say it changed.
     ('P-024', 'A founder can use any address they control, including a multi-signature account.', '**A founder can use any address they control, including a multi-signature account.**', 'PROVEN', 'OWNER', 'smartpacts-founder-address.repl', 'a multisig founder address is ACCEPTED by the ceremony'),
     ('P-155', 'Each founder creates their own SPT account first, and the payment goes to an account that already exists.', '**Each founder creates their own SPT account first, and the payment goes to an\naccount that already exists.**', 'PROVEN', 'OWNER', 'smartpacts-founder-address.repl', 'a release to a not-yet-created account is REFUSED, retryably'),
- # 🔴 a later change RE-ANCHORED. The promise has two clauses — the payment is REFUSED, and the tokens
- # WAIT in the reserve — and the old anchor named the success-after-creation case, which proves
- # NEITHER. It would have stayed green if the refusal became a silent no-op or, worse, if the
- # tokens were consumed on the failed release. Both clauses are asserted in the same file
- # ('a release to a not-yet-created account is REFUSED, retryably' and 'the waiting tokens are
- # still in the founder reserve'); the manifest takes one, so it names the refusal, whose
- # "retryably" is the half a founder is relying on. The success case remains its control.
+    # 🔴 a later change RE-ANCHORED. The promise has two clauses — the payment is REFUSED, and the tokens
+    # WAIT in the reserve — and the old anchor named the success-after-creation case, which proves
+    # NEITHER. It would have stayed green if the refusal became a silent no-op or, worse, if the
+    # tokens were consumed on the failed release. Both clauses are asserted in the same file
+    # ('a release to a not-yet-created account is REFUSED, retryably' and 'the waiting tokens are
+    # still in the founder reserve'); the manifest takes one, so it names the refusal, whose
+    # "retryably" is the half a founder is relying on. The success case remains its control.
     ('P-156', 'If the account does not exist yet, the payment is refused and the tokens wait in the reserve.', 'If it does not exist yet, the payment is simply refused and the', 'PROVEN', 'TRACKED', 'smartpacts-founder-address.repl', 'a release to a not-yet-created account is REFUSED, retryably'),
     ('P-157', 'A multi-signature founder can spend the tokens it receives, not merely hold them.', 'A multi-signature founder can spend the tokens it', 'PROVEN', 'TRACKED', 'smartpacts-founder-address.repl', 'SPENDS its tranche with 2 of 3 keys'),
     ('P-017', 'There can be one founder or many; each is a plain address with its own fixed amount, chosen once at setup.', "**The founders' 10,000",                                                                        'PROVEN',         'OWNER',   'smartpacts-founder-allocations.repl',     'n=3 init-supply ok'),
     ('P-025', 'Founder tokens can only ever land on the address fixed at setup — nobody, not even the admin, can redirect them.', 'They can only ever go',                                                                         'PROVEN',         'OWNER',   'smartpacts-tranches.repl',    'SPT only the treasury and liquidity tranches are disbursed'),
     ('P-028', 'The 55,000 treasury and 15,000 liquidity tokens stay inside the contract itself — there is no beneficiary account fixed at setup any more.', "**The treasury's 55,",                                                                          'PROVEN',         'OWNER',   'smartpacts-tranches.repl',    'Am.2: the target is NOT excluded — there is no stored beneficiary any more'),
     ('P-033', "Treasury and liquidity tokens, once sent out, vote exactly like anyone else's tokens.",     'Once sent, they are ordinary',                                                                  'PROVEN',         'OWNER',   'smartpacts-tranches.repl',    'Am.2: a disbursement target votes like any holder'),
-    ('P-029', 'The admin can never send more than has already vested.',                                    'You can never send more',                                                                       'PROVEN',         'OWNER',   'smartpacts-tranches.repl',    'SPT disbursement exceeds the vested available amount'),
-    ('P-031', 'Between treasury and liquidity, the admin decides where 70,000 tokens — 70% of everything — end up.', 'This means **you control where up to 70,000',                                                   'PROVEN',         'OWNER',   'smartpacts-tranches.repl',    'disbursed bookkeeping = total'),
+    ('P-029', 'The admin can never send more than has already vested.',                                    'No more than has vested can ever be sent',                                                                       'PROVEN',         'OWNER',   'smartpacts-tranches.repl',    'SPT disbursement exceeds the vested available amount'),
+    ('P-031', 'Between treasury and liquidity, the admin decides where 70,000 tokens — 70% of everything — end up.', 'This means **the administrator controls where up to 70,000',                                                   'PROVEN',         'OWNER',   'smartpacts-tranches.repl',    'disbursed bookkeeping = total'),
     ('P-035', 'Anyone can open an SPT account under any unused name and attach their own key, with no signature needed.', '**No signature needed',                                                                         'PROVEN',         'TRACKED', 'smartpacts-promises.repl',    'the account exists and holds nothing'),
     ('P-071', 'An account name derived from a key (k:/w:) cannot be opened by anyone except the holder of that key.', 'An account name and a',                                                                         'PROVEN',         'TRACKED', 'SPT-ext.repl',   'SPT reserved protocol guard violation: k:2222222222222222222222222222222222222222222222222222222222222222'),
     ('P-047', 'If the second transaction of a cross-chain transfer never completes — because you never send it, or because a stranger squats the receiver name after you sent — the tokens are off one chain and not on the other, held rather than destroyed, until that name carries your key.', 'Sends tokens to an account',                                                                    'PROCEDURE',      'OWNER',   '',                            ''),
@@ -491,11 +512,11 @@ PROMISES = [
     ('P-042', 'No transaction can call debit or credit directly — they only run inside the transfers.',    'No transaction can call',                                                                       'PROVEN',         'TRACKED', 'smartpacts-attacks.repl',     'direct debit() blocked by require-capability'),
     ('P-043', "get-circulating reports only this chain's tokens, and no read totals all 20 chains.",       'There is no read that totals all 20 chains.',                                                   'BUILT-UNPINNED', 'OWNER',   '',                            ''),
     ('P-044', 'The accounts the contract keeps out of voting and awards are exactly the four reserves it owns itself, and nothing else.', 'Whether an account is',                                                                         'PROVEN',         'TRACKED', 'smartpacts-tranches.repl',    'CONTROL: the treasury RESERVE itself is still excluded (defconst, all 20 chains)'),
- # 🔴 RESTATED at a finding (external audit ), and the promise got STRONGER. It used to
- # read "a mistyped or wrong sale-reserve address FAILS the setup transaction", pinned by a
- # negative that passed a wrong address. The address is no longer a PARAMETER — it is the
- # module's own LAUNCH-RESERVE-PIN defconst — so a wrong one cannot be supplied at all.
- # The pin now points at the half that REMAINS falsifiable: the guard must derive that pin.
+    # 🔴 RESTATED after an external review, and the promise got STRONGER. It used to
+    # read "a mistyped or wrong sale-reserve address FAILS the setup transaction", pinned by a
+    # negative that passed a wrong address. The address is no longer a PARAMETER — it is the
+    # module's own LAUNCH-RESERVE-PIN defconst — so a wrong one cannot be supplied at all.
+    # The pin now points at the half that REMAINS falsifiable: the guard must derive that pin.
     ('P-115', 'The sale-reserve address cannot be set wrong at setup: it is fixed in the contract, and the key supplied with it must be the one that produces it.', "The sale reserve's account",                     'PROVEN',         'TRACKED', 'SPT-init.repl',  'launch reserve guard does not derive the pinned'),
     ('P-045', 'A token amount can have at most 12 decimal places.',                                        'How many decimal places',                                                                       'PROVEN',         'TRACKED', 'SPT.repl',       'precision 12'),
     ('P-046', 'After the platform fix, tokens cannot be destroyed by any function here and every debit is matched by a credit.', '**After the fix**, tokens',                                                                     'BUILT-UNPINNED', 'OWNER',   '',                            ''),
@@ -507,22 +528,22 @@ PROMISES = [
     ('P-053', 'A holder votes on the chain where their tokens are, and that vote is recorded only on that chain — it does not travel.', 'Votes on the chain where',                                                                      'PROVEN',         'TRACKED', 'smartpacts-governance.repl',  'vote recorded under chain-5 scope'),
     ('P-062', 'Voting again replaces your previous vote — it is never counted twice.',                     'Who is voting, the proposal',                                                                   'PROVEN',         'TRACKED', 'smartpacts-governance.repl',  'yes now 0 (alice flipped)'),
     ('P-055', 'Every vote left open makes all transfers on that chain more expensive until it is closed.', 'It does not change the result, but **every vote left',                                          'BUILT-UNPINNED', 'OWNER',   '',                            ''),
- # 🔴 a later change RE-ANCHORED. The old anchor, 'a non-admin closes the proposal', pinned the EASY
- # half (closing is permissionless) and said nothing about the half the product rests on — that
- # the result freezes at the deadline whether or not anyone ever closes it. That second clause is
- # what makes the 20-chain `vote-record` sum legitimate, and a regression in it would have left
- # this row PROVEN. The assertion below already existed; it simply was not the one named.
+    # 🔴 a later change RE-ANCHORED. The old anchor, 'a non-admin closes the proposal', pinned the EASY
+    # half (closing is permissionless) and said nothing about the half the product rests on — that
+    # the result freezes at the deadline whether or not anyone ever closes it. That second clause is
+    # what makes the 20-chain `vote-record` sum legitimate, and a regression in it would have left
+    # this row PROVEN. The assertion below already existed; it simply was not the one named.
     ('P-054', 'Anyone can close a finished vote, and closing does not change the result — the result freezes at the deadline whether or not anyone ever closes it.', 'Marks a finished vote',                                                                         'PROVEN',         'TRACKED', 'smartpacts-governance.repl',  'tally frozen at close-at'),
     ('P-056', 'Only the admin can announce a proposal, on every chain.',                                   'Voter, chain, proposal',                                                                        'BUILT-UNPINNED', 'OWNER',   '',                            ''),
     ('P-057', 'A holder can register a lower-risk key to vote for them, and an empty or non-keyset one is refused.', 'Registers a lower-risk',                                                                        'PROVEN',         'TRACKED', 'smartpacts-votekey.repl',     'SPT vote key must not be an empty keyset'),
- # 🔴 a later change: P-076's PIN WAS THE WRONG ASSERTION, and it had been PROVEN on it for months.
- # It named `"neither account guard nor registered vote key satisfied"` — the VOTE GUARD's
- # message, which fires four checks before the exclusion enforce this promise is about. Cold
- # a review found it; MEASURED here: with `"excluded reserve cannot vote"` deleted from the
- # module, the old assertion stayed GREEN and a foreign-composed unsigned caller cast the
- # treasury's 55,000 SPT into a live tally. Re-pointed at §EXCL in the same file, which
- # satisfies the VOTE guard FIRST and then proves the exclusion check refuses. Audit #14's
- # a finding class exactly: a status derived from a pin that could not fail.
+    # 🔴 a later change: P-076's PIN WAS THE WRONG ASSERTION, and it had been PROVEN on it for months.
+    # It named `"neither account guard nor registered vote key satisfied"` — the VOTE GUARD's
+    # message, which fires four checks before the exclusion enforce this promise is about. Cold
+    # an internal review found it; MEASURED here: with `"excluded reserve cannot vote"` deleted from the
+    # module, the old assertion stayed GREEN and a foreign-composed unsigned caller cast the
+    # treasury's 55,000 SPT into a live tally. Re-pointed at §EXCL in the same file, which
+    # satisfies the VOTE guard FIRST and then proves the exclusion check refuses. Audit #14's
+    # a finding class exactly: a status derived from a pin that could not fail.
     ('P-076', 'The reserve accounts the contract owns can never vote.',                                    'Your account and a voting',                                                                     'PROVEN',         'TRACKED', 'smartpacts-governance.repl',  'excluded reserve cannot vote'),
     ('P-058', 'Voting can never open less than 48 hours after the announcement actually lands on that chain.', 'Whether voting on it',                                                                          'PROVEN',         'TRACKED', 'smartpacts-proposal-lifecycle.repl',      'SPT voting must open at least the minimum review gap after this announcement'),
     ('P-036', 'transfer only reaches an account that already exists on this chain.',                       'Every open one makes transfers on that chain',                                                  'PROVEN',         'TRACKED', 'smartpacts-promises.repl',    'SPT_accounts for key: no-such-account'),
@@ -541,40 +562,40 @@ PROMISES = [
     ('P-069', 'A declared round can be cancelled only while more than 6 hours remain before it takes effect.', 'Rounds already in effect',                                                                      'PROVEN',         'TRACKED', 'smartpacts-account-and-round-safety.repl',     'too close to taking effect'),
     ('P-075', 'Only run recover-pool-surplus after a round is declared — before that, money you just deposited reads as surplus and sweeping it kills the declaration.', '**Only run this after a round is declared**',                                                   'PROCEDURE',      'OWNER',   '',                            ''),
     ('P-063', 'Unclaimed awards never expire.',                                                            '**Awards accumulate and',                                                                       'BUILT-UNPINNED', 'OWNER',   '',                            ''),
- # 🔴 a later change: THE PROMISE NAMES FOUR ACCOUNTS AND ONLY TWO WERE ASSERTED ANYWHERE. Treasury and
- # the launch reserve had lines; FOUNDER-ACCOUNT and LIQUIDITY-ACCOUNT had none in ANY suite
- # (grepped for `pending-awards-of` across every .repl). `excluded?` covers all four in code, so
- # the property held — only the EVIDENCE was short, and dropping either account from `excluded?`
- # would have left this row PROVEN and green. Fifth instance of the class (P-160, P-076, D-2,
- # P-147, now P-111). Both missing lines added to SPT.repl beside the other two.
- # 🔴 NON-VACUITY MEASURED, because "expect 0.0" is exactly the shape that passes for free: at
- # that point in the suite rpt = 0.02 with founder holding 10,000.0 and liquidity 15,000.0, so an
- # un-excluded account would read 200.0 and 300.0 — not 0.0. The anchor below still names ONE
- # account because the manifest takes one assertion; it is the largest reserve, and the other
- # three now have their own lines in the same file.
+    # 🔴 a later change: THE PROMISE NAMES FOUR ACCOUNTS AND ONLY TWO WERE ASSERTED ANYWHERE. Treasury and
+    # the launch reserve had lines; FOUNDER-ACCOUNT and LIQUIDITY-ACCOUNT had none in ANY suite
+    # (grepped for `pending-awards-of` across every .repl). `excluded?` covers all four in code, so
+    # the property held — only the EVIDENCE was short, and dropping either account from `excluded?`
+    # would have left this row PROVEN and green. Fifth instance of the class (P-160, P-076, D-2,
+    # P-147, now P-111). Both missing lines added to SPT.repl beside the other two.
+    # 🔴 NON-VACUITY MEASURED, because "expect 0.0" is exactly the shape that passes for free: at
+    # that point in the suite rpt = 0.02 with founder holding 10,000.0 and liquidity 15,000.0, so an
+    # un-excluded account would read 200.0 and 300.0 — not 0.0. The anchor below still names ONE
+    # account because the manifest takes one assertion; it is the largest reserve, and the other
+    # three now have their own lines in the same file.
     ('P-111', "The contract's own accounts (treasury, market-making, founder, sale reserves) always earn zero awards.", 'Reserve accounts always',                                                                       'PROVEN',         'OWNER',   'SPT.repl',       'treasury accrues 0 (excluded)'),
     ('P-013', 'There are exactly 100,000 SPT and setup is the only event that ever creates them.',         '**There is no obligation',                                                                      'PROVEN',         'OWNER',   'SPT-init.repl',  'module already initialized'),
     ('P-077', 'There is no obligation to ever declare an award — the company may reinvest everything for years without breaking any rule in the contract.', 'The company may reinvest',                                                                      'NOT-BUILT',      'OWNER',   '',                            ''),
- # 🔴 REWRITTEN — this promise was FALSE, not merely mis-anchored. It described
- # the design record's FLOOR, which the design record replaced with an EXACT bar against a SEALED float. 'Tokens
- # in circulation can still grow before it takes effect' stopped being true when the record
- # date landed, and the row stayed ✅ PROVEN for weeks against an assertion the suite had
- # DELETED — surviving only in the comment that explains the deletion, which is exactly what
- # the new non-comment check catches. Re-anchored to the assertion that DISPROVES the old
- # wording, so a regression to floor-semantics reddens this row.
+    # 🔴 REWRITTEN 2026-08 — this promise was FALSE, not merely mis-anchored. It described
+    # the design record's FLOOR, which the design record replaced with an EXACT bar against a SEALED float. 'Tokens
+    # in circulation can still grow before it takes effect' stopped being true when the record
+    # date landed, and the row stayed ✅ PROVEN for weeks against an assertion the suite had
+    # DELETED — surviving only in the comment that explains the deletion, which is exactly what
+    # the new non-comment check catches. Re-anchored to the assertion that DISPROVES the old
+    # wording, so a regression to floor-semantics reddens this row.
     ('P-078', 'The money a round needs is measured against a count of tokens frozen at the record date, so someone buying after that instant does not change what the round owes.', '**The money a round needs is measured against a count of tokens frozen at the record date**',                                                                          'PROVEN',         'OWNER',   'smartpacts-record-date.repl', 'the bar is rate x SEALED float (6000), not rate x current float (9000)'),
     ('P-079', 'A partial retraction does not fail safe — retracting on 19 chains and being refused on the 20th locks the difference in permanently.', 'Retracting on 19 chains',                                                                       'PROCEDURE',      'OWNER',   '',                            ''),
     ('P-080', "Anyone can trigger a founder's vested payment, and the tokens can only ever land on that founder's address fixed at setup.", 'Anyone can trigger it; the tokens',                                                             'PROVEN',         'TRACKED', 'smartpacts-founder-address.repl', 'the multisig founder is paid its full tranche'),
     ('P-026', 'Anyone at all can trigger a founder payment once it has vested — no signature and no permission needed.', 'Pays a founder whatever has',                                                                   'PROVEN',         'TRACKED', 'smartpacts-founder-allocations.repl',     'f1 mid-vest release pays out, keyless'),
-    ('P-085', 'Only the admin can send treasury or market-making tokens.',                                 '**You send treasury or',                                                                        'PROVEN',         'OWNER',   'smartpacts-tranches.repl',    'a non-admin cannot disburse'),
- # 🔴 a later change RE-ANCHORED. Two clauses: the destination must EXIST, and it must never be one of
- # the contract's own accounts. The old anchor pinned only the first. The second is the one that
- # protects 70,000 SPT from being disbursed into a reserve nobody can spend from — and it is the
- # line a later change let-bound out of an `enforce` condition, so it is live code under active change.
- # The assertion already existed in the same file; naming it is the whole fix.
+    ('P-085', 'Only the admin can send treasury or market-making tokens.',                                 '**The administrator sends treasury or',                                                                        'PROVEN',         'OWNER',   'smartpacts-tranches.repl',    'a non-admin cannot disburse'),
+    # 🔴 a later change RE-ANCHORED. Two clauses: the destination must EXIST, and it must never be one of
+    # the contract's own accounts. The old anchor pinned only the first. The second is the one that
+    # protects 70,000 SPT from being disbursed into a reserve nobody can spend from — and it is the
+    # line a later change let-bound out of an `enforce` condition, so it is live code under active change.
+    # The assertion already existed in the same file; naming it is the whole fix.
     ('P-081', "A disbursement destination must already be a real SPT account and can never be one of the contract's own accounts, including the sale's reserve.", 'The destination must',                                                                          'PROVEN',         'TRACKED', 'smartpacts-tranches.repl',    'SPT disbursement target must not be an excluded account'),
     ('P-098', 'Only the admin can move treasury or liquidity tokens out.',                                 '`treasury` or `liquidity`,',                                                                    'PROVEN',         'TRACKED', 'smartpacts-tranches.repl',    'a non-admin cannot disburse'),
-    ('P-086', 'The admin sends vested treasury and liquidity tokens wherever they choose, whenever they choose, in as many separate payments as they like.', '**How much you can send',                                                                       'PROVEN',         'TRACKED', 'smartpacts-tranches.repl',    'part one, back to the market maker'),
+    ('P-086', 'The admin sends vested treasury and liquidity tokens wherever they choose, whenever they choose, in as many separate payments as they like.', '**the administrator sends vested treasury and liquidity tokens wherever they choose',                                                                       'PROVEN',         'TRACKED', 'smartpacts-tranches.repl',    'part one, back to the market maker'),
     ('P-087', 'Every release, payment and availability read uses the one vesting formula.',                'Every release, payment',                                                                        'BUILT-UNPINNED', 'OWNER',   '',                            ''),
     ('P-088', 'At the cliff you get zero; it accrues after.',                                              'At the cliff you get',                                                                          'PROVEN',         'OWNER',   'smartpacts-promises.repl',    'at the cliff exactly, still zero'),
     ('P-089', "Nobody, including the admin, can redirect or cancel a founder's allocation.",               '**Founder tokens:** nobody',                                                                    'PROVEN',         'OWNER',   'smartpacts-tranches.repl',    'SPT only the treasury and liquidity tranches are disbursed'),
@@ -590,11 +611,11 @@ PROMISES = [
     ('P-095', "Money can never be pulled OUT of one of the contract's own five protected accounts by calling the funding deposit.", "Answers whether a name is one of the contract's own",                                           'PROVEN',         'TRACKED', 'smartpacts-capability-guard-class.repl',     'SPT protocol accounts cannot be the source of a funding deposit'),
     ('P-096', 'Setup can never run twice on the same chain, for either contract.',                         'The one-shot lock: setup refuses to ever run twice',                                            'PROVEN',         'TRACKED', 'SPT-init.repl',  'module already initialized'),
     ('P-097', 'The sale is installed on chain 0 only; the token, voting and awards run on all 20 chains.', 'Tokens, voting and awards',                                                                     'PROCEDURE',      'OWNER',   '',                            ''),
- # 🔴 a later change REWRITTEN, and it was FALSE on BOTH bounds. It read "between 0.01 and 1,000 KDA
- # per token": the upper bound came from MAX-PRICE, which the design record DELETED after measuring that
- # the harm did not reproduce, and the lower bound was the constant floor that a later change replaced
- # with the launch price. Neither number had been true for some time. Caught by the gate only
- # because the floor moved; the dead upper bound would have survived otherwise.
+    # 🔴 a later change REWRITTEN, and it was FALSE on BOTH bounds. It read "between 0.01 and 1,000 KDA
+    # per token": the upper bound came from MAX-PRICE, which the design record DELETED after measuring that
+    # the harm did not reproduce, and the lower bound was the constant floor that a later change replaced
+    # with the launch price. Neither number had been true for some time. Caught by the gate only
+    # because the floor moved; the dead upper bound would have survived otherwise.
     ('P-103', "The price can never go below the sale's floor, which starts equal to the price the sale opened at, and there is no upper limit.", 'never below the floor', 'PROVEN', 'TRACKED', 'smartpacts-promises.repl', 'the floor equals the launch price, not a constant'),
     ('P-101', "The sale's own two accounts can never be the buyer.",                                       "The sale's own accounts",                                                                       'PROVEN',         'TRACKED', 'smartpacts-capability-guard-class.repl',     'SPT sale accounts cannot buy tokens'),
     ('P-100', 'A lost key cannot be recovered — nobody, not even the admin, can reassign an account or move its tokens.', 'Your account, your key',                                                                        'BUILT-UNPINNED', 'OWNER',   '',                            ''),
@@ -622,8 +643,8 @@ PROMISES = [
     ('P-127', 'Once frozen, the contract can never be upgraded, changed or repaired again.',               'After freezing, no function can ever be changed',                                               'PROVEN',         'OWNER',   'frozen-upgrade-token.repl-must-fail', 'Module is frozen'),
     ('P-128', 'Once frozen, value can still leave the contract, and this page lists every way that survives the freeze.', '**Once frozen, value',                                                                          'BUILT-UNPINNED', 'OWNER',   '',                            ''),
     ('P-133', 'Money already owed under a declared round can never be taken back out of the pool by the admin.', 'Money leaving the pool',                                                                        'PROVEN',         'OWNER',   'smartpacts-pool-surplus.repl', "amount exceeds the award pool's unowed surplus"),
-    ('P-030', "Treasury and liquidity tokens, once sent out, earn awards exactly like anyone else's tokens.", 'Since 2026-08 treasury tokens',                                                              'BUILT-UNPINNED', 'OWNER',   '',                            ''),
-    ('P-136', 'The contract keeps named ACCOUNTS out of voting, never the tokens behind them — one person can hold both an excluded account and an ordinary one, and no contract can tell them apart.', 'Even before that, the contract only kept',                                                      'PROCEDURE',      'OWNER',   '',                            ''),
+    ('P-030', "Treasury and liquidity tokens, once sent out, earn awards exactly like anyone else's tokens.", 'Treasury tokens sent to someone become ordinary tokens that vote',                                                              'BUILT-UNPINNED', 'OWNER',   '',                            ''),
+    ('P-136', 'The contract keeps named ACCOUNTS out of voting, never the tokens behind them — one person can hold both an excluded account and an ordinary one, and no contract can tell them apart.', 'The contract only keeps *named',                                                      'PROCEDURE',      'OWNER',   '',                            ''),
 ]
 
 
@@ -646,12 +667,12 @@ def read(path):
 def runner_manifests(src):
     """What the runner ACTUALLY executes — all four manifests, not just SUITES.
 
- 🔴 SUITES alone is not "the tests that run". run-tests.sh drives four named sets, and a pin
- living in any of them is genuinely run. Checking only SUITES would have rejected legitimate
- pins in independent probes kept out of this repo and `a probe kept out of this repo*` — and the natural repair for that failure is to weaken the
- check or to move the assertion into a suite it does not belong in. Both are worse than parsing
- all four. Each is a NAMED manifest in the runner, so this reads names, never a glob.
- """
+    🔴 SUITES alone is not "the tests that run". run-tests.sh drives four named sets, and a pin
+    living in any of them is genuinely run. Checking only SUITES would have rejected legitimate
+    pins in `xx-ind-*` and `zz-audit-*` — and the natural repair for that failure is to weaken the
+    check or to move the assertion into a suite it does not belong in. Both are worse than parsing
+    all four. Each is a NAMED manifest in the runner, so this reads names, never a glob.
+    """
     stems, mustfail = set(), set()
     for var in ('SUITES',):   # [public build] probe families are not published
         m = re.search(rf'^{var}=\(\s*(.*?)\)\s*$', src, re.S | re.M)
@@ -685,9 +706,9 @@ def _cut(doc, open_tag, close_tag):
 def strip_legend(doc):
     """Remove BOTH delimited legends so neither's marks are counted as promise marks.
 
- Returns (body, had_promise_legend, caller_span). `caller_span` is the region of the ORIGINAL
- doc occupied by the caller legend, so an anchor can be rejected for living inside it.
- """
+    Returns (body, had_promise_legend, caller_span). `caller_span` is the region of the ORIGINAL
+    doc occupied by the caller legend, so an anchor can be rejected for living inside it.
+    """
     body, _ = _cut(doc, LEGEND_OPEN, LEGEND_CLOSE)
     body, _ = _cut(body, CALLER_OPEN, CALLER_CLOSE)
     _, cspan = _cut(doc, CALLER_OPEN, CALLER_CLOSE)
@@ -702,17 +723,17 @@ _TERM_MID = re.compile(r'[.!?:]["»)*_`\]]*\s+$')
 def begins_sentence(doc, pos):
     """Does the character at `pos` start a SENTENCE on the rendered page?
 
- 🔴 NOT "starts a line" — that was the proxy that let 24 marks through. Markdown soft-wraps, so
- the second line of a wrapped paragraph starts a LINE in the middle of a SENTENCE, and a mark
- placed there reads as qualifying a clause fragment. The distinction is the whole check.
- """
+    🔴 NOT "starts a line" — that was the proxy that let 24 marks through. Markdown soft-wraps, so
+    the second line of a wrapped paragraph starts a LINE in the middle of a SENTENCE, and a mark
+    placed there reads as qualifying a clause fragment. The distinction is the whole check.
+    """
     ls = doc.rfind('\n', 0, pos) + 1
     pre = doc[ls:pos]
     stripped = re.sub(r'^[>\s]*', '', pre)
     m = _LIST.match(stripped)
     rest = stripped[m.end():] if m else stripped
     if rest.strip():
- # the start of a table CELL begins a sentence just as a line does
+        # the start of a table CELL begins a sentence just as a line does
         if re.search(r'\|\s*$', pre):
             return True
         return bool(_TERM_MID.search(pre))      # text precedes on this line: need a terminator
@@ -733,9 +754,9 @@ def begins_sentence(doc, pos):
 def table_column(doc, pos):
     """0-based column index if `pos` sits inside a markdown table row, else None.
 
- 🔴 Column ZERO is where the caller glyph and the function name live — the exact cell that
- collided with the status vocabulary twice. A mark may live in a table cell, but never there.
- """
+    🔴 Column ZERO is where the caller glyph and the function name live — the exact cell that
+    collided with the status vocabulary twice. A mark may live in a table cell, but never there.
+    """
     ls = doc.rfind('\n', 0, pos) + 1
     le = doc.find('\n', pos)
     line = doc[ls: len(doc) if le < 0 else le]
@@ -747,8 +768,8 @@ def table_column(doc, pos):
 def audit(promises, doc, runs, exists, read_test):
     """The pure core. Returns (failures, counts). Raises Tooling on a structural problem.
 
- `exists(pin)` and `read_test(pin)` are injected so the self-test never touches the tree.
- """
+    `exists(pin)` and `read_test(pin)` are injected so the self-test never touches the tree.
+    """
     if not promises:
         return (["the manifest is EMPTY, so this gate inspected zero promises. A check that "
                  "inspects nothing is a failure, not a pass. Populate PROMISES, or delete this "
@@ -759,16 +780,16 @@ def audit(promises, doc, runs, exists, read_test):
             f"The mapping pass found {EXPECTED_TOTAL}. If a promise was genuinely retired, say "
             f"why and change EXPECTED_TOTAL IN THE SAME COMMIT — never quietly.")
 
- # Both legends are excised up front: `body` is what mark COUNTS and the adjacency scan see,
- # and `cspan` lets a row be rejected for anchoring inside the caller legend.
+    # Both legends are excised up front: `body` is what mark COUNTS and the adjacency scan see,
+    # and `cspan` lets a row be rejected for anchoring inside the caller legend.
     body, had_legend, cspan = strip_legend(doc)
 
     failures = []
 
- # 🔴 PROPOSAL REGIONS must be DECLARED (a later change). An "approved, not yet built" section carries
- # no status marks by design, so it is invisible to every other check here — which is exactly
- # how an 80-line "it is not built yet" section about the design record survived the design record shipping, on the
- # same page whose body already described it as built.
+    # 🔴 PROPOSAL REGIONS must be DECLARED (a later change). An "approved, not yet built" section carries
+    # no status marks by design, so it is invisible to every other check here — which is exactly
+    # how an 80-line "it is not built yet" section about the design record survived the design record shipping, on the
+    # same page whose body already described it as built.
     for m in re.finditer(re.escape(PROPOSAL_OPEN) + r'(.*?)' + re.escape(PROPOSAL_CLOSE),
                          doc, re.S):
         region = m.group(1)
@@ -780,7 +801,7 @@ def audit(promises, doc, runs, exists, read_test):
                 'nothing else on this page can notice it going false when the work lands. Declare it '
                 'with WHY it is still unbuilt, or delete it because it shipped.'
                 % (title[:90] or '<untitled region>'))
- # A declared region whose marker is gone is a stale manifest entry, not a pass.
+    # A declared region whose marker is gone is a stale manifest entry, not a pass.
     for key in PROPOSAL_REGIONS:
         if key not in doc:
             failures.append('PROPOSAL_REGIONS names %r but no such region is on the page — the '
@@ -805,7 +826,7 @@ def audit(promises, doc, runs, exists, read_test):
         if tier not in TIERS:
             die(f"{pid}: unknown tier {tier!r} — allowed: {', '.join(TIERS)}")
 
- # 🔴 THE RULE THAT MAKES TIER SAFE. A weak promise may never be hidden.
+        # 🔴 THE RULE THAT MAKES TIER SAFE. A weak promise may never be hidden.
         if tier == 'TRACKED' and status not in TRACKABLE:
             failures.append(
                 f"{pid}: status {status} may NOT be TRACKED. Only {'/'.join(sorted(TRACKABLE))} "
@@ -818,7 +839,7 @@ def audit(promises, doc, runs, exists, read_test):
             owner[status] += 1
         mark = STATUS[status][0]
 
- # 1. the sentence must still be on the page
+        # 1. the sentence must still be on the page
         if phrase not in doc:
             failures.append(
                 f"{pid}: the page no longer contains its promise text.\n"
@@ -827,27 +848,27 @@ def audit(promises, doc, runs, exists, read_test):
                 f"         or it was deleted (say why — a deleted promise is a product change).")
             continue
 
- # 2. an OWNER promise must show its derived status IMMEDIATELY BEFORE the sentence,
- # and that sentence must actually start there.
- #
- # 🔴 This replaced a ±220-character WINDOW. A window is a proximity proxy: it passed when
- # ANY matching mark happened to sit nearby, which is how a NOT-BUILT row was satisfied by an
- # unrelated `🔴 admin only` in a table. Adjacency is the property actually wanted, so it is
- # the property actually checked.
+        # 2. an OWNER promise must show its derived status IMMEDIATELY BEFORE the sentence,
+        #    and that sentence must actually start there.
+        #
+        # 🔴 This replaced a ±220-character WINDOW. A window is a proximity proxy: it passed when
+        # ANY matching mark happened to sit nearby, which is how a NOT-BUILT row was satisfied by an
+        # unrelated `🔴 admin only` in a table. Adjacency is the property actually wanted, so it is
+        # the property actually checked.
         idx = doc.index(phrase)
         if cspan and cspan[0] <= idx < cspan[1]:
             failures.append(
                 f"{pid}: its promise text lives INSIDE the caller legend, which explains "
                 f"{CALLER_MARKS} and makes no promise. Anchor it to a sentence that makes a claim.")
             continue
- # 🔴 CHECK 4 — THE ANCHOR MUST BE ABOUT THE PROMISE.
- # Every placement check can pass on a sentence that says something else. P-034 anchored
- # inside the CALLER LEGEND and P-038 — a "SPT can be moved between chains" promise —
- # anchored to the "**What SPT cannot do**" LABEL. Both began a sentence, neither touched a
- # caller mark, and both were flatly wrong. Shared vocabulary is what notices.
- # 🔴 An anchor with NO content words cannot state anything, and treating that as a pass
- # is the "a check that inspected zero items must FAIL" hole: P-072 cited "Who from, who
- # to, how" — all stopwords — and skipped check 4 entirely.
+        # 🔴 CHECK 4 — THE ANCHOR MUST BE ABOUT THE PROMISE.
+        # Every placement check can pass on a sentence that says something else. P-034 anchored
+        # inside the CALLER LEGEND and P-038 — a "SPT can be moved between chains" promise —
+        # anchored to the "**What SPT cannot do**" LABEL. Both began a sentence, neither touched a
+        # caller mark, and both were flatly wrong. Shared vocabulary is what notices.
+        # 🔴 An anchor with NO content words cannot state anything, and treating that as a pass
+        # is the "a check that inspected zero items must FAIL" hole: P-072 cited "Who from, who
+        # to, how" — all stopwords — and skipped check 4 entirely.
         pt, at = _tokens(promise), _tokens(phrase)
         if not at and pid not in ANCHOR_EXEMPT:
             failures.append(
@@ -894,10 +915,26 @@ def audit(promises, doc, runs, exists, read_test):
                     f"         likely on the wrapped second line of a paragraph. Re-anchor to the\n"
                     f"         start of the sentence the promise is actually made in.")
 
- # 3/4. PROVEN must name a real, RUN test containing the named assertion
+        # 3/4. PROVEN must name a real, RUN test containing the named assertion
         if status == 'PROVEN':
             if not pin or not assertion:
                 die(f"{pid}: PROVEN requires both a pin file and an assertion string")
+            if pin.endswith('.ts'):
+                if pin not in DEVNET_DRIVERS:
+                    die(f"{pid}: {pin!r} is a devnet-tier pin but is not in DEVNET_DRIVERS. "
+                        f"Register it there, so a stray driver cannot pin a promise.")
+                if not exists(pin):
+                    failures.append(f"{pid}: devnet driver {pin} does not exist.")
+                    continue
+                src = read_test(pin)
+                if assertion not in src:
+                    failures.append(
+                        f"{pid}: devnet driver {pin} does not contain its named assertion.\n"
+                        f"         looked for: {assertion!r}\n"
+                        f"         A pin whose assertion moved is a pin asserting nothing.")
+                counts.setdefault('devnet', 0)
+                counts['devnet'] += 1
+                continue
             if '/' in pin or ':' in pin:
                 die(f"{pid}: pin {pin!r} must be a BARE filename inside {TEST_DIR} — no directory, "
                     f"no line range. Both shapes appear in the mapping pass and both break the "
@@ -920,20 +957,20 @@ def audit(promises, doc, runs, exists, read_test):
                     f"{pid}: {pin} does not contain its named assertion.\n"
                     f"         looked for: {assertion!r}\n"
                     f"         A pin whose assertion moved is a pin asserting nothing.")
- # 🔴 AND THE ASSERTION MUST BE LIVE CODE, NOT A COMMENT. The containment check above
- # is satisfied by a string sitting in a comment, which is how P-078 stayed ✅ PROVEN
- # for weeks against an assertion the suite had DELETED — the quoted string survived
- # in the comment EXPLAINING the deletion. A pin that reads its own obituary is worse
- # than no pin, because it renders a ✅ on the founder page.
- #
- # 🔴 MUST-FAIL FIXTURES ARE EXEMPT, AND THAT IS NOT A LOOPHOLE. Their expected error
- # is registered in run-tests.sh's MUSTFAIL map and asserted from OUTSIDE, on the exit
- # code AND the error text, because a failing module `load` is a compile-time abort
- # that `expect-failure` cannot catch (measured, a later change). So the string legitimately
- # appears only in the fixture's header comment, and flagging it would be a FALSE
- # POSITIVE — measured: this check flagged P-127 on exactly that basis before the
- # exemption existed, and "re-anchoring" it would have broken a correct, stronger pin.
- # A gate that cries wolf trains the reader to skip it.
+            # 🔴 AND THE ASSERTION MUST BE LIVE CODE, NOT A COMMENT. The containment check above
+            # is satisfied by a string sitting in a comment, which is how P-078 stayed ✅ PROVEN
+            # for weeks against an assertion the suite had DELETED — the quoted string survived
+            # in the comment EXPLAINING the deletion. A pin that reads its own obituary is worse
+            # than no pin, because it renders a ✅ on the founder page.
+            #
+            # 🔴 MUST-FAIL FIXTURES ARE EXEMPT, AND THAT IS NOT A LOOPHOLE. Their expected error
+            # is registered in run-tests.sh's MUSTFAIL map and asserted from OUTSIDE, on the exit
+            # code AND the error text, because a failing module `load` is a compile-time abort
+            # that `expect-failure` cannot catch (measured, a later change). So the string legitimately
+            # appears only in the fixture's header comment, and flagging it would be a FALSE
+            # POSITIVE — measured: this check flagged P-127 on exactly that basis before the
+            # exemption existed, and "re-anchoring" it would have broken a correct, stronger pin.
+            # A gate that cries wolf trains the reader to skip it.
             elif not pin.endswith('.repl-must-fail') and not any(
                     assertion in ln for ln in src.splitlines()
                     if not ln.lstrip().startswith(';')):
@@ -948,9 +985,9 @@ def audit(promises, doc, runs, exists, read_test):
                 die(f"{pid}: status {status} must not name a pin ({pin!r}/{assertion!r}) — "
                     f"only PROVEN is pinned, and a half-filled row reads as stronger than it is")
 
- # 5. THE PAGE AND THE MANIFEST MUST AGREE ON HOW MANY MARKS EXIST.
- # Asserted the way SUITES is asserted — want vs have, per status, with the difference named.
- # This is what catches a hand-written mark nobody derived, and an OWNER row silently dropped.
+    # 5. THE PAGE AND THE MANIFEST MUST AGREE ON HOW MANY MARKS EXIST.
+    # Asserted the way SUITES is asserted — want vs have, per status, with the difference named.
+    # This is what catches a hand-written mark nobody derived, and an OWNER row silently dropped.
     if any(owner.values()) and not had_legend:
         die(f"{DOC} has OWNER promises but no {LEGEND_OPEN} … {LEGEND_CLOSE} block. The legend "
             f"explains the marks to the founder and must be delimited so its own marks are not "
@@ -960,10 +997,10 @@ def audit(promises, doc, runs, exists, read_test):
             f"legend spans MORE THAN ONE LINE and must be delimited as a REGION — excluding it by "
             f"matching its first line left the second line eligible, and a mark landed there.")
 
- # 6. NO STATUS MARK MAY TOUCH A CALLER MARK, IN EITHER ORDER.
- # `✅ 🔴 disburse-tranche` reads as one compound symbol, and the two vocabularies mean
- # unrelated things (proven vs admin-only). Both orders are checked because the previous
- # self-check only compared status marks to OTHER STATUS MARKS and saw none of these.
+    # 6. NO STATUS MARK MAY TOUCH A CALLER MARK, IN EITHER ORDER.
+    # `✅ 🔴 disburse-tranche` reads as one compound symbol, and the two vocabularies mean
+    # unrelated things (proven vs admin-only). Both orders are checked because the previous
+    # self-check only compared status marks to OTHER STATUS MARKS and saw none of these.
     for m in re.finditer(f'([{_SM}]\\s*[{CALLER_MARKS}])|([{CALLER_MARKS}]\\s*[{_SM}])', body):
         failures.append(
             f"a status mark touches a caller mark ({m.group(0)!r}) on line "
@@ -1021,72 +1058,72 @@ def self_test():
     """Every branch here must behave as named, or the gate refuses to run at all."""
     checks = []
 
- # control — the shape the gate is supposed to accept must actually pass, or every
- # 'FAIL' below proves nothing (a gate that always fails is as broken as one that never does)
+    # control — the shape the gate is supposed to accept must actually pass, or every
+    # 'FAIL' below proves nothing (a gate that always fails is as broken as one that never does)
     (res, err) = _harness(list(_ROWS_OK), _DOC_OK)
     checks.append(('control: a valid manifest passes', res is not None and not res[0], err))
 
- # BRANCH 1 (founder-requested): demote an unpinned promise to TRACKED → must FAIL
+    # BRANCH 1 (founder-requested): demote an unpinned promise to TRACKED → must FAIL
     rows = [('P-1', 'a weak promise nobody pinned', 'a weak promise', 'BUILT-UNPINNED', 'TRACKED', '', ''), _ROWS_OK[1]]
     (res, err) = _harness(rows, _DOC_OK)
     hit = res is not None and any('may NOT be TRACKED' in f for f in res[0])
     checks.append(('branch 1: BUILT-UNPINNED demoted to TRACKED is rejected', hit, err))
 
- # the same rule must hold for the other two weak statuses, or it is a special case not a rule
+    # the same rule must hold for the other two weak statuses, or it is a special case not a rule
     for st in ('PROCEDURE', 'NOT-BUILT'):
         rows = [('P-1', 'a weak promise nobody pinned', 'a weak promise', st, 'TRACKED', '', ''), _ROWS_OK[1]]
         (res, err) = _harness(rows, _DOC_OK)
         hit = res is not None and any('may NOT be TRACKED' in f for f in res[0])
         checks.append((f'branch 1: {st} demoted to TRACKED is rejected', hit, err))
 
- # BRANCH 2 (founder-requested): silently drop a row → must FAIL.
- # An OWNER drop leaves its mark orphaned on the page; a TRACKED drop leaves no mark at
- # all, which is why EXPECTED_TOTAL exists. Both are proven here.
+    # BRANCH 2 (founder-requested): silently drop a row → must FAIL.
+    # An OWNER drop leaves its mark orphaned on the page; a TRACKED drop leaves no mark at
+    # all, which is why EXPECTED_TOTAL exists. Both are proven here.
     (res, err) = _harness([_ROWS_OK[1]], _DOC_OK, total=2)
     checks.append(('branch 2a: dropping a TRACKED row trips EXPECTED_TOTAL',
                    res is None and err is not None and 'EXPECTED_TOTAL' in err, None))
 
- # Dropping the OWNER row is what strands its mark. (Dropping the TRACKED row strands
- # nothing — it never rendered — which is precisely why 2a needs EXPECTED_TOTAL and why
- # the two branches are not interchangeable.)
+    # Dropping the OWNER row is what strands its mark. (Dropping the TRACKED row strands
+    # nothing — it never rendered — which is precisely why 2a needs EXPECTED_TOTAL and why
+    # the two branches are not interchangeable.)
     (res, err) = _harness([_ROWS_OK[1]], _DOC_OK, total=1)
     hit = res is not None and any('mark count for' in f for f in res[0])
     checks.append(('branch 2b: dropping an OWNER row strands its mark', hit, err))
 
- # a hand-written mark the manifest never derived
+    # a hand-written mark the manifest never derived
     (res, err) = _harness(list(_ROWS_OK), _DOC_OK + '\n- ✅ **hand-written**\n')
     hit = res is not None and any('hand-written status' in f for f in res[0])
     checks.append(('extra: a hand-written mark is caught', hit, err))
 
- # an empty manifest is a failure, not a pass
+    # an empty manifest is a failure, not a pass
     (res, err) = _harness([], _DOC_OK, total=0)
     checks.append(('extra: an empty manifest fails', res is not None and bool(res[0]), err))
 
- # a PROVEN row whose assertion is absent
+    # a PROVEN row whose assertion is absent
     rows = [_ROWS_OK[0], ('P-2', 'a strong promise with a pin', 'a strong promise', 'PROVEN', 'TRACKED', 'x.repl', 'MISSING')]
     (res, err) = _harness(rows, _DOC_OK)
     hit = res is not None and any('does not contain its named assertion' in f for f in res[0])
     checks.append(('extra: a moved assertion is caught', hit, err))
 
- # a PROVEN row whose pin is not in SUITES
+    # a PROVEN row whose pin is not in SUITES
     rows = [_ROWS_OK[0], ('P-2', 'a strong promise with a pin', 'a strong promise', 'PROVEN', 'TRACKED', 'unrun.repl', 'ASSERT')]
     (res, err) = _harness(rows, _DOC_OK)
     hit = res is not None and any('named in NO runner manifest' in f for f in res[0])
     checks.append(('extra: a pin that never runs is caught', hit, err))
 
- # the old mapping-format pin shapes must be refused by shape
+    # the old mapping-format pin shapes must be refused by shape
     for bad in ('pact/test/x.repl', 'x.repl:12-34'):
         rows = [_ROWS_OK[0], ('P-2', 'a strong promise with a pin', 'a strong promise', 'PROVEN', 'TRACKED', bad, 'ASSERT')]
         (res, err) = _harness(rows, _DOC_OK)
         checks.append((f'extra: pin shape {bad!r} is refused',
                        res is None and err is not None and 'BARE filename' in err, None))
 
- # --- PLACEMENT (founder, round two). The previous self-checks tested status-vs-status
- # adjacency and line-start. Both are PROXIES for the properties actually wanted, and both
- # passed while the page carried 7 status/caller adjacencies, 24 mid-sentence marks and a
- # mark inside the caller legend. These test the real properties.
+    # --- PLACEMENT (founder, round two). The previous self-checks tested status-vs-status
+    # adjacency and line-start. Both are PROXIES for the properties actually wanted, and both
+    # passed while the page carried 7 status/caller adjacencies, 24 mid-sentence marks and a
+    # mark inside the caller legend. These test the real properties.
 
- # (1) a mark on the WRAPPED SECOND LINE of a paragraph does not begin a sentence
+    # (1) a mark on the WRAPPED SECOND LINE of a paragraph does not begin a sentence
     doc = _CALLER + _PLEG + ("\n- a sentence that wraps across\n"
                              "  \U0001F7E1 a weak promise on the next line.\n"
                              "\n- a strong promise that is tracked.\n")
@@ -1094,7 +1131,7 @@ def self_test():
     hit = res is not None and any('does not BEGIN a sentence' in f for f in res[0])
     checks.append(('placement: a mark on a wrapped continuation line is rejected', hit, err))
 
- # the same shape at a genuine sentence start must PASS, or the check is just "reject wraps"
+    # the same shape at a genuine sentence start must PASS, or the check is just "reject wraps"
     doc = _CALLER + _PLEG + ("\n- a sentence that wraps across\n"
                              "  and ends here.\n"
                              "\n- \U0001F7E1 a weak promise that is visible.\n"
@@ -1103,29 +1140,29 @@ def self_test():
     checks.append(('placement: control — a real sentence start passes',
                    res is not None and not res[0], err))
 
- # (2) a status mark touching a caller mark, IN EITHER ORDER
+    # (2) a status mark touching a caller mark, IN EITHER ORDER
     for order, extra in (('status,caller', "\n> ✅ \U0001F534 unrelated.\n"),
                          ('caller,status', "\n> \U0001F534 ✅ unrelated.\n")):
         (res, err) = _harness(list(_ROWS_OK), _DOC_OK + extra)
         hit = res is not None and any('touches a caller mark' in f for f in res[0])
         checks.append((f'placement: status/caller adjacency ({order}) is rejected', hit, err))
 
- # (3) an anchor INSIDE the caller legend — including its SECOND line, which is the one the
- # first fix left eligible
+    # (3) an anchor INSIDE the caller legend — including its SECOND line, which is the one the
+    # first fix left eligible
     for where, anchor in (('line 1', 'holder'), ('line 2', 'the contract itself only')):
         rows = [('P-1', 'a weak promise about ' + anchor, anchor, 'BUILT-UNPINNED', 'OWNER', '', ''), _ROWS_OK[1]]
         (res, err) = _harness(rows, _DOC_OK)
         hit = res is not None and any('INSIDE the caller legend' in f for f in res[0])
         checks.append((f'placement: an anchor in the caller legend ({where}) is rejected', hit, err))
 
- # the caller legend must be DELIMITED at all
+    # the caller legend must be DELIMITED at all
     doc = _PLEG + "\n- \U0001F7E1 a weak promise that is visible.\n\n- a strong promise that is tracked.\n"
     (res, err) = _harness(list(_ROWS_OK), doc)
     checks.append(('placement: an undelimited caller legend is a tooling failure',
                    res is None and err is not None and 'caller-legend' in err, None))
 
- # (4) the mark must be ADJACENT, not merely nearby — the ±220 window this replaced would
- # have passed this document
+    # (4) the mark must be ADJACENT, not merely nearby — the ±220 window this replaced would
+    # have passed this document
     doc = _CALLER + _PLEG + ("\n- \U0001F7E1 something else entirely on this line.\n"
                              "\n- a weak promise that is visible.\n"
                              "\n- a strong promise that is tracked.\n")
@@ -1133,21 +1170,21 @@ def self_test():
     hit = res is not None and any('immediately precedes' in f for f in res[0])
     checks.append(('placement: a nearby-but-not-adjacent mark is rejected', hit, err))
 
- # (5) CHECK 4 — an anchor that does not state its promise. This is the ONLY check that would
- # have caught P-034 (anchored in the caller legend) and P-038 (a CAN promise anchored to the
- # "cannot" label): both were well-formed sentence starts pointing at the wrong sentence.
+    # (5) CHECK 4 — an anchor that does not state its promise. This is the ONLY check that would
+    # have caught P-034 (anchored in the caller legend) and P-038 (a CAN promise anchored to the
+    # "cannot" label): both were well-formed sentence starts pointing at the wrong sentence.
     rows = [('P-1', 'awards are paid in KDA and never expire', 'a weak promise',
              'BUILT-UNPINNED', 'OWNER', '', ''), _ROWS_OK[1]]
     (res, err) = _harness(rows, _DOC_OK)
     hit = res is not None and any('does not appear to state its promise' in f for f in res[0])
     checks.append(('anchor: a promise anchored to an unrelated sentence is caught', hit, err))
 
- # control — a legitimate anchor must NOT trip it, or the check is just noise
+    # control — a legitimate anchor must NOT trip it, or the check is just noise
     (res, err) = _harness(list(_ROWS_OK), _DOC_OK)
     checks.append(('anchor: control — a matching anchor passes',
                    res is not None and not res[0], err))
 
- # an anchor made only of stopwords must FAIL, not skip the check
+    # an anchor made only of stopwords must FAIL, not skip the check
     rows = [('P-1', 'awards never expire once earned', 'who from, who to, how',
              'BUILT-UNPINNED', 'OWNER', '', ''), _ROWS_OK[1]]
     (res, err) = _harness(rows, _CALLER + _PLEG +
@@ -1156,7 +1193,7 @@ def self_test():
     hit = res is not None and any('no content words' in f for f in res[0])
     checks.append(('anchor: an anchor of only stopwords is rejected', hit, err))
 
- # (6) a mark in a table row's FIRST column, where the caller glyph and function name live
+    # (6) a mark in a table row's FIRST column, where the caller glyph and function name live
     doc = (_CALLER + _PLEG +
            "\n| \U0001F7E1 a weak promise | what it takes | does something. |\n"
            "\n- a strong promise that is tracked.\n")
@@ -1166,8 +1203,8 @@ def self_test():
     hit = res is not None and any('FIRST column' in f for f in res[0])
     checks.append(('anchor: a mark in a table\'s first column is rejected', hit, err))
 
- # control — the SAME promise in a later column of the same table is fine, which is what
- # makes a table-cell anchor legal at all
+    # control — the SAME promise in a later column of the same table is fine, which is what
+    # makes a table-cell anchor legal at all
     doc = (_CALLER + _PLEG +
            "\n| \U0001F7E2 `fn` | what it takes | \U0001F7E1 a weak promise that is visible. |\n"
            "\n- a strong promise that is tracked.\n")
@@ -1203,8 +1240,10 @@ def main():
     runs = runner_manifests(read(SUITE_RUNNER))
     failures, counts = audit(
         PROMISES, doc, runs,
-        lambda pin: os.path.isfile(os.path.join(TEST_DIR, pin)),
-        lambda pin: read(os.path.join(TEST_DIR, pin)),
+        lambda pin: os.path.isfile(os.path.join(
+            DEVNET_DIR if pin.endswith('.ts') else TEST_DIR, pin)),
+        lambda pin: read(os.path.join(
+            DEVNET_DIR if pin.endswith('.ts') else TEST_DIR, pin)),
     )
 
     for f in failures:
