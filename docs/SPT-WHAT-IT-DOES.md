@@ -54,10 +54,7 @@ with KDA).
 
 **What SPT cannot do**
 
-- 🟡 **Mint more than 100,000 tokens**, or burn any. The Kadena platform fix this depended on
-  **went live on mainnet in August 2026** — so this is now true on the network SPT deploys to.
-  The rule that produced it does not go away: the fix is re-measured on the target chain at
-  deploy time, in the same session, never assumed from this page.
+- 🟡 **Mint more than 100,000 tokens**, or burn any.
 - 📋 **Decide a vote.** Each chain counts its own votes; the winner is added up outside the contract.
 - 🟡 **Force an award.** The company is never obliged to declare one.
 - ✅ **Stop the admin from changing the rules — until the contract is frozen.** Everything on this
@@ -111,9 +108,8 @@ receive, not merely hold them — proven with a real 2-of-3 account, because "it
 > tokens: they vote and they earn awards, exactly like anyone else's.
 >
 > ✅ This means **the administrator controls where up to 70,000 tokens end up** — worth restating
-> plainly because it is the single biggest discretion in the design. Two consequences follow:
-> a lawyer should look at this before it is used on the real network, and tokens the
-> administrator sends to a voting account **do vote** — only the reserves themselves are excluded.
+> plainly because it is the single biggest discretion in the design. Tokens the administrator
+> sends to a voting account **do vote** — only the reserves themselves are excluded.
 
 ---
 
@@ -184,7 +180,7 @@ sale.
 > attempt being refused outright. The floor needs no manual step at launch; it is already correct.
 >
 > 🔴 **AND THE HONEST LIMIT OF THAT PROTECTION: the floor stops ONE device, not TWO.** An
-> offensive review measured it (August 2026): with both governance devices, the floor and the price
+> offensive review measured it: with both governance devices, the floor and the price
 > can each be lowered to the hard minimum and the whole 20,000-token reserve sells for **0.2 KDA**.
 > That is not a hole — pricing the sale is exactly what two devices are *for*, and the hard minimum
 > is a **fat-finger guard, not a value guarantee**. But it means the floor is protection against a
@@ -282,17 +278,15 @@ tokens, the number shown is the most that can leave for that destination in that
 not the size of one payment. If the transaction makes several payments to the same place, they all
 come out of the one approved number, and it stops when that number is used up.
 
-This was **not** true until August 2026, and the difference mattered: approving 100 tokens once
-allowed the same approval to be used again and again, and the whole 15,000-token pot could leave
-on a signature that displayed 100. A security review found it, and the contract now keeps a
-running total. Nothing about who may approve changed — it is still the administrator, two devices.
+The contract keeps a running total, so an approval naming 100 tokens moves 100 in total and no
+more, however many payments it is spread across. Who may approve it: the administrator, two devices.
 
 🔴 **AND IT IS A LIMIT ON ONE APPROVAL, NOT A LIFETIME CAP — read this before relying on it.**
 "Spending limit" can be read as "this is all that can ever leave", and that is **not** what it
 means. Each signed approval limits **that one transaction**. If a second approval is signed for
 the same tranche and destination later, that second one starts from its own fresh number.
 
-Measured on a real test network in August 2026, not argued: the same approval naming 100 tokens was
+Measured on a real test network, not argued: the same approval naming 100 tokens was
 submitted twice as two separate transactions, and each time the contract reported the same figure
 remaining — `of 100.0 managed`. A lifetime cap would have reported less the second time.
 
@@ -307,7 +301,7 @@ not carry a limit. The operator runbook covers how this is signed; nothing else 
 
 `TRANSFER` is a holder's permission, not an administrator's; what it does and does not protect a holder
 from on today's engine is covered under *Holding and moving tokens*, and that caveat rests on a platform
-fix, not on ours — and that fix went live on mainnet in August 2026.
+fix, not on ours — and that fix is active on the network SPT deploys to.
 
 ---
 
@@ -329,30 +323,22 @@ fix, not on ours — and that fix went live on mainnet in August 2026.
 | 🟢 `get-launch-reserve` | — | The sale reserve's account name. Fixed in the contract itself, so it is the same on every chain and cannot be entered wrong at setup. |
 | 🟢 `precision` | — | How many decimal places a token amount can have: 12. |
 
-> 🔴 **SUPPLY: this section described a live platform weakness. IT WAS FIXED ON MAINNET IN
-> AUGUST 2026, and the two "cannot"s above are now true on the network SPT deploys to.**
+> 🔴 **SUPPLY: the two "cannot"s above hold on the network SPT deploys to.**
 >
-> There was a bug in the Pact engine itself — not in our contract — that let *another* contract
-> reach into ours. While it was live that meant **tokens could be created from nothing** (our own
-> test suite proves it by minting 987,654,321 SPT with no signature at all) and **tokens could be
-> destroyed** (a foreign contract could burn a holder's balance). One route could even ride a
-> holder's ordinary signature for a small transfer to mint a large amount, while their own balance
-> was untouched.
+> They hold because of a fix in the Pact engine itself, not in our contract. Without it another
+> contract can reach into ours: tokens created from nothing, or a holder's balance burned, and one
+> route can even ride a holder's ordinary signature for a small transfer to mint a large amount
+> while their own balance is untouched. The fix ships in Pact 5.4.1 / chainweb-node 3.2 and is
+> active at the `Chainweb32` fork. **It is read from the chain's own feature flags, never taken
+> from a dashboard.**
 >
-> It was fixed in Pact 5.4.1 / chainweb-node 3.2 and switched on at the `Chainweb32` fork.
-> **Measured on mainnet in August 2026: fork number 1, read from the chain-0 tip's own feature flags
-> rather than taken from a dashboard.** Before that day this was known, deliberately accepted, and
-> **measured by tests that assert the broken behaviour on purpose** so we would find out the moment
-> it changed.
+> 🔴 **THREE THINGS THIS DOES NOT RELAX.** The fix is re-measured active on the target chain in
+> the same session as the deploy, never assumed. The contract's own defences against that reach
+> **stay in it** — they freeze, a frozen module outlives every engine version, and a later platform
+> regression would be unfixable. And the tests that assert the unprotected behaviour stay too: they
+> describe the *local* test engine, not mainnet, so if one goes red it gets triaged, never relaxed.
 >
-> 🔴 **THREE THINGS THAT DO NOT CHANGE NOW THAT IT IS FIXED.** The hard rule stands: the fix is
-> re-measured active on the target chain in the same session as the deploy, never assumed. The
-> defences built while it was live **stay in the contract** — they freeze, a frozen module outlives
-> every engine version, and a later platform regression would be unfixable. And the tests that
-> assert the old broken behaviour stay too: they describe the *local* test engine, not mainnet, so
-> if one goes red it gets triaged, never relaxed.
->
-> 🟡 **After the fix**, tokens cannot be destroyed by any function here, and every debit is matched
+> 🟡 **Tokens cannot be destroyed** by any function here, and every debit is matched
 > by a credit. What is left is a cross-chain transfer that never finishes its second step. That can
 > happen two ways: you never send it, or **somebody else blocks it** — see the warning below. Either
 > way the tokens are not destroyed. They sit part-way, still owed to the receiver you named, and
@@ -385,7 +371,7 @@ fix, not on ours — and that fix went live on mainnet in August 2026.
 > 🔴 **This risk is accepted deliberately.** SPT behaves exactly like Kadena's own KDA contract,
 > which carries the same exposure: *"if the coin contract can accept the risk of burn
 > coins for using a none principal guard on the other end chain, we can do it as well."* **That
-> parity is real and was re-measured in August 2026: KDA's own contract can be blocked in exactly
+> parity is real: KDA's own contract can be blocked in exactly
 > this way, by the same unsigned stranger, after the sender has already been debited.** The
 > trade was a narrow protection against schedule, and against locking nickname-account holders out
 > of receiving cross-chain at all. **The consequence is that this warning, not the code, is now
@@ -723,20 +709,19 @@ their own gas.
    chain at deploy time (point 2); the award-round instructions are corrected before any award round
    is declared; and the freeze instructions are corrected before the contract is ever locked. The
    first is routine, the other two are corrections to *this project's paperwork*, not to the
-   contract. 📋 **A lawyer should review the treasury-sending power before it is used on the real
-   network** — building it now was necessary (it is impossible to add after freezing); using it is a
-   separate decision.
+   contract. The treasury-sending power is built now because it cannot be added after freezing;
+   whether it is ever used is a separate decision.
    > ⚠️ **Do not trust this paragraph on its own.** Hand-written status lines in this project have
    > gone stale in this project before now. The internal review reports hold what each audit
    > actually measured; if this paragraph and a report disagree, the report is right.
 1. 📋 **No contract code is deployed anywhere** — not mainnet, not testnet. **But the namespace and
-   both admin keysets ARE live on mainnet, on all 20 chains, since August 2026, and that part is
+   both admin keysets ARE live on mainnet, on all 20 chains, and that part is
    permanent** — it is the governance authority the three devices control, and it cannot be
    un-created. What is not yet on the network is the contract code itself.
 2. 📋 **Nothing deploys until the Kadena platform fix is live on the target chain**, measured there at
    the time, never assumed. That fix stops *other people's contracts* from reaching into SPT.
-   **It went live on mainnet in August 2026** — so this condition is now satisfiable, and it is still
-   re-measured per chain at deploy time rather than inherited from this line.
+   **That fix is active on mainnet.** It is still re-measured per chain at deploy time rather than
+   inherited from this line.
 2b. 🔴 **One permanent dependency on Kadena that cannot be removed, and it matters before
    the freeze is approved.** SPT talks to KDA through Kadena's own `coin` contract, and the
    blockchain permanently ties our frozen contract to the exact version of `coin` it was built
@@ -767,8 +752,8 @@ their own gas.
 
    That is the trust the design asks of holders, and it is worth stating plainly anywhere it matters.
 
-> 🔴 **"The treasury cannot vote" is NO LONGER TRUE, and was never a guarantee the contract could
-> make.** 🟡 Treasury tokens sent to someone become ordinary tokens that vote
+> 🔴 **The contract cannot keep treasury tokens out of voting once they leave the reserve.**
+> 🟡 Treasury tokens sent to someone become ordinary tokens that vote
 > and earn — that is the design. 📋 The contract only keeps *named
 > accounts* out of voting, never the tokens behind them: one person can hold both an excluded
 > account and an ordinary one, and no contract can tell them apart. This is a disclosure and

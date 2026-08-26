@@ -269,7 +269,12 @@ TRACKABLE = {'PROVEN'}
 # one section agent and are merged in the manifest below, by name. Anchoring to the EXTERNAL number
 # rather than to len(PROMISES) is the point: a manifest compared against itself always agrees,
 # and a TRACKED row can be dropped without any mark going missing to betray it.
-EXPECTED_TOTAL = 153   # 154 -> 153: P-160b RETIRED (a later change). It described three money-movers the
+EXPECTED_TOTAL = 152   # 153 -> 152: P-032 RETIRED. It read "a lawyer should review the
+                       # 70,000-token admin discretion before it is used on the real network" — a
+                       # legal opinion, not something the modules do. This page states what the
+                       # contract can and cannot do; whether counsel reviews a power is a decision
+                       # taken elsewhere and does not belong in a promise manifest.
+                       # 154 -> 153: P-160b RETIRED (a later change). It described three money-movers the
                        # contract did NOT enforce; the founder made them @managed, so the absence it
                        # named is gone and the row goes with it. P-160 now covers all four.
 
@@ -519,7 +524,7 @@ PROMISES = [
     # The pin now points at the half that REMAINS falsifiable: the guard must derive that pin.
     ('P-115', 'The sale-reserve address cannot be set wrong at setup: it is fixed in the contract, and the key supplied with it must be the one that produces it.', "The sale reserve's account",                     'PROVEN',         'TRACKED', 'SPT-init.repl',  'launch reserve guard does not derive the pinned'),
     ('P-045', 'A token amount can have at most 12 decimal places.',                                        'How many decimal places',                                                                       'PROVEN',         'TRACKED', 'SPT.repl',       'precision 12'),
-    ('P-046', 'After the platform fix, tokens cannot be destroyed by any function here and every debit is matched by a credit.', '**After the fix**, tokens',                                                                     'BUILT-UNPINNED', 'OWNER',   '',                            ''),
+    ('P-046', 'Tokens cannot be destroyed by any function here and every debit is matched by a credit.', '**Tokens cannot be destroyed** by any function here',                                                                     'BUILT-UNPINNED', 'OWNER',   '',                            ''),
     ('P-048', 'A vote is always yes or no — never multiple choice.',                                       'Votes are **yes or no',                                                                         'BUILT-UNPINNED', 'OWNER',   '',                            ''),
     ('P-049', 'A vote must run for between 3 and 14 days, and those limits can never be changed after the contract is frozen.', 'Voting must open **at',                                                                         'PROVEN',         'TRACKED', 'smartpacts-promises.repl',    'duration below 72h minimum'),
     ('P-050', 'One cancelled copy voids the whole result — a total must not be published if any of the 20 chains cancelled.', 'One cancelled copy voids',                                                                      'PROCEDURE',      'OWNER',   '',                            ''),
@@ -636,7 +641,6 @@ PROMISES = [
     ('P-116', 'Setup writes the configured values to the public event log at the moment they are fixed.',  'The value is written',                                                                          'PROVEN',         'OWNER',   'smartpacts-founder-allocations.repl',     'five TRANCHE-LOCKED events: one per founder row + the two fixed rows'),
     ('P-119', 'The gasless helper contract is not part of the first deployment — everything in this product ships with the caller paying their own gas.', '**It is not part of the first',                                                                 'PROCEDURE',      'OWNER',   '',                            ''),
     ('P-121', 'The contract has been reviewed at exactly the version that would deploy, with no CRITICAL, no HIGH and nothing in the contract logic.', '**The contract has been reviewed at exactly the version that would deploy',                        'PROCEDURE',      'OWNER',   '',                            ''),
-    ('P-032', 'A lawyer should review the 70,000-token admin discretion before it is used on the real network.', '**A lawyer should review',                                                                      'PROCEDURE',      'OWNER',   '',                            ''),
     ('P-122', 'No contract code is deployed anywhere, but the namespace and both admin keysets are live on mainnet on all 20 chains and that part is permanent.', '**No contract code is deployed anywhere**',                        'PROCEDURE',      'OWNER',   '',                            ''),
     ('P-123', 'Nothing deploys until the Kadena platform fix is live on the chain being deployed to, measured there at the time.', '**Nothing deploys until',                                                                       'PROCEDURE',      'OWNER',   '',                            ''),
     ('P-124', 'Until the contract is frozen, whoever holds the admin key can upgrade it in place and change how it behaves.', 'Until then, whoever holds',                                                                     'PROVEN',         'OWNER',   'smartpacts-upgrade-emergency.repl', 'balances survived'),
