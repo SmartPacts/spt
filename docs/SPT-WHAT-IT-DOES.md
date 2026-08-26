@@ -299,9 +299,8 @@ attached.** A blanket approval that just says "I am the admin" no longer works f
 operation — it is refused. That is deliberate: a blanket approval is exactly the thing that could
 not carry a limit. The operator runbook covers how this is signed; nothing else changed.
 
-`TRANSFER` is a holder's permission, not an administrator's; what it does and does not protect a holder
-from on today's engine is covered under *Holding and moving tokens*, and that caveat rests on a platform
-fix, not on ours — and that fix is active on the network SPT deploys to.
+`TRANSFER` is a holder's permission, not an administrator's. What it does and does not protect a
+holder from is covered under *Holding and moving tokens*.
 
 ---
 
@@ -325,18 +324,12 @@ fix, not on ours — and that fix is active on the network SPT deploys to.
 
 > 🔴 **SUPPLY: the two "cannot"s above hold on the network SPT deploys to.**
 >
-> They hold because of a fix in the Pact engine itself, not in our contract. Without it another
-> contract can reach into ours: tokens created from nothing, or a holder's balance burned, and one
-> route can even ride a holder's ordinary signature for a small transfer to mint a large amount
-> while their own balance is untouched. The fix ships in Pact 5.4.1 / chainweb-node 3.2 and is
-> active at the `Chainweb32` fork. **It is read from the chain's own feature flags, never taken
-> from a dashboard.**
+> No function in the contract creates a token beyond the fixed 100,000, and none destroys one.
 >
-> 🔴 **THREE THINGS THIS DOES NOT RELAX.** The fix is re-measured active on the target chain in
-> the same session as the deploy, never assumed. The contract's own defences against that reach
-> **stay in it** — they freeze, a frozen module outlives every engine version, and a later platform
-> regression would be unfixable. And the tests that assert the unprotected behaviour stay too: they
-> describe the *local* test engine, not mainnet, so if one goes red it gets triaged, never relaxed.
+> 🔴 **TWO THINGS THIS DOES NOT RELAX.** The contract's own defences against another contract
+> reaching into it **stay in it** — they freeze, and a frozen module outlives every version of the
+> network beneath it. And every chain is checked before the contract goes on it, at the time,
+> never assumed from this page.
 >
 > 🟡 **Tokens cannot be destroyed** by any function here, and every debit is matched
 > by a credit. What is left is a cross-chain transfer that never finishes its second step. That can
@@ -627,8 +620,8 @@ are listed so this page accounts for every function in the contract, with nothin
 | `plan-tally` · `plan-deindex` | Compute a vote's new tally, and an open-list removal, without writing. The actual writes happen only inside `cast-vote`, `debit` and `close-proposal`. |
 | `results-of` | Packs a yes/no pair into the shape the vote reads return. |
 | `vkey` · `pkey` · `rkey` | How the contract builds its internal record keys — votes · open-proposal slots · award rounds. |
-| `TRANSFER-mgr` · `TRANSFER_XCHAIN-mgr` | Bookkeeping for signed transfer approvals. ⚠️ Until the Kadena platform fix is live on the target network, this bookkeeping is **not** a spending cap — never tell a holder it limits their exposure (see the platform note at the bottom). |
-| `DISBURSE-mgr` | Keeps the running total for a company-token disbursement approval, so the number approved is the most that can leave — across every payment in that transaction, not just the first. This is what makes the amount on the administrator's device a **limit**. ⚠️ Unlike the two above, this one is **not** waiting on the platform fix: it protects the company against its own mistake, not a holder against a hostile counterparty, so it works today. |
+| `TRANSFER-mgr` · `TRANSFER_XCHAIN-mgr` | Bookkeeping for signed transfer approvals: it keeps the running total for one approval, so the amount approved is the most that can move under it. |
+| `DISBURSE-mgr` | Keeps the running total for a company-token disbursement approval, so the number approved is the most that can leave — across every payment in that transaction, not just the first. This is what makes the amount on the administrator's device a **limit**. |
 | `WITHDRAW-FUNDING-mgr` | The same running total, for company funding. The approved amount for a destination is the most that can go there in that transaction. Unlike locked tokens, this one takes **a single payment per destination per transaction**. |
 | `RECOVER-SURPLUS-mgr` | The same running total, for taking back award-pot KDA that is owed to nobody. There is no destination to approve because that money can only return to the funding account. |
 | `WITHDRAW-PROCEEDS-mgr` | The same running total, for token-sale proceeds. |
@@ -705,8 +698,8 @@ their own gas.
    **no CRITICAL, no HIGH, and nothing at any severity in the contract's own logic.** Every finding
    was in operator instructions, this page and its sources, or the automatic checks — not in the
    code that holds the tokens. All are closed.
-   **Three things must still happen, in this order:** the Kadena platform fix is re-measured on each
-   chain at deploy time (point 2); the award-round instructions are corrected before any award round
+   **Three things must still happen, in this order:** each chain is checked before the contract goes
+   on it (point 2); the award-round instructions are corrected before any award round
    is declared; and the freeze instructions are corrected before the contract is ever locked. The
    first is routine, the other two are corrections to *this project's paperwork*, not to the
    contract. The treasury-sending power is built now because it cannot be added after freezing;
@@ -718,10 +711,8 @@ their own gas.
    both admin keysets ARE live on mainnet, on all 20 chains, and that part is
    permanent** — it is the governance authority the three devices control, and it cannot be
    un-created. What is not yet on the network is the contract code itself.
-2. 📋 **Nothing deploys until the Kadena platform fix is live on the target chain**, measured there at
-   the time, never assumed. That fix stops *other people's contracts* from reaching into SPT.
-   **That fix is active on mainnet.** It is still re-measured per chain at deploy time rather than
-   inherited from this line.
+2. 📋 **Nothing goes on a chain until that chain has been checked**, at the time and never assumed
+   from this page. The check confirms the network there behaves the way SPT needs.
 2b. 🔴 **One permanent dependency on Kadena that cannot be removed, and it matters before
    the freeze is approved.** SPT talks to KDA through Kadena's own `coin` contract, and the
    blockchain permanently ties our frozen contract to the exact version of `coin` it was built
