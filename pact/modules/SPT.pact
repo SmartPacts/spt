@@ -48,12 +48,11 @@
 ;; `keys-1`, a spelling that reads as correct and is not, is ACCEPTED by `define-keyset` and fails
 ;; only later at the first `enforce-keyset`, killing every ops operation on that chain FOREVER.
 ;;
-;; 🔴 THE PREDICATE IS READABLE, and an earlier version of this comment said it was not.
-;; That was wrong and it cost a finding: you never read `pred` off the guard — you derive the
-;; PRINCIPAL, whose `w:` form carries the predicate as its suffix, exactly as
-;; `enforce-beneficiary-address` already does for founder addresses 1,800 lines below. The
-;; artifact was applying a weaker standard to the keysets governing the tranches, the funding
-;; and the freeze than to a single beneficiary row.
+;; 🔴 THE PREDICATE IS READABLE, and reading it is not what you might expect: you never take
+;; `pred` off the guard — you derive the PRINCIPAL, whose `w:` form carries the predicate as its
+;; suffix, exactly as `enforce-beneficiary-address` does for founder addresses 1,800 lines below.
+;; That keeps the keysets governing the tranches, the funding and the freeze to the same standard
+;; as a single beneficiary row, rather than a weaker one.
 ;;
 ;; The 46 and the two literals are REPEATED rather than referenced: this runs BEFORE the module
 ;; exists, so EMPTY-KEYSET-PREFIX and BUILTIN-KEYSET-PREDS are not in scope. They must stay in
@@ -696,7 +695,7 @@
   ;; 🔴 THIS MATTERS MORE HERE THAN IN MOST PROJECTS BECAUSE THE SIGNER USES A HARDWARE WALLET,
   ;; AND THE DEVICE RENDERS THE CLIST. Under a tier name it shows a tier name while the same
   ;; signature moves 70% of supply; under `DISBURSE` it shows the tranche, the destination and
-  ;; the amount. The fix is what the device DISPLAYS, not a new restriction on the admin.
+  ;; the amount. What this changes is what the device DISPLAYS, not what the admin may do.
   ;;
   ;; 🔴 ENFORCE THE KEYSET DIRECTLY. Do NOT `compose-capability (ADMIN-GOV)` — the obvious
   ;; shape is the wrong one, because `enforce-keyset` passes whenever the signer's clist names
@@ -2017,9 +2016,9 @@
         ;; the yielded guard, so the squatter can rotate and release the funds at any later block
         ;; — which means there is a party who can DEMAND PAYMENT to do so. Tell a holder
         ;; "extortable", never "lost". Step 0 cannot detect it: it cannot read the target chain.
-        ;; An earlier version refused vanity receivers outright and closed this. It was rolled
-        ;; back deliberately: the reasoning is that coin accepts exactly this risk, so SPT can
-        ;; too, rather than locking vanity holders out of cross-chain delivery.
+        ;; Refusing vanity receivers outright would close this, and SPT deliberately does not:
+        ;; coin accepts exactly this risk, and refusing would lock vanity holders out of
+        ;; cross-chain delivery altogether.
         ;; 🔴 DO NOT "FIX" THIS BY REFUSING VANITY RECEIVERS. Re-opening it is a founder call,
         ;; not an audit finding.
         ;; 🔴 WHAT THAT DECISION DOES **NOT** TOUCH: the `enforce-reserved` below STAYS, and so
