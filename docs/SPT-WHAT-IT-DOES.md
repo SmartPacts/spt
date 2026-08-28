@@ -43,7 +43,7 @@ with KDA).
 - ✅ Hold and move tokens, on any of the 20 chains, and between them.
 - ✅ Let holders vote yes/no on proposals, weighted by the tokens they hold.
 - ✅ Pay awards in KDA, which accumulate until claimed and never expire.
-- ✅ Sell tokens for KDA at a fixed price. **The administrator set that price at 200 KDA per SPT.** The sale
+- ✅ Sell tokens for KDA at a fixed price. The administrator sets the price on-chain. The sale
   opens on deploy day as a *separate, deliberate step* — deploying does not open it. Once open,
   changing the price needs the sale paused and **two** devices, so a wrong price is a public
   wrong price until the administrator takes it down. The floor is set to whatever price the sale
