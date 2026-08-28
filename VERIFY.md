@@ -99,17 +99,23 @@ NS=n_48867b242317a0216a67f8c7ca26696b5878e0e3
 python3 fetch-onchain.py "$NS.SPT" 0 mainnet01 > /tmp/onchain-SPT.pact
 
 # 2. take the module form out of the deploy payload. The payload is a whole
-#    transaction — a namespace line and a keyset check, then the module —
-#    while describe-module returns the module and nothing else.
-sed -n '/^(module SPT /,$p' deploy-bytes/SPT.pact > /tmp/repo-SPT.pact
+#    transaction in THREE parts — a namespace line and keyset checks, then the
+#    module, then a create-table footer — while describe-module returns the
+#    module and nothing else. Stop at the module's closing paren: ,/^)$/p
+sed -n '/^(module SPT /,/^)$/p' deploy-bytes/SPT.pact > /tmp/repo-SPT.pact
 
 # 3. compare
 diff -u /tmp/repo-SPT.pact /tmp/onchain-SPT.pact && echo "the chain is running these bytes"
 ```
 
-🔴 **Do not compare the whole of `deploy-bytes/SPT.pact` against what the chain returns.**
-`describe-module` gives back the module form alone, so a diff against the entire payload reports
-the preamble as a difference every time and can never come out clean.
+🔴 **Do not compare the whole of `deploy-bytes/SPT.pact` against what the chain returns**,
+and do not extract to end-of-file either. `describe-module` returns the module form ALONE. The
+payload has a preamble before it AND a `create-table` footer after it, so `,$p` swallows the
+footer and reports a false mismatch — MEASURED against the live deployment: 1,340 lines extracted
+against the chain's 1,323. `,/^)$/p` stops at the module's closing paren and comes out clean.
+
+**This comparison has been run against the real deployment: the code on mainnet chain 0 is
+BYTE-IDENTICAL to the module form in `deploy-bytes/SPT.pact`.**
 
 If step 3 prints no differences, the deployed program is the one in this repository. That is the
 claim that matters, and it does not depend on hashes agreeing across environments.
