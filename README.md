@@ -4,15 +4,20 @@ SPT is a token on [Kadena Community Edition](https://kda-chain.org) with governa
 itself: holders vote on proposals weighted by what they hold, and awards accrue in KDA and never
 expire. It is two Pact modules, a fixed supply of 100,000, and no mint path after setup.
 
-> ## 🔴 NOT YET DEPLOYED
+> ## 🟢 DEPLOYED — Kadena mainnet (`mainnet01`)
 >
-> At the time of publication these contracts are **not on any network**. The hashes recorded in
-> `verification/artifact-baseline.json` are what *will* be deployed — they are not yet checkable
-> against a chain, because there is nothing on the chain to check them against.
+> Since 2026-08-28 these contracts run on Kadena mainnet under the namespace
+> `n_48867b242317a0216a67f8c7ca26696b5878e0e3`: `SPT` on all 20 chains, and `SPT-launch` (the
+> sale) on chain 0 only. **The code on chain is byte-for-byte the module form in `deploy-bytes/`**
+> — measured against chain 0 on 2026-08-29 — and `VERIFY.md` §3 shows how to check that yourself
+> in three commands, with no account and no wallet.
 >
-> This repository is published **before** deployment on purpose, so the code can be read and
-> challenged while changing it is still cheap. Everything here is verifiable *locally* today; the
-> on-chain half of `VERIFY.md` becomes possible the day the modules land.
+> Nothing is in circulation yet. The contract is **not yet frozen**, so until it is the `spt-gov`
+> keyset can still upgrade it; freezing is permanent. The sale opens on 1 September 2026 at
+> 16:00 UTC at [smartpacts.io/sell](https://smartpacts.io/sell/), and
+> [smartpacts.io/transparency](https://smartpacts.io/transparency/) reads every contract figure
+> live — where the tokens are, what is time-locked and until when, and what the administrator
+> can and cannot do.
 
 ## Which file am I reading?
 
@@ -41,7 +46,7 @@ tools/            check-namespace.sh
 verification/     the recorded artifact identity
 docs/             SPT-WHAT-IT-DOES.md — plain language, written for a non-engineer
 audits/           an independent review of these exact bytes
-VERIFY.md         how to check this repository — locally now, against the chain once deployed
+VERIFY.md         how to check this repository — locally, and against the chain
 ```
 
 ## Run the tests yourself
@@ -62,8 +67,8 @@ negative fixture, and every gate, and prints `ALL SUITES PASS` or names what fai
 
 | tier | threshold | what it can reach |
 |---|---|---|
-| `spt-gov` | **2 of 3** devices | anything irreversible, or that moves value out — upgrades, the freeze, disbursing company tokens, withdrawing funds, changing a limit |
-| `spt-ops` | **any 1 of 3** | reversible day-to-day work — announcing a proposal, funding the award pot, operating *within* a limit |
+| `spt-gov` | **2 of 3** devices | anything irreversible, or that moves value out — upgrades, the freeze, disbursing company tokens, withdrawing funds, funding the award pool, declaring an award round, setting the sale price, changing a limit |
+| `spt-ops` | **any 1 of 3** | reversible day-to-day work — announcing a proposal or cancelling one before it opens, opening and closing the sale, scheduling or cancelling a record date, withdrawing a declared round before it takes effect, operating *within* a limit |
 
 The split is enforced in the contract and covered by named negative tests: each tier is proven to
 **refuse** the other's authority, not merely to accept its own.

@@ -1,8 +1,8 @@
 # Verifying this repository
 
 Four separate claims, in increasing order of what they prove. Three of them — 1, 2 and 4 — you
-can check right now, with no network. Only 3 needs the contracts to be deployed, which at the
-time of writing they are not.
+can check with no network at all. The third needs the contracts to be deployed; they are, on
+Kadena mainnet (`mainnet01`) since 2026-08-28, so all four run today.
 
 You need the [Pact 5.4ce](https://github.com/kda-community/pact-5) binary — the Community Edition
 engine this artifact is measured against — plus `python3` and `sha256sum`.
@@ -40,7 +40,7 @@ out here.
 
 ## 3. The chain is running this code
 
-**Only possible once the modules are deployed.**
+**The modules are deployed on `mainnet01`; this runs today.**
 
 🔴 **Do not compare the hash in `verification/artifact-baseline.json` to the hash `describe-module`
 reports. They will never be equal, and that is not a problem with either one.**
@@ -89,7 +89,10 @@ req = urllib.request.Request(url, data=body, headers={"Content-Type": "applicati
 res = json.load(urllib.request.urlopen(req, timeout=60))["result"]
 if res["status"] != "success":
     sys.exit("chain refused the read: %s" % json.dumps(res)[:300])
-sys.stdout.write(res["data"]["code"])
+# The chain stores the module form WITHOUT a trailing newline, while `sed` (step 2 below)
+# emits one. Without this "\n", `diff` reports a one-byte difference on IDENTICAL code and
+# the recipe fails for everyone who runs it — measured 2026-08-29.
+sys.stdout.write(res["data"]["code"] + "\n")
 ```
 
 ```bash
