@@ -12,11 +12,12 @@ expire. It is two Pact modules, a fixed supply of 100,000, and no mint path afte
 > — measured against chain 0 on 2026-08-29 — and `VERIFY.md` §3 shows how to check that yourself
 > in three commands, with no account and no wallet.
 >
-> Nothing is in circulation yet. The contract is **not yet frozen**, so until it is the `spt-gov`
-> keyset can still upgrade it; freezing is permanent. The sale opens on 1 September 2026 at
-> 16:00 UTC at [smartpacts.io/sell](https://smartpacts.io/sell/), and
+> The contract is **not yet frozen**, so until it is the `spt-gov` keyset can still upgrade it;
+> freezing is permanent. **The sale opened on 1 September 2026 at 16:00 UTC and runs until the
+> offered supply is sold out**, at [smartpacts.io/sell](https://smartpacts.io/sell/). Tokens are
+> in circulation: rather than print a figure here that goes stale,
 > [smartpacts.io/transparency](https://smartpacts.io/transparency/) reads every contract figure
-> live — where the tokens are, what is time-locked and until when, and what the administrator
+> live — how many, where the tokens are, what is time-locked and until when, and what the administrator
 > can and cannot do.
 
 ## Which file am I reading?
