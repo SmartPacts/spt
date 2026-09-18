@@ -7,7 +7,7 @@
 ;; WHAT CHANGED (a later change): this fixture used to omit `legacy-adr015-tables`, the key that
 ;; selected between "create the two the design record tables" and "create none". That key and the two
 ;; historical migrations are DELETED — no chain running the pre-the design record schema can exist,
-;; because nothing is deployed anywhere and the first mainnet deploy is a fresh one.
+;; because nothing was deployed anywhere and the first mainnet deploy was a fresh one.
 ;; The fixture is retained rather than deleted because the property it defends is NOT about
 ;; the design record: the deploy footer must refuse to GUESS which case it is in. `upgrade` is now the
 ;; only such key, and getting it wrong is still an outage in both directions — a wrong `true`

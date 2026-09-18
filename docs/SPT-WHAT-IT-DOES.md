@@ -707,10 +707,10 @@ their own gas.
    > ⚠️ **Do not trust this paragraph on its own.** Hand-written status lines in this project have
    > gone stale in this project before now. The internal review reports hold what each audit
    > actually measured; if this paragraph and a report disagree, the report is right.
-1. 📋 **No contract code is deployed anywhere** — not mainnet, not testnet. **The namespace IS
-   live on mainnet, on all 20 chains, and that part is permanent** — it is the governance
-   authority the three devices control, and it cannot be un-created. The two admin keysets do not
-   exist yet; the deploy creates them itself, on each chain, as it goes.
+1. 📋 **The contract is deployed on Kadena mainnet** — since 2026-08-28, on all 20 chains, with
+   the sale on chain 0 only. **The namespace is live on mainnet, on all 20 chains, and that part
+   is permanent** — it is the governance authority the three devices control, and it cannot be
+   un-created. The deploy created the two admin keysets itself, on each chain, as it went.
 2. 📋 **Nothing goes on a chain until that chain has been checked**, at the time and never assumed
    from this page. The check confirms the network there behaves the way SPT needs.
 2b. 🔴 **One permanent dependency on Kadena that cannot be removed, and it matters before

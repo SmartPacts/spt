@@ -24,11 +24,13 @@ it is not required.
 In scope: `pact/modules/`, `deploy-bytes/`, and the gates under `.github/scripts/` that back the
 claims in `README.md` and `VERIFY.md`.
 
-Out of scope: the vendored Kadena fixtures under `pact/test/fixtures/` (report those to Kadena),
-and anything about a deployment that does not exist yet — at the time of writing these contracts
-are **not on any network**.
+Out of scope: the vendored Kadena fixtures under `pact/test/fixtures/` (report those to Kadena).
+
+These contracts have run on Kadena mainnet (`mainnet01`) since 2026-08-28, and the code on chain
+is the code in `deploy-bytes/` — `VERIFY.md` §3 is how you check that yourself. So a report
+against this repository is a report about what is running.
 
 ## Please do not
 
-Test against mainnet. There is nothing deployed to test against, and when there is, a devnet
-reproduces everything: the whole suite runs offline with `pact/test/run-tests.sh`.
+Test against mainnet. The contracts are live there. A devnet reproduces everything, and the whole
+suite runs offline with `pact/test/run-tests.sh`.
