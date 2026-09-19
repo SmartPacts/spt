@@ -4,6 +4,9 @@
 private until we publish it, it reaches us immediately, and it depends on no mailbox of ours being
 configured. That is the route we can promise today, so it is the one we publish.
 
+**No GitHub account?** Write to **contact@smartpacts.io** saying only that you have a security
+report — not the details — and we will set up a private channel with you from there.
+
 There is **no bug bounty**. We would rather say that plainly than imply one.
 
 ## What we commit to
