@@ -269,7 +269,10 @@ TRACKABLE = {'PROVEN'}
 # one section agent and are merged in the manifest below, by name. Anchoring to the EXTERNAL number
 # rather than to len(PROMISES) is the point: a manifest compared against itself always agrees,
 # and a TRACKED row can be dropped without any mark going missing to betray it.
-EXPECTED_TOTAL = 152   # 153 -> 152: P-032 RETIRED. It read "a lawyer should review the
+EXPECTED_TOTAL = 153   # 152 -> 153: P-161 ADDED (2026-09-19). The page said only that the admin can
+                       # change the rules until the freeze; it can also rewrite any record directly,
+                       # balances included, with no upgrade — module admin. Disclosed, 🟡.
+                       # 153 -> 152: P-032 RETIRED. It read "a lawyer should review the
                        # 70,000-token admin discretion before it is used on the real network" — a
                        # legal opinion, not something the modules do. This page states what the
                        # contract can and cannot do; whether counsel reviews a power is a decision
@@ -366,6 +369,10 @@ PROMISES = [
     ('P-008', 'The contract never decides a vote — each chain counts only its own, and the winner is added up outside the contract from all 20 vote-record reads.', '**Decide a vote.**',                                                                            'PROCEDURE',      'OWNER',   '',                            ''),
     ('P-009', 'The company is never obliged to declare an award.',                                         '**Force an award.**',                                                                           'BUILT-UNPINNED', 'OWNER',   '',                            ''),
     ('P-010', 'Until the contract is frozen the admin can still change the rules — and it is not frozen today.', '**Stop the admin from changing the rules — until the contract is frozen.**',                    'PROVEN',         'OWNER',   'smartpacts-upgrade-emergency.repl', '../modules/SPT.pact'),
+    # 🟡: module admin reaches every table, but no suite in this repository writes a row with it.
+    # Proven 2026-09-19 by a scratch REPL probe on SPT.pact: the governance keyset zeroed the
+    # capability-guarded treasury row and replaced its guard, with no upgrade (refused without it).
+    ('P-161', 'Until the contract is frozen the admin can also change any record the contract keeps, with no new code, any balance included.', 'Until then the admin can also, with no new code, change any record the contract keeps', 'BUILT-UNPINNED', 'OWNER', '', ''),
     ('P-137', 'A record date is announced with no rate attached, and the count it takes is then frozen.', '**A record date is announced with no rate attached, and the count it takes is then frozen.**', 'PROVEN', 'OWNER', 'smartpacts-record-date.repl', 'the sealed float is the float at the instant'),
     ('P-138', 'A round pays out exactly the rate times the frozen count.',                                 '**A round pays out exactly the rate times that frozen count**',                                 'PROVEN', 'OWNER', 'smartpacts-record-date.repl', 'TOTAL PAID == rate x SEALED FLOAT, exactly'),
     ('P-139', 'Anyone can take the count once the record date has passed.',                                '**Anyone can take the count once the date has passed**',                                        'PROVEN', 'OWNER', 'smartpacts-record-date.repl', 'advance-snapshot seals'),

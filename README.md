@@ -12,8 +12,8 @@ expire. It is two Pact modules, a fixed supply of 100,000, and no mint path afte
 > — measured against chain 0 on 2026-08-29 — and `VERIFY.md` §3 shows how to check that yourself
 > in three commands, with no account and no wallet.
 >
-> The contract is **not yet frozen**, so until it is the `spt-gov` keyset can still upgrade it;
-> freezing is permanent. **The sale opened on 1 September 2026 at 16:00 UTC and runs until the
+> The contract is **not yet frozen**, so until it is the `spt-gov` keyset can still upgrade it, or
+> change its records directly — any balance included — without new code; freezing is permanent. **The sale opened on 1 September 2026 at 16:00 UTC and runs until the
 > offered supply is sold out**, at [smartpacts.io/sell](https://smartpacts.io/sell/). Tokens are
 > in circulation: rather than print a figure here that goes stale,
 > [smartpacts.io/transparency](https://smartpacts.io/transparency/) reads every contract figure
@@ -76,10 +76,17 @@ The split is enforced in the contract and covered by named negative tests: each 
 
 ## What SPT cannot do
 
+Under the contract's rules — until it is frozen, `spt-gov` can override every line below (the last
+one says how):
+
 - **Mint beyond 100,000, or burn.** Supply is fixed once setup completes; there is no mint path.
 - **Move your tokens without your signature.** Every account is guarded.
 - **Let one device do everything.** See the tiers above.
 - **Be upgraded after the freeze.** Freezing is permanent and deliberate.
+- **Stop `spt-gov` from overriding any of this, until the freeze.** Two of its three devices can
+  publish a new version, or — with no new code, in one transaction — change any record the contract
+  keeps, any balance and any account's key included. Such a transaction is public on the chain, but
+  the published source would not change. Freezing ends both, and has not happened.
 
 Read [`docs/SPT-WHAT-IT-DOES.md`](docs/SPT-WHAT-IT-DOES.md) for the long version in plain
 language, including what is *not* guaranteed — it is more useful than this section.

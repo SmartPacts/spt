@@ -59,6 +59,8 @@ with KDA).
 - 🟡 **Force an award.** The company is never obliged to declare one.
 - ✅ **Stop the admin from changing the rules — until the contract is frozen.** Everything on this
   page is "how it behaves today"; only freezing makes it permanent. ✅ **It is not frozen yet.**
+  🟡 Until then the admin can also, with no new code, change any record the contract keeps — any
+  balance included.
 - 🟡 **Recover a lost key**, or reverse a transfer sent to the wrong address.
 - 📋 **Prove who owns what beyond one account.** One person can hold several accounts.
 
