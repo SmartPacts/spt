@@ -1,7 +1,8 @@
 # Reporting a security issue
 
-**Email: security@smartpacts.io** — or open a GitHub security advisory on this repository
-(Security → Report a vulnerability), which is private until we publish it.
+**Open a GitHub security advisory on this repository** — Security → Report a vulnerability. It is
+private until we publish it, it reaches us immediately, and it depends on no mailbox of ours being
+configured. That is the route we can promise today, so it is the one we publish.
 
 There is **no bug bounty**. We would rather say that plainly than imply one.
 
